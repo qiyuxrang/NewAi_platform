@@ -1,0 +1,12 @@
+import { useState } from "react";
+import { CenterLink } from "../shared";
+import { TaskEditor } from "./DocumentWorkspace";
+import { projectListUrl } from './workbench-shared';
+import "./project-workbench.css";
+
+export default function ProductProjectDetail({ id, artifact = "" }: { id: string; artifact?: string }) {
+  const [fatal, setFatal] = useState("");
+  if (fatal) return <section className="pd-workspace pd-project-fatal"><div className="pd-feedback" role="alert"><h1>无法打开项目</h1><p>{fatal}</p></div><CenterLink href={projectListUrl()} className="button secondary">返回项目列表</CenterLink></section>;
+  return <TaskEditor key={`${id}-${artifact}`} id={id} requestedArtifact={artifact} deepLinked onFatal={setFatal} business/>;
+}
+

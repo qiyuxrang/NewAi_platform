@@ -1,0 +1,21 @@
+.enterprise-business { --page: var(--color-dark-bg); --surface: var(--color-dark-card); --raised: var(--color-dark-card-hover); --ink: var(--color-dark-text); --muted: var(--color-dark-text-secondary); --line: var(--color-dark-border); --soft: #3b82f615; --accent: var(--color-accent-blue); --accent-dark: #2563eb; --action: var(--color-accent-blue); --on-action: white; color: var(--ink); }
+.enterprise-business .button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; border: 1px solid var(--line); border-radius: 7px; padding: 10px 16px; cursor: pointer; font-size: 14px; color: var(--accent); }
+.enterprise-business .button.primary { background: var(--action); color: var(--on-action); }
+.enterprise-business button:disabled { opacity: .5; cursor: not-allowed; }
+.enterprise-business :focus-visible { outline: 3px solid var(--accent); outline-offset: 3px; }
+.enterprise-business .center-section-heading { margin-bottom: 20px; }
+.enterprise-business .center-section-heading h2 { font-size: 24px; font-weight: 700; }
+.enterprise-business .center-panel { padding: 24px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); margin-bottom: 20px; }
+.enterprise-business .center-panel h3 { font-size: 18px; font-weight: 600; margin: 12px 0; }
+.enterprise-business p { line-height: 1.7; }
+.enterprise-business .center-field { display: grid; gap: 8px; margin: 16px 0; }
+.enterprise-business .center-field input, .enterprise-business .center-field textarea, .enterprise-business .center-field select { padding: 10px 12px; border: 1px solid var(--line); border-radius: 7px; background: var(--surface); color: var(--ink); }
+.enterprise-business .status { display: inline-block; padding: 4px 8px; border-radius: 5px; background: var(--soft); }
+.enterprise-business .status.warning { color: var(--color-accent-yellow); }
+.enterprise-business .engineering-task-list { display: grid; gap: 12px; margin: 16px 0; }
+.enterprise-business .engineering-task-list li, .enterprise-business .engineering-task-head { display: flex; align-items: center; gap: 12px; }
+.enterprise-business .engineering-task-head { justify-content: space-between; }
+.enterprise-business .engineering-task-name { margin-right: 12px; }
+.enterprise-business .engineering-task-remove { color: var(--color-accent-red); cursor: pointer; }
+.enterprise-business .engineering-job-id { color: var(--muted); font-size: 12px; }
+.enterprise-business img { max-width: 100%; height: auto; }

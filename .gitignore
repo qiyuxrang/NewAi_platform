@@ -1,0 +1,73 @@
+# Compiled class file
+*.class
+
+*.pkl
+.DS_Store
+# Log file
+*.log
+*.pyc
+.idea
+__pycache__
+venv
+.venv/
+*.swp
+
+node_modules
+
+#model
+formbot/models/
+
+# BlueJ files
+*.ctxt
+
+# Mobile Tools for Java (J2ME)
+.mtj.tmp/
+
+# Package Files #
+*.jar
+*.war
+*.nar
+*.ear
+*.zip
+*.tar.gz
+*.rar
+
+# virtual machine crash logs, see http://www.java.com/en/download/help/error_hotspot.xml
+hs_err_pid*
+.git
+
+# 模型
+*.pth
+*.pt
+
+.env
+.DS_Store
+build/
+**/build/
+DerivedData
+*.ipa
+.idea
+node_modules/
+npm-debug.log
+yarn-error.log
+**/Pods/
+.env*
+!.env.example
+cache
+.env_dev
+.env_prod
+.parquet
+.claude
+.claude/settings.local.json
+.codex/
+openclaw/dist-runtime
+simple_front/dist
+openclaw/packages/libsignal-node/
+phone_front/dist
+hermes-agent/deploy_copy
+.qoder
+.runtime/
+frontend/dist/
+services/engineering/data/
+services/business/frontend/dist/
+services/business/staticfiles/

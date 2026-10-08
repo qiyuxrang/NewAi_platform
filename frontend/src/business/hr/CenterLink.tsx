@@ -1,0 +1,1 @@
+export { CenterLink } from '../shared'

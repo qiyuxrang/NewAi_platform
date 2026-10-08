@@ -1,0 +1,51 @@
+name: aicompany-claw
+
+# Windows runs the gateway/frontend and existing Office workers. Only this
+# project's database and per-user runtime images are managed here.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
+    ports:
+      - "127.0.0.1:15432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  native-core-build:
+    profiles: [build]
+    image: aicompany-claw-core-build:20261008
+    build:
+      context: ./openclaw
+      dockerfile: Dockerfile.enterprise-core
+      target: build
+      args:
+        ENTERPRISE_NPM_REGISTRY: ${ENTERPRISE_NPM_REGISTRY:-https://registry.npmjs.org}
+
+  runtime-image:
+    profiles: [build]
+    image: aicompany-claw:20261008
+    build:
+      context: ./openclaw
+      dockerfile: Dockerfile.enterprise
+      args:
+        ENTERPRISE_NPM_REGISTRY: ${ENTERPRISE_NPM_REGISTRY:-https://registry.npmjs.org}
+        ENTERPRISE_DEBIAN_MIRROR: ${ENTERPRISE_DEBIAN_MIRROR:-https://deb.debian.org}
+
+networks:
+  internal:
+    name: aicompany-claw-internal
+    driver: bridge
+
+volumes:
+  pgdata:

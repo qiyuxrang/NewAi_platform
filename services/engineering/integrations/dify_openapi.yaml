@@ -1,0 +1,215 @@
+openapi: 3.0.3
+info:
+  title: 成本测算引擎
+  description: |
+    工程量清单进 → 成本测算 / 劳务报价四版出。
+    设备材料走「价格库 → 历史报价库 → 互联网检索」，劳务按陕西省定额组价。
+    服务跑在本机（Dify 容器通过 host.docker.internal 访问）。
+  version: "1.0.0"
+servers:
+  - url: http://host.docker.internal:18080
+    description: 本机成本测算引擎
+paths:
+  /health:
+    get:
+      operationId: health
+      summary: 健康检查
+      responses:
+        "200":
+          description: 服务正常
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                  service:
+                    type: string
+  /list_inputs:
+    get:
+      operationId: listInputs
+      summary: 列出可测算的清单文件
+      responses:
+        "200":
+          description: 文件列表
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  files:
+                    type: array
+                    items:
+                      type: string
+  /estimate_named:
+    post:
+      operationId: estimateNamed
+      summary: 按文件名测算（文件放在引擎的 data/input 目录）
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [file_name]
+              properties:
+                file_name:
+                  type: string
+                  description: data/input 目录下的清单文件名
+                out_name:
+                  type: string
+                  description: 输出文件名，默认 成本测算_四版.xlsx
+      responses:
+        "200":
+          description: 四版测算结果
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  清单:
+                    type: string
+                  甲供剔除:
+                    type: integer
+                  成本测算_库加网:
+                    type: array
+                    items:
+                      type: array
+                      items: {}
+                  成本测算_纯网:
+                    type: array
+                    items:
+                      type: array
+                      items: {}
+                  劳务报价_库加网:
+                    type: array
+                    items:
+                      type: array
+                      items: {}
+                  劳务报价_纯网:
+                    type: array
+                    items:
+                      type: array
+                      items: {}
+                  设备材料合计:
+                    type: number
+                  劳务合计:
+                    type: number
+                  结果文件:
+                    type: string
+  /estimate_latest:
+    post:
+      operationId: estimateLatest
+      summary: 测算 data/input 里最新的清单
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                out_name:
+                  type: string
+      responses:
+        "200":
+          description: 四版测算结果
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  清单:
+                    type: string
+                  设备材料合计:
+                    type: number
+                  劳务合计:
+                    type: number
+                  结果文件:
+                    type: string
+  /labor_quote:
+    post:
+      operationId: laborQuote
+      summary: 单个劳务项按陕西定额组价
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                  description: 清单项名称，如「路灯基础」「网络摄像机 200万 POE」
+                unit:
+                  type: string
+                qty:
+                  type: number
+                region:
+                  type: string
+                  description: 地区，如 榆林
+      responses:
+        "200":
+          description: 定额组价结果
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  匹配:
+                    type: boolean
+                  定额编号:
+                    type: string
+                  定额名称:
+                    type: string
+                  劳务单价:
+                    type: number
+                  合价:
+                    type: number
+                  匹配理由:
+                    type: string
+  /webprice:
+    post:
+      operationId: webPrice
+      summary: 单个设备/材料联网取价
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name:
+                  type: string
+                spec:
+                  type: string
+                unit:
+                  type: string
+                qty:
+                  type: number
+      responses:
+        "200":
+          description: 网价结果（含含税→不含税→品类系数折算）
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  found:
+                    type: boolean
+                  原始网价（含税）:
+                    type: number
+                  不含税:
+                    type: number
+                  品类:
+                    type: string
+                  系数:
+                    type: number
+                  工程价:
+                    type: number
+                  来源:
+                    type: string
+                  抓取日期:
+                    type: string

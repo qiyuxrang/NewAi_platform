@@ -1,0 +1,41 @@
+.enterprise-hr { --surface: var(--color-dark-card); --ink: var(--color-dark-text); --line: var(--color-dark-border); color: var(--ink); }
+.enterprise-hr .hr-title { display: flex; align-items: center; gap: 16px; margin: 0 0 18px; }
+.enterprise-hr .hr-title h1 { font-size: 26px; font-weight: 700; margin: 0 0 7px; }
+.enterprise-hr .hr-title p { color: var(--color-dark-text-secondary); }
+.enterprise-hr .hr-title > a:last-child { margin-left: auto; }
+.enterprise-hr .hr-card { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 16px; }
+.enterprise-hr .hr-card h2 { font-size: 19px; font-weight: 600; margin-bottom: 18px; }
+.enterprise-hr .hr-card h3 { font-weight: 600; margin: 12px 0; }
+.enterprise-hr .hr-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.enterprise-hr .hr-card-head h2 { margin: 0; }
+.enterprise-hr button, .enterprise-hr .hr-outline { cursor: pointer; display: inline-block; border: 1px solid var(--line); border-radius: 7px; padding: 8px 14px; color: var(--color-accent-blue); font-size: 14px; line-height: 1.5; }
+.enterprise-hr button:hover, .enterprise-hr .hr-outline:hover { background: var(--color-dark-card-hover); }
+.enterprise-hr .hr-primary { background: var(--color-accent-blue); color: white; border-color: var(--color-accent-blue); padding: 12px 20px; font-weight: 600; }
+.enterprise-hr button:disabled { opacity: .5; cursor: not-allowed; }
+.enterprise-hr :focus-visible { outline: 3px solid var(--color-accent-blue); outline-offset: 3px; }
+.enterprise-hr a { color: var(--color-accent-blue); }
+.enterprise-hr .hr-muted { color: var(--color-dark-text-secondary); font-size: 13px; line-height: 1.7; }
+.enterprise-hr .hr-warning { background: #eab30815; color: var(--color-accent-yellow); padding: 12px; border-radius: 7px; }
+.enterprise-hr .hr-error { background: #ef444415; color: var(--color-accent-red); padding: 14px; border: 1px solid #ef444440; border-radius: 8px; margin-bottom: 16px; }
+.enterprise-hr label { display: flex; flex-direction: column; gap: 8px; font-size: 14px; margin-bottom: 12px; }
+.enterprise-hr input, .enterprise-hr select, .enterprise-hr textarea { color: var(--ink); border: 1px solid var(--line); border-radius: 7px; background: var(--color-dark-bg); padding: 10px 12px; min-width: 0; width: 100%; box-sizing: border-box; }
+.enterprise-hr textarea { resize: vertical; }
+.enterprise-hr pre { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; background: var(--color-dark-bg); padding: 16px; border-radius: 8px; }
+.enterprise-hr .hr-actions { display: flex; align-items: flex-end; gap: 12px; flex-wrap: wrap; margin: 15px 0; }
+.enterprise-hr .hr-actions label { min-width: 200px; margin: 0; }
+.enterprise-hr .hr-metrics { display: flex; gap: 25px; align-items: center; padding: 18px 0; flex-wrap: wrap; }
+.enterprise-hr .hr-metrics b { font-size: 24px; margin-left: 8px; color: var(--color-accent-blue); }
+.enterprise-hr .hr-screening-layout { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 24px; }
+.enterprise-hr .hr-screening-run { text-align: center; margin: 24px 0 8px; }
+.enterprise-hr .hr-upload { margin-top: 20px; }
+.enterprise-hr .hr-file-list { max-height: 200px; overflow: auto; padding-left: 24px; overflow-wrap: anywhere; }
+.enterprise-hr .hr-table-wrap { overflow-x: auto; }
+.enterprise-hr table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.enterprise-hr th { background: var(--color-dark-bg); color: var(--color-dark-text-secondary); font-weight: 500; padding: 13px 14px; text-align: left; }
+.enterprise-hr td { padding: 13px 14px; border-bottom: 1px solid var(--line); }
+.enterprise-hr summary { cursor: pointer; min-height: 32px; padding: 6px 0; }
+.enterprise-hr .hr-history-message { border-left: 3px solid var(--color-accent-blue); padding: 8px 16px; margin: 12px 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.enterprise-hr .hr-history-meta { display: flex; gap: 16px; flex-wrap: wrap; color: var(--color-dark-text-secondary); }
+.enterprise-hr .hr-history-message dl > div { margin: 12px 0; }
+.enterprise-hr dd { margin: 6px 0; }
+.enterprise-hr .hr-jd-dialog { margin: auto; padding: 28px; }

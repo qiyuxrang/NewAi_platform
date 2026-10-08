@@ -1,0 +1,126 @@
+{
+  "commands": {
+    "native": "auto",
+    "nativeSkills": "auto",
+    "restart": false
+  },
+  "agents": {
+    "defaults": {
+      "elevatedDefault": "off",
+      "timeoutSeconds": 900,
+      "maxConcurrent": 4,
+      "memorySearch": {
+        "enabled": false
+      },
+      "subagents": {
+        "allowAgents": [
+          "main",
+          "product",
+          "hr",
+          "engineering"
+        ],
+        "requireAgentId": true,
+        "maxSpawnDepth": 2,
+        "maxChildrenPerAgent": 3,
+        "maxConcurrent": 3,
+        "runTimeoutSeconds": 600
+      }
+    },
+    "list": [
+      {
+        "id": "main",
+        "name": "公司助手",
+        "default": true,
+        "subagents": {
+          "allowAgents": [
+            "main",
+            "product",
+            "hr",
+            "engineering"
+          ],
+          "requireAgentId": true
+        }
+      },
+      {
+        "id": "product",
+        "name": "产品助手",
+        "subagents": {
+          "allowAgents": [
+            "main",
+            "product",
+            "hr",
+            "engineering"
+          ],
+          "requireAgentId": true
+        }
+      },
+      {
+        "id": "hr",
+        "name": "人事助手",
+        "subagents": {
+          "allowAgents": [
+            "main",
+            "product",
+            "hr",
+            "engineering"
+          ],
+          "requireAgentId": true
+        }
+      },
+      {
+        "id": "engineering",
+        "name": "工程助手",
+        "subagents": {
+          "allowAgents": [
+            "main",
+            "product",
+            "hr",
+            "engineering"
+          ],
+          "requireAgentId": true
+        }
+      }
+    ]
+  },
+  "tools": {
+    "profile": "full",
+    "elevated": {
+      "enabled": false
+    },
+    "agentToAgent": {
+      "enabled": true,
+      "allow": [
+        "main",
+        "product",
+        "hr",
+        "engineering"
+      ]
+    },
+    "sessions": {
+      "visibility": "tree"
+    }
+  },
+  "browser": {
+    "enabled": false
+  },
+  "skills": {
+    "entries": {
+      "pptx": {
+        "enabled": false
+      },
+      "agent-browser": {
+        "enabled": false
+      }
+    }
+  },
+  "memory": {
+    "backend": "builtin",
+    "citations": "auto"
+  },
+  "session": {
+    "dmScope": "per-channel-peer",
+    "agentToAgent": {
+      "maxPingPongTurns": 3
+    }
+  }
+}

@@ -1,0 +1,164 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>成本测算台 · 清单进，六件套出</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<!-- 图签栏：工程图纸右下角那种标题栏，挪到页面顶部当骨架 -->
+<header class="titleblock">
+  <div class="tb-left">
+    <span class="tb-mark">YHT</span>
+    <span class="tb-name">榆林皓天 · 成本测算台</span>
+  </div>
+  <div class="tb-mid">COST/ENGINE&nbsp;v8 &nbsp;·&nbsp; 清单 → 取价链 → 六件套</div>
+  <div class="tb-right">
+    <span id="libTotal" class="tb-num">—</span><span class="tb-unit">条底价</span>
+    <span class="tb-sep"></span>
+    <span id="today" class="tb-num">—</span>
+  </div>
+</header>
+
+<main>
+
+  <!-- ── 封面 ───────────────────────────────────────────────── -->
+  <section class="hero" id="hero">
+    <div class="hero-copy">
+      <p class="eyebrow">工程量清单 / 采购清单 · 全自动取价组价</p>
+      <h1><span>清单进去，</span><span>六件套出来。</span></h1>
+      <p class="lede">
+        上传一份清单，引擎按六层取价链逐项落价：设备清单、劳务清单、成本测算两版、劳务报价两版，
+        一个 Excel 六张表。每一行都带<strong>数据来源</strong>和<strong>核验链接</strong>，跑完顺手把过闸的网价沉淀进企业知识库。
+      </p>
+    </div>
+
+    <!-- 取价链阶梯：这一页的签名构件，也是真实发生的事 -->
+    <figure class="ladder" id="ladder" aria-label="取价链命中情况">
+      <figcaption>
+        <span class="ladder-title">取价链</span>
+        <span class="ladder-hint" id="ladderHint">跑完显示每一层实际命中多少条</span>
+      </figcaption>
+      <ol id="ladderList"></ol>
+    </figure>
+  </section>
+
+  <!-- ── 工作区 ─────────────────────────────────────────────── -->
+  <section class="work" id="work">
+    <form class="panel" id="form" autocomplete="off">
+
+      <div class="field" id="f1">
+        <div class="field-head">
+          <span class="no">01</span>
+          <h2>设备 / 工程量清单 <em>必须</em></h2>
+        </div>
+        <label class="drop" id="dropBoq" for="boq">
+          <input type="file" id="boq" accept=".xlsx,.xlsm,.xls" required>
+          <span class="drop-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="26" height="26"><path d="M4 4h10l6 6v10H4z"/><path d="M14 4v6h6"/><path d="M8 13h8M8 16.5h5"/></svg>
+          </span>
+          <span class="drop-title">把清单拖进来，或点这里选文件</span>
+          <span class="drop-sub">支持 .xlsx / .xlsm / .xls；表头认「项目名称 / 设备名称 / 数量 / 单位」</span>
+          <span class="drop-file" id="boqName" hidden></span>
+        </label>
+      </div>
+
+      <div class="field" id="f2">
+        <div class="field-head">
+          <span class="no">02</span>
+          <h2>项目背景 / 技术要求 / 施工方案 <em>有劳务就填</em></h2>
+        </div>
+        <label class="drop drop-sm" id="dropBg" for="bg">
+          <input type="file" id="bg" accept=".docx,.txt,.md,.pdf">
+          <span class="drop-title">拖文档进来，或点这里选</span>
+          <span class="drop-sub">基础尺寸、钢筋含量、施工条件（边通车 / 夜间 / 冻土 / 黄土湿陷…）都从这里读</span>
+          <span class="drop-file" id="bgName" hidden></span>
+        </label>
+      </div>
+
+      <div class="field" id="f3">
+        <div class="field-head">
+          <span class="no">03</span>
+          <h2>备注 <em>可选</em></h2>
+        </div>
+        <textarea id="note" rows="2"
+          placeholder="例：甲方不提供 C30；主要设备甲供；本项目边通车施工"></textarea>
+        <p class="fine">写「只入库」= 只把这份文件里的价格收进知识库、不出测算。</p>
+      </div>
+
+      <div class="actions">
+        <button type="submit" id="run">
+          <span class="btn-label">开始测算</span>
+          <span class="btn-note">通常 1~3 分钟</span>
+        </button>
+        <div class="run-state" id="runState" hidden>
+          <span class="pulse" aria-hidden="true"></span>
+          <span id="runStep">正在解析清单…</span>
+          <span class="tick" id="runClock">0:00</span>
+        </div>
+      </div>
+      <p class="err" id="err" hidden></p>
+    </form>
+
+    <aside class="side">
+      <div class="card">
+        <h3>企业底价库</h3>
+        <dl class="stats" id="libStats">
+          <div><dt>入库价格</dt><dd id="s1">—</dd></div>
+          <div><dt>历史报价</dt><dd id="s2">—</dd></div>
+          <div><dt>网价入库</dt><dd id="s3">—</dd></div>
+        </dl>
+        <p class="fine">取价链前两层直接命中这里，不联网、秒出价。</p>
+      </div>
+      <div class="card">
+        <h3>最近跑过的</h3>
+        <ul class="recent" id="recent"><li class="empty">还没有记录。</li></ul>
+      </div>
+      <div class="card card-quiet">
+        <h3>跑完在哪拿文件</h3>
+        <p class="path" id="hostPath">跑完显示导出目录</p>
+        <button type="button" class="ghost" id="copyPath">复制路径</button>
+      </div>
+    </aside>
+  </section>
+
+  <!-- ── 结果 ───────────────────────────────────────────────── -->
+  <section class="result" id="result" hidden>
+    <div class="result-head">
+      <p class="eyebrow">测算结果</p>
+      <h2 id="resTitle">—</h2>
+      <p class="res-sub" id="resSub">—</p>
+    </div>
+
+    <div class="kpis" id="kpis"></div>
+
+    <div class="sheets">
+      <h3 class="block-title">一个 Excel，六张表</h3>
+      <ul class="sheet-list" id="sheetList"></ul>
+    </div>
+
+    <div class="report-wrap">
+      <h3 class="block-title">交付说明</h3>
+      <article class="report" id="report"></article>
+    </div>
+
+    <div class="deliver">
+      <a class="dl" id="dl" href="#">下载六件套 Excel</a>
+      <button type="button" class="ghost" id="again">再跑一份</button>
+      <span class="deliver-path" id="deliverPath"></span>
+    </div>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <span>引擎：cost-engine:18080</span>
+  <span class="dot"></span>
+  <span id="footMsg">价格来源可追溯，估价行标注「必须询价」</span>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>

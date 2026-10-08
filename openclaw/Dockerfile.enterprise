@@ -1,0 +1,41 @@
+# syntax=docker/dockerfile:1.7
+# Reuse the complete native build (core, Control UI, bundled plugins and QA).
+# Build Dockerfile.enterprise-core's "build" target as the fixed core tag first.
+FROM aicompany-claw-core-build:20261008
+
+WORKDIR /app
+ARG ENTERPRISE_DEBIAN_MIRROR="https://deb.debian.org"
+RUN sed -i "s|http://deb.debian.org|${ENTERPRISE_DEBIAN_MIRROR}|g" /etc/apt/sources.list.d/debian.sources \
+    && apt-get update && apt-get install -y --no-install-recommends psmisc procps lsof python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+# Reuse native core and staged plugin dependencies; Bridge uses its own lock.
+ARG ENTERPRISE_NPM_REGISTRY="https://registry.npmjs.org"
+
+COPY bridge /app/bridge
+COPY bridge-package.json /app/bridge/package.json
+COPY bridge-enterprise-package-lock.json /app/bridge/package-lock.json
+RUN --mount=type=cache,id=aicompany-claw-bridge-npm,target=/root/.npm,sharing=locked \
+    cd bridge && npm_config_registry="$ENTERPRISE_NPM_REGISTRY" npm ci --include=dev --no-audit --no-fund
+
+COPY bridge-deploy-copy /deploy-copy
+COPY bridge-entrypoint.sh /entrypoint.sh
+RUN sed -i 's/\r$//' /entrypoint.sh && chmod 755 /entrypoint.sh /app/openclaw.mjs \
+    && ln -sf /app/openclaw.mjs /usr/local/bin/openclaw
+
+ENV NODE_ENV=production
+ENV PATH="/app/node_modules/.bin:${PATH}"
+ENV NODE_PATH="/app/node_modules"
+ENV OPENCLAW_DISABLE_BONJOUR=1
+ENV OPENCLAW_LOAD_SHELL_ENV=0
+ENV OPENCLAW_BUNDLED_PLUGINS_DIR=/app/dist/extensions
+RUN test -d /app/dist/extensions && test -f /app/dist/entry.js \
+    && node --import ./bridge/node_modules/tsx/dist/loader.mjs -e "import('./bridge/server.ts').then(() => console.log('Bridge server/auth native imports passed'))"
+
+# CUDA packages are excluded by the deployment-only profile; the locked CPU
+# node-llama framework and all other optional dependencies remain available.
+# Optional Chromium, TeX, FFmpeg, agent-browser and qmd binaries are not installed
+# in this first pilot. Office document output remains on the Windows worker.
+EXPOSE 18080
+ENTRYPOINT ["/entrypoint.sh"]
+CMD ["node", "--import", "./bridge/node_modules/tsx/dist/loader.mjs", "bridge/start.ts"]

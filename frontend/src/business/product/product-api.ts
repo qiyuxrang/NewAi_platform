@@ -1,0 +1,184 @@
+import { apiRequest } from "../api";
+
+export const SOURCE_ACCEPT = ".csv,.txt,.pdf,.docx,.xlsx,.xls,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff";
+export interface SourceLocation { page?: number; paragraph?: number; table?: number; row?: number; sheet?: string; range?: string; part?: string; image?: number; bbox?: number[][]; image_width?: number; image_height?: number }
+export interface ExtractionSummary { status: "completed" | "needs_review" | "partial" | "failed"; method: "native" | "ocr" | "mixed"; extraction_hash: string; parser_version: string; block_count: number; item_count: number; character_count: number; truncated: boolean; metadata: { pages?: number; sheets?: number; images?: number } }
+export interface ExtractedBlock { id: string; kind: string; text: string; location: SourceLocation; location_label: string; cells?: string[]; confidence?: number; original_text?: string; correction?: { actor_id: number; reason: string } }
+export interface SourceWarning { code: string; detail?: string; row?: number; severity?: string; location?: SourceLocation }
+export interface SourceDetail { id: string; task_id: string; task_version: number; name: string; sha256: string; size: number; media_type: string; summary: ExtractionSummary; blocks: ExtractedBlock[]; warnings: SourceWarning[]; issues: (SourceWarning & { issue_hash: string })[]; revisions: { version: number; sha256: string; created_at: string; reason: string }[]; pagination: { page: number; page_size: number; total: number }; can_reparse: boolean; can_correct: boolean; can_preview: boolean }
+export const getSourceDetail = (id: string, query: string, signal: AbortSignal) => apiRequest<SourceDetail>(`/api/product/sources/${encodeURIComponent(id)}/?${query}`, { signal });
+export const sourcePreview = (id: string, page = 1) => `/api/product/sources/${encodeURIComponent(id)}/preview/?page=${page}`;
+export const updateSource = (id: string, endpoint: "reparse/" | "correction/", body: object, signal: AbortSignal) => apiRequest<unknown>(`/api/product/sources/${encodeURIComponent(id)}/${endpoint}`, { method: endpoint === "correction/" ? "PATCH" : "POST", body: JSON.stringify(body), signal });
+export type SourceAction = (id: string, endpoint: "reparse/" | "correction/", body: object) => Promise<unknown>;
+export const extractionNames = { completed: "解析完成", needs_review: "解析待核对", partial: "部分解析", failed: "未提取到文字" };
+
+export interface TaskInput {
+  project: string;
+  requirements: string;
+  items: { row_id: string | number; name: string; quantity: string | number; unit: string; source_item_id?: string; source_location?: SourceLocation; source_id?: string }[];
+  background: string;
+  conditions: string[];
+  knowledge_sources?: { id: string; location: string }[];
+}
+export interface BlueprintPayload {
+  purpose: string;
+  audience: string;
+  chapters: { id: string; title: string; scope: string; source_ids: string[] }[];
+  conditions: { text: string; type: "program" | "model" | "human" }[];
+  missing: string[];
+  conflicts: string[];
+  template_version: string;
+}
+export interface ChapterPayload { chapter_id: string; title: string; paragraphs: string[]; source_ids: string[] }
+export type OutputFamily = "technical-solution" | "feasibility" | "presentation";
+export interface DraftOutput { id: string; family: OutputFamily; version: number; sha256: string; current: boolean; stale: boolean; draft: boolean; approved: boolean; review_status: "stale" | "approved" | "pending_review"; engine: string; content_version: number | null; content_sha256: string | null; content_approved: boolean | null; source_versions: { family: string; version: number; sha256: string; approval_id?: string }[] }
+export type ReviewCategory = "fact" | "inference" | "conflict" | "missing";
+export interface InputIssue { issue_hash: string; [key: string]: unknown }
+export interface RenderEvidence {
+  kind: "candidate";
+  status: "rendered" | "verified";
+  page_count: number;
+  pages: { page: number; sha256: string }[];
+}
+export interface Artifact { id: string; family?: OutputFamily; version: number; sha256: string; approved?: boolean; draft?: boolean; render_evidence?: RenderEvidence }
+export interface ReportRevision { id: string; family: Exclude<OutputFamily, "presentation">; version: number; sha256: string; input_hash: string; blueprint_hash: string; current: boolean; approved: boolean; created_at: string }
+export interface HistoryEvent { event: string; id: string; family?: OutputFamily; kind?: string; version?: number; sha256?: string; parent_sha256?: string; reason?: string; source_refs?: string[]; actor?: { type: string; id: string | number | null; name: string } }
+export interface TaskHistory { task_id: string; task_version: number; history_immutable: boolean; tamper_claim: string; timeline: HistoryEvent[] }
+export interface ContentChecks {
+  facts: boolean;
+  quantities: boolean;
+  terms: boolean;
+  sources: boolean;
+  completeness: boolean;
+  conditions: boolean;
+}
+export interface ArtifactVerification {
+  expected_version: number;
+  sha256: string;
+  pages: { page: number; sha256: string; passed: boolean; comment: string }[];
+  content_checks: ContentChecks;
+  comment: string;
+}
+export interface TaskSummary { id: string; title: string; state: string; stage: string; version: number; created_at?: string; updated_at?: string; owner_name?: string; reviewer_name?: string | null; pending_action?: string; error_code?: string }
+export type ProductWorkflowPhase = 'documents' | 'equipment' | 'knowledge' | 'web_search' | 'blueprint' | 'review' | 'outputs' | 'writing_technical' | 'writing_feasibility' | 'review_technical' | 'review_feasibility' | 'render_technical' | 'render_feasibility' | 'presentation';
+export interface ProductWorkflowProgress {
+  status: 'pending' | 'running' | 'completed' | 'failed' | 'blocked' | 'waiting' | 'skipped';
+  updated_at?: string;
+  source_count?: number;
+  item_count?: number;
+  issue_count?: number;
+  detail?: string;
+  completed_count?: number;
+  total_count?: number;
+}
+export interface ProductKnowledgeStatus {
+  mode: 'source_only_preview' | 'ragflow_required';
+  required: boolean;
+  status: 'source_only_preview' | 'waiting_for_ragflow' | 'ready';
+  ragflow_used: boolean;
+  source_count: number;
+  detail: string;
+}
+export interface DocumentTask extends TaskSummary {
+  intake_mode?: 'manual' | 'equipment_background';
+  analysis_progress?: Partial<Record<ProductWorkflowPhase, ProductWorkflowProgress>>;
+  activity?: { phase: string; status: ProductWorkflowProgress['status']; detail?: string; updated_at: string }[];
+  /** New orchestration payloads are optional so older deployments remain readable. */
+  checkpoint?: { analysis_progress?: Partial<Record<ProductWorkflowPhase, ProductWorkflowProgress>>; current_node?: string; detail?: string };
+  workflow?: { current_node?: string; status?: string; detail?: string };
+  knowledge?: ProductKnowledgeStatus;
+  blueprint_approved?: boolean;
+  blueprint_review: { revision_count: number; revision_limit: number; revisions_remaining: number };
+  blueprint_knowledge?: ProductKnowledgeStatus;
+  output_profile?: 'formal';
+  output_targets?: { 'technical-solution': number; feasibility: number };
+  output_generation?: Partial<Record<'technical-solution' | 'feasibility', { target_characters: number; actual_characters: number; minimum_characters: number; status: 'target_met' | 'below_target'; updated_at: string }>>;
+  input_version: number;
+  blueprint_version: number;
+  input: TaskInput | null;
+  blueprint: (Artifact & { payload: BlueprintPayload }) | null;
+  chapters: { id: string; family: Exclude<OutputFamily, "presentation">; version?: number; payload: ChapterPayload }[];
+  reports: ReportRevision[];
+  artifacts: Artifact[];
+  sources: { id: string; original_name: string; purpose?: '' | 'equipment' | 'background'; size?: number; media_type?: string; sha256?: string; created_at?: string; warnings?: SourceWarning[]; parsed?: ExtractionSummary }[];
+  approvals: unknown[];
+  issues: unknown[];
+  error_code: string;
+  pending_action?: string;
+  actions: string[] | Record<string, boolean>;
+  blockers: Record<string, { code: string; detail: string }>;
+  reviewer_id: string | number | null;
+  owner_id: string | number;
+  input_issues: InputIssue[];
+  impact: Record<string, unknown>;
+}
+export interface CreateTask { title: string; input: TaskInput; reviewer_id?: number; intake_mode?: 'equipment_background' }
+export interface ConversationTaskResult {
+  task: DocumentTask;
+  intent: {
+    mode: "deterministic_fallback";
+    model_called: false;
+    requested_outputs: { type: "technical_solution" | "feasibility" | "presentation"; status: string; code: string }[];
+    detected_paths: string[];
+  };
+  blockers: Record<string, string>;
+}
+export interface ProductOverview {
+  as_of: string;
+  scope: "authorized_projects";
+  metrics: { all?: number; active: number; completed?: number; review: number; generation: number; completed_month: number };
+  projects: TaskSummary[];
+  pagination: { page: number; page_size: number; total: number; pages: number };
+  recent_projects: TaskSummary[];
+  todos: TaskSummary[];
+  recent_outputs: { id: string; task_id: string; title: string; family: OutputFamily; version: number; created_at: string; current: boolean; review_status: "stale" | "approved" | "pending_review" }[];
+  reviewers: { id: number; name: string }[];
+  capabilities: { model_generation: boolean; retrieval: boolean; formal_release: boolean; office_preview: boolean; upload_extensions: string[]; upload_max_bytes: number; local_ocr?: boolean; parser_ready?: boolean };
+  templates: { id: string; name: string; version: string; families: OutputFamily[]; approved: boolean; description: string }[];
+}
+export const getProductOverview = (query: string, signal: AbortSignal) => apiRequest<ProductOverview>(`/api/product/workspace/${query ? `?${query}` : ""}`, { signal });
+export interface ProductOutputHistory {
+  outputs: { id: string; task_id: string; title: string; family: OutputFamily; version: number; created_at: string; current: boolean; review_status: 'stale' | 'approved' | 'pending_review'; download_url: string }[];
+  pagination: { page: number; page_size: number; total: number; pages: number };
+}
+export const getProductOutputHistory = (query: string, signal: AbortSignal) => apiRequest<ProductOutputHistory>(`/api/product/workspace/outputs/${query ? `?${query}` : ''}`, { signal });
+export const sourceDownload = (id: string) => `/api/product/sources/${encodeURIComponent(id)}/download/`;
+const root = "/api/product/tasks/";
+const pathFor = (id: string) => `${root}${encodeURIComponent(id)}/`;
+
+export async function listTasks(signal: AbortSignal): Promise<{ tasks: TaskSummary[] }> {
+  const result = await apiRequest<TaskSummary[] | { tasks: TaskSummary[] }>(root, { signal });
+  return Array.isArray(result) ? { tasks: result } : result;
+}
+export const getTask = (id: string, signal: AbortSignal) => apiRequest<DocumentTask>(pathFor(id), { signal });
+export const createTask = (body: CreateTask, key: string, signal: AbortSignal) => apiRequest<DocumentTask>(root, {
+  method: "POST", body: JSON.stringify(body), headers: { "Idempotency-Key": key }, signal,
+});
+export const createConversationTask = (body: { message: string }, key: string, signal: AbortSignal) => apiRequest<ConversationTaskResult>("/api/product/conversations/", {
+  method: "POST", body: JSON.stringify(body), headers: { "Idempotency-Key": key }, signal,
+});
+export const continueConversation = (id: string, body: { expected_version: number; message: string }, signal: AbortSignal) => apiRequest<ConversationTaskResult>(`${pathFor(id)}conversation/`, {
+  method: "POST", body: JSON.stringify(body), signal,
+});
+export const updateTask = (id: string, endpoint: string, body: object, signal: AbortSignal) => apiRequest<unknown>(`${pathFor(id)}${endpoint}`, {
+  method: endpoint === "" || endpoint === "blueprint/" ? "PATCH" : "POST", body: JSON.stringify(body), signal,
+});
+export const artifactDownload = (id: string) => `/api/product/artifacts/${encodeURIComponent(id)}/download/`;
+export const artifactHistoryDownload = (id: string) => `${artifactDownload(id)}?history=1`;
+export const draftDownload = (id: string) => `/api/product/outputs/${encodeURIComponent(id)}/download/`;
+export const draftHistoryDownload = (id: string) => `${draftDownload(id)}?history=1`;
+export const getDraftOutputs = (id: string, signal: AbortSignal) => apiRequest<{ task_version: number; outputs: DraftOutput[] }>(`${pathFor(id)}outputs/`, { signal });
+export const getTaskHistory = (id: string, signal: AbortSignal) => apiRequest<TaskHistory>(`${pathFor(id)}history/`, { signal });
+export const artifactPreview = (id: string, page: number) => `/api/product/artifacts/${encodeURIComponent(id)}/preview/?page=${encodeURIComponent(String(page))}`;
+export const verifyArtifact = (id: string, body: ArtifactVerification, signal: AbortSignal) => apiRequest<unknown>(`/api/product/artifacts/${encodeURIComponent(id)}/verification/`, {
+  method: "POST", body: JSON.stringify(body), signal,
+});
+export async function uploadSource(id: string, file: File, version: number, signal: AbortSignal, purpose?: 'equipment' | 'background'): Promise<DocumentTask> {
+  const body = new FormData();
+  body.append("file", file);
+  body.append("expected_version", String(version));
+  if (purpose) body.append('purpose', purpose);
+  const result = await apiRequest<{ source_id: string; task: DocumentTask }>(`${pathFor(id)}sources/`, { method: "POST", body, signal });
+  return result.task;
+}
+
