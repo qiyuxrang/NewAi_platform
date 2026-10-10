@@ -13,13 +13,16 @@ from .product_storage import verified_artifact
 def generate_report_drafts(task, fence, attempt_id, input_revision, blueprint):
     from django.conf import settings
     from .product_worker import (_analysis_progress, _chapter_character_count, _family_target, _formal_content_guard,
-                                 _guard, _minimum_characters, _record_output_generation, _renew, current_chapters)
+                                 _generate_diagrams, _diagram_progress, _guard, _minimum_characters,
+                                 _record_output_generation, _renew, current_chapters)
+    from .product_pair import _report_generation_hash
 
     artifacts = []
     for family in ("technical-solution", "feasibility"):
+        if family not in task.checkpoint.get("output_families", ["technical-solution", "feasibility", "presentation"]):
+            continue
         phase = 'render_technical' if family == 'technical-solution' else 'render_feasibility'
         label = '技术方案' if family == 'technical-solution' else '可行性研究报告'
-        _analysis_progress(task.pk, fence, phase, 'running', detail=f'正在排版并保存{label}文件')
         chapters = current_chapters(task, input_revision.sha256, blueprint.sha256, family)
         ordered = [chapters.get(chapter["id"]) for chapter in blueprint.payload["chapters"]]
         if any(chapter is None for chapter in ordered):
@@ -32,15 +35,20 @@ def generate_report_drafts(task, fence, attempt_id, input_revision, blueprint):
             raise ProductError("output_length_below_target", f"{label}正文尚未达到{target}字下限，请续写后再生成文件。", 409)
         _renew(task.pk, fence)
         content = content_document(task, input_revision, blueprint, ordered, family)
-        report_hash = digest({"family": family, "input": input_revision.sha256, "blueprint": blueprint.sha256,
-                              "chapters": [chapter.sha256 for chapter in ordered], "title": task.title})
+        report_hash = _report_generation_hash(task, family, input_revision, blueprint)
         existing = DocumentArtifact.objects.filter(task=task, generation_hash=report_hash).first()
         if existing:
             verified_artifact(existing)
             artifacts.append(existing)
             _analysis_progress(task.pk, fence, phase, 'completed', detail=f'{label}已保存，复用已核验的文件版本')
             continue
-        generated = render_report_draft(task, input_revision, blueprint, ordered, family)
+        try:
+            generated = render_report_draft(task, input_revision, blueprint, ordered, family, document=content,
+                                            diagram_generator=lambda document: _generate_diagrams(task.pk, fence, attempt_id, document),
+                                            diagram_progress=lambda status, **details: _diagram_progress(task.pk, fence, family, status, **details))
+        except Exception:
+            _analysis_progress(task.pk, fence, phase, 'failed', detail=f'{label}文件生成失败')
+            raise
         with transaction.atomic():
             fresh = _guard(task.pk, fence)
             report = save_report_content(fresh, family, content, input_hash=input_revision.sha256,

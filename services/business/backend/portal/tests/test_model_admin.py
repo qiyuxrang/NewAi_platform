@@ -78,14 +78,17 @@ class ModelAdminTests(PortalTestCase):
         self.assertEqual(self.model.timeout_seconds, 20)
         self.assertEqual(self.model.max_output_tokens, 1024)
         self.assertEqual(self.model.token_parameter, "max_tokens")
-        for field, invalid in (("timeout_seconds", 0), ("timeout_seconds", 61),
+        for field, invalid in (("timeout_seconds", 0), ("timeout_seconds", 601),
+                ("timeout_seconds", True), ("timeout_seconds", False),
+                ("timeout_seconds", float("nan")), ("timeout_seconds", float("inf")),
+                ("timeout_seconds", float("-inf")),
                 ("max_output_tokens", 0), ("max_output_tokens", 8193), ("token_parameter", "other")):
             with self.subTest(field=field, value=invalid):
                 model = GatewayModel(name="参数验证", provider=self.provider, model_name="model")
                 setattr(model, field, invalid)
                 with self.assertRaises(ValidationError):
                     model.full_clean()
-        for timeout, tokens in ((1, 1), (60, 8192)):
+        for timeout, tokens in ((1, 1), (60, 8192), (300, 8192), (600, 8192)):
             model = GatewayModel(name="边界验证", provider=self.provider, model_name="model",
                 timeout_seconds=timeout, max_output_tokens=tokens)
             model.full_clean()
@@ -158,7 +161,7 @@ class ModelAdminTests(PortalTestCase):
         self.gateway.assert_not_called()
 
     def test_invalid_model_numbers_cannot_be_saved_in_admin(self):
-        for changes in ({"timeout_seconds": 0}, {"timeout_seconds": 61},
+        for changes in ({"timeout_seconds": 0}, {"timeout_seconds": 601},
                 {"max_output_tokens": 0}, {"max_output_tokens": 8193}):
             response = self.client.post(self.change_url, self.model_data(**changes))
             self.assertEqual(response.status_code, 200)
@@ -415,7 +418,7 @@ class ModelAdminTests(PortalTestCase):
         payload = {"models": [
             self.import_model_data(name="导入文本模型", model_name="imported-text"),
             self.import_model_data(name="导入视觉模型", model_name="imported-vision",
-                capabilities=["text", "vision"], timeout_seconds=60, max_output_tokens=8192,
+                capabilities=["text", "vision"], timeout_seconds=600, max_output_tokens=8192,
                 token_parameter="max_completion_tokens"),
         ]}
         response = self.client.post(self.import_url, {"config_file": self.import_file(payload)})
@@ -425,7 +428,7 @@ class ModelAdminTests(PortalTestCase):
         self.assertTrue(all(model.provider_id == self.provider.pk and not model.enabled for model in imported))
         self.assertFalse(imported[0].supports_vision)
         self.assertTrue(imported[1].supports_vision)
-        self.assertEqual(imported[1].timeout_seconds, 60)
+        self.assertEqual(imported[1].timeout_seconds, 600)
         self.assertEqual(imported[1].max_output_tokens, 8192)
         self.assertEqual(imported[1].token_parameter, "max_completion_tokens")
         events = list(AuditEvent.objects.filter(action="gatewaymodel_import").order_by("target"))

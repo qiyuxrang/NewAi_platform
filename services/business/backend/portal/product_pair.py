@@ -50,11 +50,12 @@ def _chapter_hashes(task, family, current_input, blueprint):
 
 
 def _report_generation_hash(task, family, current_input, blueprint):
+    from .product_diagrams import diagram_contract_hash
     chapters = _chapter_hashes(task, family, current_input, blueprint)
     if chapters is None:
         return None
     return digest({"family": family, "input": current_input.sha256, "blueprint": blueprint.sha256,
-                   "chapters": list(chapters.values()), "title": task.title})
+                   "chapters": list(chapters.values()), "title": task.title, "diagrams": diagram_contract_hash()})
 
 
 def report_current(task, report):

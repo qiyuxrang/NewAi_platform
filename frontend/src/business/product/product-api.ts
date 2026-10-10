@@ -60,7 +60,7 @@ export interface ArtifactVerification {
   comment: string;
 }
 export interface TaskSummary { id: string; title: string; state: string; stage: string; version: number; created_at?: string; updated_at?: string; owner_name?: string; reviewer_name?: string | null; pending_action?: string; error_code?: string }
-export type ProductWorkflowPhase = 'documents' | 'equipment' | 'knowledge' | 'web_search' | 'blueprint' | 'review' | 'outputs' | 'writing_technical' | 'writing_feasibility' | 'review_technical' | 'review_feasibility' | 'render_technical' | 'render_feasibility' | 'presentation';
+export type ProductWorkflowPhase = 'documents' | 'equipment' | 'knowledge' | 'web_search' | 'blueprint' | 'review' | 'outputs' | 'writing_technical' | 'writing_feasibility' | 'review_technical' | 'review_feasibility' | 'diagrams_technical' | 'diagrams_feasibility' | 'render_technical' | 'render_feasibility' | 'presentation';
 export interface ProductWorkflowProgress {
   status: 'pending' | 'running' | 'completed' | 'failed' | 'blocked' | 'waiting' | 'skipped';
   updated_at?: string;
@@ -91,6 +91,7 @@ export interface DocumentTask extends TaskSummary {
   blueprint_review: { revision_count: number; revision_limit: number; revisions_remaining: number };
   blueprint_knowledge?: ProductKnowledgeStatus;
   output_profile?: 'formal';
+  output_families?: OutputFamily[];
   output_targets?: { 'technical-solution': number; feasibility: number };
   output_generation?: Partial<Record<'technical-solution' | 'feasibility', { target_characters: number; actual_characters: number; minimum_characters: number; status: 'target_met' | 'below_target'; updated_at: string }>>;
   input_version: number;
@@ -112,7 +113,7 @@ export interface DocumentTask extends TaskSummary {
   input_issues: InputIssue[];
   impact: Record<string, unknown>;
 }
-export interface CreateTask { title: string; input: TaskInput; reviewer_id?: number; intake_mode?: 'equipment_background' }
+export interface CreateTask { title: string; input: TaskInput; reviewer_id?: number; intake_mode?: 'equipment_background'; output_families?: OutputFamily[] }
 export interface ConversationTaskResult {
   task: DocumentTask;
   intent: {

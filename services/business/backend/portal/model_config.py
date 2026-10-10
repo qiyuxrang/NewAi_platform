@@ -1,7 +1,9 @@
+import math
 import uuid
 
 from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator, RegexValidator
+from django.core.exceptions import ValidationError
 from django.db import models
 
 
@@ -48,7 +50,7 @@ class GatewayModel(models.Model):
     supports_vision = models.BooleanField("支持图片输入", default=False)
     enabled = models.BooleanField("启用", default=False)
     timeout_seconds = models.PositiveIntegerField("超时秒数", default=20,
-        validators=[MinValueValidator(1), MaxValueValidator(60)])
+        validators=[MinValueValidator(1), MaxValueValidator(600)])
     max_output_tokens = models.PositiveIntegerField("最大输出令牌数", default=1024,
         validators=[MinValueValidator(1), MaxValueValidator(8192)])
     token_parameter = models.CharField("令牌限制参数", max_length=32, choices=TokenParameter,
@@ -58,6 +60,13 @@ class GatewayModel(models.Model):
     class Meta:
         verbose_name = "网关模型"
         verbose_name_plural = "网关模型"
+
+    def clean_fields(self, exclude=None):
+        if "timeout_seconds" not in (exclude or ()) and (
+                isinstance(self.timeout_seconds, bool)
+                or isinstance(self.timeout_seconds, float) and not math.isfinite(self.timeout_seconds)):
+            raise ValidationError({"timeout_seconds": "超时秒数必须为1至600之间的整数。"})
+        super().clean_fields(exclude=exclude)
 
     def __str__(self):
         return f"模型 #{self.pk}"

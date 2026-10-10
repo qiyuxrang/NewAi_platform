@@ -1,5 +1,5 @@
 [CmdletBinding()]
-param([switch]$KeepDatabase, [switch]$GatewayOnly, [switch]$CheckOnly, [string]$EnvFile = '')
+param([switch]$KeepDatabase, [switch]$GatewayOnly, [switch]$ModelGatewayOnly, [switch]$CheckOnly, [string]$EnvFile = '')
 
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path -Parent $PSScriptRoot
@@ -7,15 +7,16 @@ $stateFile = Join-Path $repo '.runtime/enterprise/processes.json'
 if (!$EnvFile) { $EnvFile = Join-Path $repo '.env' }
 $mutex = [System.Threading.Mutex]::new($false, 'Local\MultiUserClawEnterpriseServices')
 $locked = $false
+if ($GatewayOnly -and $ModelGatewayOnly) { throw 'Choose either GatewayOnly or ModelGatewayOnly.' }
 try {
     try { $locked = $mutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $locked = $true }
     if (!$locked) { throw 'Another enterprise service helper is active; no process was stopped.' }
-if (!$GatewayOnly) {
+if (!$GatewayOnly -and !$ModelGatewayOnly) {
     & (Join-Path $PSScriptRoot 'stop-business-workers.ps1') -Workers product,hr,engineering -CheckOnly:$CheckOnly
 }
 if (Test-Path -LiteralPath $stateFile) {
     $state = Get-Content -LiteralPath $stateFile -Raw | ConvertFrom-Json
-    $names = if ($GatewayOnly) { @('gateway') } else { @('portal','modelgateway','management','frontend','gateway') }
+    $names = if ($ModelGatewayOnly) { @('modelgateway') } elseif ($GatewayOnly) { @('gateway') } else { @('portal','modelgateway','management','frontend','gateway') }
     foreach ($name in $names) {
         $record = $state.$name
         if (!$record -or !$record.commandLine -or !$record.argumentLine -or !$record.directory) { continue }
@@ -38,6 +39,10 @@ if (Test-Path -LiteralPath $stateFile) {
     }
 }
 if ($CheckOnly) { Write-Host 'Owned process identities checked; no process/container was stopped.'; return }
+if ($ModelGatewayOnly) {
+    Write-Host 'Owned model gateway stopped; other services retained.'
+    return
+}
 if ($GatewayOnly) {
     Write-Host 'Owned gateway stopped; frontend, database and user runtimes retained.'
     return

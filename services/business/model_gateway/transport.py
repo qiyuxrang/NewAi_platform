@@ -212,7 +212,7 @@ def _request(provider, model, messages, max_output_tokens, stream=False, agent_t
     timeout = model.get("timeout_seconds")
     maximum = model.get("max_output_tokens")
     if (token_parameter not in ("max_tokens", "max_completion_tokens")
-            or type(timeout) not in (int, float) or not 1 <= timeout <= 60
+            or type(timeout) not in (int, float) or not 1 <= timeout <= 600
             or not _positive_integer(maximum)
             or not isinstance(model.get("model_name"), str) or not model["model_name"].strip()):
         raise _error("invalid_request")
@@ -232,6 +232,10 @@ def _request(provider, model, messages, max_output_tokens, stream=False, agent_t
     try:
         request = {"model": model["model_name"], "messages": messages,
                    token_parameter: requested, "stream": stream}
+        # Flash defaults to deep thinking, which can exceed the bounded document-step timeout.
+        if (model["model_name"] == "qwen3.8-flash"
+                and provider.get("base_url") == "https://dashscope.aliyuncs.com/compatible-mode/v1"):
+            request["enable_thinking"] = False
         if agent_tools is not None:
             request["tools"] = agent_tools
             if tool_choice is not None:

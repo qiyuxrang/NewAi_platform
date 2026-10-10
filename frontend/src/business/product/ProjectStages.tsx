@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { downloadBusinessFile } from "../api";
 import { CenterLink, Field } from "../shared";
 import { artifactDownload, artifactHistoryDownload, artifactPreview, draftDownload, draftHistoryDownload, sourceDownload, type BlueprintPayload, type DocumentTask, type DraftOutput, type OutputFamily, type ProductWorkflowProgress, type TaskHistory } from "./product-api";
 import { DocumentSymbol, EmptyState, formatBytes, formatDate, goProduct, outputNames, ProductIcon, projectListUrl, projectUrl, stageNames, stateNames, StatusBadge, useUnsavedWarning } from "./workbench-shared";
@@ -21,97 +22,100 @@ const readTab = (): WorkspaceTab => {
 const lines = (value: string) => value.split("\n").map(text => text.trim()).filter(Boolean);
 const outputTargetLabel = (target: number) => `至少 ${target.toLocaleString()} 字`;
 
+const failureMessages: Record<string, string> = {
+  busy: '模型服务繁忙，请稍后从已保存进度重试。',
+  rate_limited: '模型服务调用频率受限，请稍后重试。',
+  timeout: '模型响应超时，请稍后从已保存进度重试。',
+  invalid_request: '模型请求未通过参数校验，请联系负责人检查调用配置。',
+  invalid_model_output: '模型返回内容缺少必填字段或格式不正确，自动补试后仍未通过。已保存现有章节，可从已保存进度重试。',
+  content_review_required: '正文已保存，内容审核发现待核对问题，已暂停后续生成。请查看审核记录并核对资料缺项、数字和设备数量；重复重试不能消除这些问题。',
+  internal_error: '模型调用服务发生异常，请重试或联系负责人查看诊断记录。',
+  unsupported_capability: '当前模型不支持所需能力，请联系负责人检查模型配置。',
+  model_configuration_changed: '模型配置已变更，请刷新后重试。',
+  ragflow_disabled: '产品知识库检索尚未启用或尚未获得调用授权，请联系管理员确认后重试。',
+  ragflow_unconfigured: '知识库地址、访问凭据或专用模型路由尚未正确配置，请联系管理员检查后重试。',
+  ragflow_forbidden: '当前账号无权检索产品知识库，请联系管理员核对账号权限后重试。',
+  ragflow_scope_revoked: '当前账号尚未获得有效的知识库授权，或授权已变更、撤销。请联系管理员核对知识库授权范围后重试。',
+  ragflow_unavailable: '知识库服务暂时无法连接，请恢复服务后从已保存进度重试；无需重新上传资料。',
+  ragflow_invalid_response: '知识库返回内容未通过协议或授权范围校验，请联系管理员检查服务响应后重试。',
+  equipment_analysis_required: '未解析出设备清单条目。请核对设备清单文件，补充设备名称、数量和单位后再生成；项目背景正文不能代替设备清单。',
+  web_search_unconfigured: '知识库未命中；联网搜索服务尚未接入，已暂停生成。请补充知识库资料后重新检索。',
+  output_length_below_target: '正文篇幅未达到当前最低要求，任务未完成；已保存现有章节，可续写补足篇幅，或从已保存进度重试。',
+  diagram_generation_required: '缺少 Mermaid 图表生成结果，已暂停排版；请从已保存正文重试。',
+  diagram_generation_invalid: '图表代码或正文依据未通过校验，已暂停排版；请从已保存正文重试。',
+  diagram_render_failed: 'Mermaid 图表渲染失败，已暂停排版；正文已保存，可重试图表生成。',
+  model_call_limit: '模型调用预算已耗尽，任务未完成；已保存现有进度，补充预算后可继续，或从已保存进度重试。',
+};
+
 type VisibleStatus = ProductWorkflowProgress['status'];
 type VisiblePhase = { id: string; title: string; status: VisibleStatus; detail: string; statusLabel?: string };
 function workflowPhases(task: DocumentTask, outputs: DraftOutput[]): VisiblePhase[] {
-  const persisted = task.checkpoint?.analysis_progress || task.analysis_progress || {};
+  const persisted = { ...task.analysis_progress, ...task.checkpoint?.analysis_progress };
   const phase = (key: keyof typeof persisted) => persisted[key];
-  const active = ['RUNNING', 'QUEUED'].includes(task.state);
-  const knowledge = task.knowledge || task.blueprint_knowledge || { mode: 'source_only_preview', required: false, status: 'source_only_preview', ragflow_used: false, source_count: 0, detail: '知识检索状态尚未由服务端返回。' };
-  const currentFamilies = new Set(outputs.filter(item => item.current).map(item => item.family));
-  const documents = phase('documents');
-  const equipment = phase('equipment');
-  const blueprint = phase('blueprint');
+  const knowledge = task.knowledge || task.blueprint_knowledge;
+  const currentFamilies = new Set(outputs.filter(item => item.current && !item.stale).map(item => item.family));
+  const requestedFamilies = task.output_families || ['technical-solution', 'feasibility', 'presentation'];
   const knowledgePhase = phase('knowledge');
-  const webSearch = phase('web_search');
+  const knowledgeReady = knowledge?.status === 'ready' && knowledge.ragflow_used;
+  const knowledgeStatus = knowledgePhase?.status === 'completed' && !knowledgeReady ? 'pending' : knowledgePhase?.status || (knowledgeReady ? 'completed' : knowledge?.status === 'waiting_for_ragflow' ? 'waiting' : knowledge?.status === 'source_only_preview' ? 'skipped' : 'pending');
   const reviewPhase = phase('review');
-  const normalize = (value: ProductWorkflowProgress | undefined, fallback: VisibleStatus) => value?.status || fallback;
-  const countDetail = (value: ProductWorkflowProgress | undefined, fallback: string) => value?.detail || (value?.source_count !== undefined ? `${value.source_count} 份背景材料` : value?.item_count !== undefined ? `${value.item_count} 行设备事实` : fallback);
-  const knowledgeReady = knowledge.status === 'ready';
-  const knowledgeStatus: VisibleStatus = knowledgeReady
-    ? 'completed'
-    : knowledgePhase && ['running', 'failed', 'blocked', 'waiting', 'skipped'].includes(knowledgePhase.status)
-      ? knowledgePhase.status
-      : knowledge.status === 'waiting_for_ragflow' ? 'waiting' : 'pending';
-  const knowledgeDetail = knowledgeReady
-    ? knowledgePhase?.detail?.replaceAll('RAGFlow', '知识库') || `知识库检索完成，命中 ${knowledge.source_count} 项知识来源`
-    : knowledge.status === 'waiting_for_ragflow'
-      ? '知识库暂不可用，正式蓝图生成保持锁定'
-      : '仅使用项目资料预览，未执行真实知识库检索，不产生知识库命中记录';
-  const contentRecords = [documents, equipment].filter((record): record is ProductWorkflowProgress => Boolean(record));
-  const contentStatus: VisibleStatus = (['failed', 'blocked', 'running', 'waiting'] as const).find(status => contentRecords.some(record => record.status === status))
-    || (contentRecords.length === 2 && contentRecords.every(record => record.status === 'completed') ? 'completed' : 'pending');
-  const contentDetail = contentRecords.map(record => countDetail(record, '')).filter(Boolean).join('；')
-    || '等待服务端整理项目资料、设备事实与内容结构';
   const revision = task.blueprint_review;
   const currentRound = Math.min(revision.revision_count + 1, revision.revision_limit || 3);
-  const reviewStatus = reviewPhase?.status || (task.blueprint_approved ? 'completed' : task.blueprint && task.state === 'WAITING_REVIEW' ? 'waiting' : 'pending');
-  const reviewDetail = reviewPhase?.detail || (task.blueprint_approved ? `已通过蓝图 v${task.blueprint?.version || task.blueprint_version}` : task.blueprint && task.state === 'WAITING_REVIEW' ? `等待第 ${currentRound}/${revision.revision_limit} 轮人工审核` : `蓝图生成后进入人工审核，最多 ${revision.revision_limit} 轮`);
-  const reportPhase = (family: 'technical-solution' | 'feasibility', suffix: 'technical' | 'feasibility', title: string): VisiblePhase => {
-    const latest = [phase(`render_${suffix}`), phase(`review_${suffix}`), phase(`writing_${suffix}`)]
-      .filter((record): record is ProductWorkflowProgress => Boolean(record))
-      .sort((left, right) => (right.updated_at || '').localeCompare(left.updated_at || ''))[0];
-    const saved = currentFamilies.has(family);
+  const reportPhases = (family: 'technical-solution' | 'feasibility', suffix: 'technical' | 'feasibility', title: string): VisiblePhase[] => {
+    const writing = phase(`writing_${suffix}`);
+    const diagrams = phase(`diagrams_${suffix}`);
+    const render = phase(`render_${suffix}`);
     const progress = task.output_generation?.[family];
     const target = task.output_targets?.[family];
-    const minimum = target;
-    const belowTarget = progress !== undefined && minimum !== undefined && progress.actual_characters < minimum;
-    return { id: family, title, status: belowTarget ? 'blocked' : saved ? 'completed' : latest?.status === 'failed' || latest?.status === 'blocked' ? latest.status : latest?.status === 'running' && active ? 'running' : 'pending', detail: belowTarget ? `${progress.actual_characters.toLocaleString()} 字，未达到当前最低 ${minimum.toLocaleString()} 字；可续写或重试` : latest?.detail || (saved ? '文件已保存，可在文档成果中下载' : '蓝图确认后自动生成') };
+    const belowTarget = progress !== undefined && target !== undefined && progress.actual_characters < target;
+    return [
+      { id: `writing_${suffix}`, title: `${title}正文`, status: belowTarget && writing?.status === 'completed' ? 'blocked' : writing?.status || 'pending', detail: writing?.detail || (progress ? `已保存 ${progress.actual_characters.toLocaleString()} 字${target === undefined ? '' : `；最低 ${target.toLocaleString()} 字`}` : '蓝图确认后开始正文编制') },
+      { id: `diagrams_${suffix}`, title: `${title}图表渲染`, status: diagrams?.status || 'pending', detail: diagrams?.detail || '等待服务端提供 Mermaid 图表渲染记录' },
+      { id: `render_${suffix}`, title: `${title}文档排版`, status: render?.status || 'pending', detail: render?.detail || '等待 Word 排版与文件保存记录' },
+    ];
   };
   return [
-    { id: 'knowledge', title: '知识库检索', status: knowledgeStatus, statusLabel: knowledge.status === 'source_only_preview' && knowledgeStatus === 'pending' ? '未执行' : undefined, detail: knowledgeDetail },
-    { id: 'web-search', title: '联网降级补充', status: webSearch?.status || 'skipped', statusLabel: !webSearch ? '未配置/未执行' : webSearch.status === 'pending' ? '待配置' : webSearch.status === 'skipped' ? '未执行' : undefined, detail: webSearch?.detail || '当前服务端未配置联网搜索阶段，本次未执行联网检索' },
-    { id: 'content', title: '组织语言与内容', status: contentStatus, detail: contentDetail },
-    { id: 'blueprint', title: '生成项目蓝图', status: normalize(blueprint, task.blueprint ? 'completed' : task.pending_action === 'blueprint' && active ? 'running' : 'pending'), detail: countDetail(blueprint, task.blueprint ? `项目蓝图 v${task.blueprint.version} 已生成` : '等待前置分析完成') },
-    { id: 'review', title: '人工审核蓝图', status: reviewStatus, detail: reviewDetail },
-    reportPhase('technical-solution', 'technical', '技术方案'),
-    reportPhase('feasibility', 'feasibility', '可行性研究报告'),
-    { id: 'presentation', title: '汇报 PPT', status: phase('presentation')?.status || (currentFamilies.has('presentation') ? 'completed' : 'pending'), detail: phase('presentation')?.detail || '基于两份报告制作，不新增项目事实' },
+    { id: 'documents', title: '解析项目背景', status: phase('documents')?.status || 'pending', detail: phase('documents')?.detail || '等待服务端提供背景材料解析记录' },
+    { id: 'equipment', title: '分析设备清单', status: phase('equipment')?.status || 'pending', detail: phase('equipment')?.status === 'failed' ? failureMessages[task.error_code] || '设备清单分析失败，请核对设备清单文件后重试。' : phase('equipment')?.detail || '等待服务端提供设备事实分析记录' },
+    { id: 'knowledge', title: '知识库检索', status: knowledgeStatus, detail: knowledgeStatus === 'failed' ? failureMessages[task.error_code] || '知识库检索失败，项目资料已保留，请联系管理员核对原因后重试。' : knowledgePhase?.detail || (knowledgeReady ? `知识库检索完成，命中 ${knowledge.source_count} 项知识来源` : knowledge?.detail || '知识检索状态尚未由服务端返回') },
+    ...(phase('web_search') ? [{ id: 'web-search', title: '联网补充检索', status: phase('web_search')!.status, detail: phase('web_search')!.detail || '按服务端记录显示' }] : []),
+    { id: 'blueprint', title: '生成项目蓝图', status: phase('blueprint')?.status || (task.blueprint ? 'completed' : 'pending'), detail: phase('blueprint')?.detail || (task.blueprint ? `项目蓝图 v${task.blueprint.version} 已保存` : '等待前置分析完成') },
+    { id: 'review', title: '本人确认蓝图', status: reviewPhase?.status || (task.blueprint_approved ? 'completed' : task.blueprint && task.state === 'WAITING_REVIEW' ? 'waiting' : 'pending'), detail: reviewPhase?.detail || (task.blueprint_approved ? '蓝图已确认' : `蓝图生成后需人工确认；第 ${currentRound}/${revision.revision_limit} 轮`) },
+    ...reportPhases('technical-solution', 'technical', '技术方案'),
+    ...reportPhases('feasibility', 'feasibility', '可研报告'),
+    ...(requestedFamilies.includes('presentation') ? [{ id: 'presentation', title: '汇报 PPT', status: phase('presentation')?.status || (currentFamilies.has('presentation') ? 'completed' : 'pending'), detail: phase('presentation')?.detail || '基于两份报告制作，不新增项目事实' }] : []),
+    { id: 'downloads', title: '两份报告下载', status: ['technical-solution', 'feasibility'].every(family => currentFamilies.has(family as OutputFamily)) ? 'completed' : 'pending', detail: '仅提供后台已保存的当前报告文件；草稿与审批状态单独显示' },
   ];
 }
-
 export default function ProjectStages(props: Props) {
   const { task, outputs, history, outputsError, historyError, busy, conflict, disabled, onAction, onReload, onUpload, onSourceAction } = props;
   const [tab, setTab] = useState(readTab);
   const [cancelling, setCancelling] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [sourcePurpose, setSourcePurpose] = useState<'equipment' | 'background'>('background');
+  const [downloadError, setDownloadError] = useState('');
+  const [downloading, setDownloading] = useState('');
   useEffect(() => { let active = true; const sync = () => queueMicrotask(() => { if (active) setTab(readTab()); }); window.addEventListener("popstate", sync); return () => { active = false; window.removeEventListener("popstate", sync); }; }, []);
   const returnTo = projectListUrl();
   const projectHref = (value: WorkspaceTab) => `${projectUrl(task.id, value)}&returnTo=${encodeURIComponent(returnTo)}`;
   const move = (value: WorkspaceTab) => goProduct(projectHref(value));
+  const visibleTabs = tabs.filter(item => item.id !== 'presentation' || !task.output_families || task.output_families.includes('presentation'));
+  const activeTab = visibleTabs.some(item => item.id === tab) ? tab : 'technical-solution';
+  const download = async (path: string, filename: string) => {
+    setDownloading(path); setDownloadError('');
+    try { await downloadBusinessFile(path, filename); }
+    catch (reason) { setDownloadError(reason instanceof Error ? reason.message : '下载失败，请重试。'); }
+    finally { setDownloading(''); }
+  };
   const running = ["RUNNING", "QUEUED"].includes(task.state);
   const phases = workflowPhases(task, outputs);
   const finishedPhases = phases.filter(phase => phase.status === 'completed').length;
   const settledPhases = phases.filter(phase => phase.status === 'completed' || phase.status === 'skipped').length;
   const currentPhase = phases.find(phase => phase.status === 'running') || phases.find(phase => phase.status === 'failed' || phase.status === 'blocked') || phases.find(phase => phase.status === 'waiting') || phases.find(phase => phase.status === 'pending');
-  const progressTitle = task.state === 'CANCELLED' ? '任务已取消' : task.state === 'FAILED' || task.state === 'WAITING_INPUT' ? '处理已暂停，请查看下方提示' : task.state === 'COMPLETED' ? '交付成果已保存；可选降级节点按服务端记录显示' : task.state === 'QUEUED' ? '排队中，等待开始处理' : task.state === 'WAITING_REVIEW' && task.stage === 'BLUEPRINT' ? '蓝图已生成，等待您确认' : settledPhases === phases.length ? '全部流程节点已结束' : currentPhase ? `${currentPhase.title} · ${currentPhase.statusLabel || { pending: '等待开始', running: '处理中', completed: '已完成', failed: '处理失败', blocked: '暂时受阻', waiting: '等待确认', skipped: '未执行' }[currentPhase.status]}` : '项目资料已保存';
+  const progressTitle = task.state === 'CANCELLED' ? '任务已取消' : task.state === 'FAILED' || task.state === 'WAITING_INPUT' ? '处理已暂停，请查看下方提示' : task.state === 'COMPLETED' ? '后台记录任务已完成，节点详情与成果以保存记录为准' : task.state === 'QUEUED' ? '排队中，等待开始处理' : task.state === 'WAITING_REVIEW' && task.stage === 'BLUEPRINT' ? '蓝图已生成，等待您确认' : settledPhases === phases.length ? '全部流程节点已结束' : currentPhase ? `${currentPhase.title} · ${currentPhase.statusLabel || { pending: '等待开始', running: '处理中', completed: '已完成', failed: '处理失败', blocked: '暂时受阻', waiting: '等待确认', skipped: '未执行' }[currentPhase.status]}` : '项目资料已保存';
   const milestones = phases;
   const statusLabels: Record<VisibleStatus, string> = { pending: '等待开始', running: '处理中', completed: '已完成', failed: '处理失败', blocked: '暂时受阻', waiting: '等待确认', skipped: '未执行' };
   const runtimeDetail = (detail: string) => detail.replaceAll('RAGFlow', '知识库').replaceAll('PPT', '汇报文稿').replaceAll('execution_failed', '执行失败').replace(/\bv(\d+)\b/g, '第 $1 版');
-  const failureMessages: Record<string, string> = {
-    busy: '模型服务繁忙，请稍后从已保存进度重试。',
-    rate_limited: '模型服务调用频率受限，请稍后重试。',
-    timeout: '模型响应超时，请稍后从已保存进度重试。',
-    invalid_request: '模型请求未通过参数校验，请联系负责人检查调用配置。',
-    internal_error: '模型调用服务发生异常，请重试或联系负责人查看诊断记录。',
-    unsupported_capability: '当前模型不支持所需能力，请联系负责人检查模型配置。',
-    model_configuration_changed: '模型配置已变更，请刷新后重试。',
-    ragflow_unavailable: '知识库服务暂时无法连接，请恢复服务后从已保存进度重试；无需重新上传资料。',
-    web_search_unconfigured: '知识库未命中；联网搜索服务尚未接入，已暂停生成。请补充知识库资料后重新检索。',
-    output_length_below_target: '正文篇幅未达到当前最低要求，任务未完成；已保存现有章节，可续写补足篇幅，或从已保存进度重试。',
-    model_call_limit: '模型调用预算已耗尽，任务未完成；已保存现有进度，补充预算后可继续，或从已保存进度重试。',
-  };
   const stateHeading = task.state === "WAITING_REVIEW" && task.stage === "BLUEPRINT" ? "蓝图等待人工确认" : stateNames[task.state] || "项目状态待确认";
 
   return <div className="pd-workspace pd-project-detail">
@@ -124,38 +128,43 @@ export default function ProjectStages(props: Props) {
       {running && <div className="pd-status-progress"><span>{task.state === "QUEUED" ? "等待后台执行" : "后台处理中"}</span><div className="pd-indeterminate" role="progressbar" aria-label={task.state === "QUEUED" ? "等待后台执行" : "后台正在处理"}><span/></div></div>}
     </section>
     {conflict && <div className="pd-feedback" role="alert">版本或前置条件发生变化。未保存的编辑已保留，请刷新后核对；不会自动覆盖服务端内容。</div>}
+    {downloadError && <div className="pd-feedback" role="alert">{downloadError}</div>}
+    <section className="pd-report-downloads" aria-label="两份报告成果">{(['technical-solution', 'feasibility'] as const).map(family => {
+      const output = outputs.filter(item => item.family === family && item.current && !item.stale).at(-1);
+      const path = output ? family === 'technical-solution' ? artifactDownload(output.id) : draftDownload(output.id) : '';
+      return <div key={family}><DocumentSymbol family={family}/><div><strong>{outputNames[family]}</strong><small>{output ? `第 ${output.version} 版 · ${output.approved ? '已批准' : '草稿 · 待业务确认'}` : outputsError ? '成果状态读取失败' : '等待文件生成'} · Word</small></div>{output ? <button className="button primary" disabled={Boolean(downloading)} onClick={() => void download(path, `${task.title}-${outputNames[family]}.docx`)}><ProductIcon name="download"/>{downloading === path ? '正在下载…' : '下载报告'}</button> : <button className="button secondary" onClick={() => move(family)}>查看状态</button>}</div>;
+    })}</section>
     {cancelling && <section role="alertdialog" aria-label="确认取消任务" className="pd-feedback"><h3>确认取消当前任务？</h3><p>取消后不能继续编辑这个任务。已上传资料和历史成果仍保留，不会删除。</p><div className="pd-actions"><button className="button secondary" onClick={() => setCancelling(false)}>继续处理</button><button className="button primary" disabled={busy || disabled("cancel")} onClick={async () => { if (await onAction("cancel/", {})) setCancelling(false); }}>确认取消</button></div></section>}
     <section className="pd-compact-progress" data-running={running} aria-label="项目处理进度">
-      <div className="pd-compact-progress-heading"><strong>处理进度</strong><span>已结束 {settledPhases} / {phases.length} · 完成 {finishedPhases}</span></div>
-      <progress max={phases.length} value={settledPhases} aria-label="已结束处理节点"/>
+      <div className="pd-compact-progress-heading"><strong>后台处理节点</strong><span>已结束 {settledPhases} / {phases.length} · 完成 {finishedPhases}</span></div>
       <ol className="pd-progress-milestones" aria-label="完整处理链路">{milestones.map((phase, index) => <li key={phase.id} data-status={phase.status} aria-current={phase.status === 'running' || phase.status === 'waiting' ? 'step' : undefined}><span className="pd-milestone-dot" aria-hidden="true">{phase.status === 'completed' ? <ProductIcon name="check"/> : phase.status === 'skipped' ? '—' : phase.status === 'failed' || phase.status === 'blocked' ? '!' : index + 1}</span><strong>{phase.title}</strong><small>{phase.statusLabel || statusLabels[phase.status]}</small></li>)}</ol>
       <p role="status" aria-live="polite">{running && <span className="pd-spinner"/>}{progressTitle}</p>
       <details className="pd-runtime-details"><summary>运行细节</summary><ol>{phases.map(phase => <li key={phase.id}><strong>{phase.title}</strong><span>{phase.statusLabel || statusLabels[phase.status]}</span><p>{runtimeDetail(phase.detail)}</p></li>)}</ol></details>
     </section>
     {task.error_code && <div className="pd-feedback" role="alert"><strong>当前任务需要处理</strong><p>{task.error_code === "model_authorization_required" ? "尚未取得模型调用与资料外发授权。项目已保留，可以先完善资料与人工蓝图。" : task.error_code === "revision_requested" ? "蓝图已退回修改，请查看确认记录并修订。" : failureMessages[task.error_code] || (task.blueprint_approved ? "生成未完成，已保存项目资料和已完成章节。可从现有进度继续，不需要重新审批蓝图。" : "生成未完成，项目资料已保留，请核对提示后重试。")}</p>{!disabled("retry") && <button className="button secondary" disabled={busy} onClick={() => void onAction("retry/", {})}>从已保存进度重试</button>}</div>}
     <div className="pd-project-tabs">
-      <div className="pd-detail-tabs" role="tablist" aria-label="项目交付工作区" onKeyDown={event => { if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return; event.preventDefault(); const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button")); const current = buttons.indexOf(document.activeElement as HTMLButtonElement); const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (current + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length; buttons[next]?.focus(); }}>{tabs.map(item => <button key={item.id} id={`tab-${item.id}`} type="button" role="tab" aria-controls={`panel-${item.id}`} aria-selected={tab === item.id} data-state={tab === item.id ? "active" : "inactive"} tabIndex={tab === item.id ? 0 : -1} onClick={() => move(item.id)}>{item.name}{item.id === "sources" && <small>{task.sources.length}</small>}</button>)}</div>
-      {tab === "blueprint" && <section id="panel-blueprint" role="tabpanel" aria-labelledby="tab-blueprint" className="pd-tab-panel">
+      <div className="pd-detail-tabs" role="tablist" aria-label="项目交付工作区" onKeyDown={event => { if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return; event.preventDefault(); const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button")); const current = buttons.indexOf(document.activeElement as HTMLButtonElement); const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (current + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length; buttons[next]?.focus(); }}>{visibleTabs.map(item => <button key={item.id} id={`tab-${item.id}`} type="button" role="tab" aria-controls={`panel-${item.id}`} aria-selected={activeTab === item.id} data-state={activeTab === item.id ? "active" : "inactive"} tabIndex={activeTab === item.id ? 0 : -1} onClick={() => move(item.id)}>{item.name}{item.id === "sources" && <small>{task.sources.length}</small>}</button>)}</div>
+      {activeTab === "blueprint" && <section id="panel-blueprint" role="tabpanel" aria-labelledby="tab-blueprint" className="pd-tab-panel">
         {!task.blueprint && <section className="pd-workbench-command" aria-labelledby="blueprint-start-title"><div><span className="pd-section-label">可执行操作</span><h3 id="blueprint-start-title">开始蓝图编制</h3></div><div className="pd-actions">{task.blueprint_knowledge?.required && task.blueprint_knowledge.status !== "ready" && <button className="button primary" disabled={disabled("queue_blueprint_knowledge")} onClick={() => void onAction("queue/", { action: "knowledge" })}>先检索知识库</button>}<button className={task.blueprint_knowledge?.required && task.blueprint_knowledge.status !== "ready" ? "button secondary" : "button primary"} disabled={disabled("queue_blueprint")} onClick={() => void onAction("queue/", { action: "blueprint" })}>生成项目蓝图</button></div><BlockerNotes task={task}/></section>}
         <BlueprintPanel task={task} disabled={disabled} busy={busy} onAction={onAction}/>
       </section>}
-      {(["technical-solution", "feasibility", "presentation"] as const).map(family => tab === family && <section key={family} id={`panel-${family}`} role="tabpanel" aria-labelledby={`tab-${family}`} className="pd-tab-panel"><ArtifactWorkspace family={family} task={task} outputs={outputs} outputsError={outputsError} disabled={disabled} onAction={onAction} move={move}/></section>)}
-      {tab === "sources" && <section id="panel-sources" role="tabpanel" aria-labelledby="tab-sources" className="pd-tab-panel pd-sources-workspace">
+      {(["technical-solution", "feasibility", "presentation"] as const).map(family => activeTab === family && <section key={family} id={`panel-${family}`} role="tabpanel" aria-labelledby={`tab-${family}`} className="pd-tab-panel"><ArtifactWorkspace family={family} task={task} outputs={outputs} outputsError={outputsError} disabled={disabled} onAction={onAction} move={move} onDownload={download} downloading={Boolean(downloading)}/></section>)}
+      {activeTab === "sources" && <section id="panel-sources" role="tabpanel" aria-labelledby="tab-sources" className="pd-tab-panel pd-sources-workspace">
         <ProjectInputPanel task={task} disabled={disabled} onAction={onAction}/>
-        <section className="pd-workbench-section"><div className="pd-panel-heading"><h3>原始资料</h3><span className="pd-muted">{task.sources.length} 份资料</span></div>{task.sources.length ? <ul className="pd-upload-list">{task.sources.map(source => <li key={source.id}><ProductIcon name="file"/><div><strong>{source.original_name}</strong><small>{source.purpose === 'equipment' ? '设备清单 · ' : source.purpose === 'background' ? '项目背景材料 · ' : ''}{source.parsed ? `${extractionNames[source.parsed.status]} · ` : ""}{formatBytes(source.size)} · {formatDate(source.created_at)}{source.warnings?.length ? ` · ${source.warnings.length} 项待核对` : ""}</small></div><a className="button secondary" href={sourceDownload(source.id)}>下载原文件</a></li>)}</ul> : <EmptyState title="尚未上传附件" detail="可以先填写建设目标，也可以补充设备清单和背景资料。"/>}<div className="pd-source-upload">{task.intake_mode === 'equipment_background' && <><label htmlFor="source-purpose">资料类型</label><select id="source-purpose" value={sourcePurpose} onChange={event => setSourcePurpose(event.target.value as 'equipment' | 'background')}><option value="background">项目背景材料</option><option value="equipment" disabled={task.sources.some(source => source.purpose === 'equipment')}>设备清单（仅一份）</option></select></>}<label htmlFor="project-more-file">补充资料</label><input id="project-more-file" type="file" accept={SOURCE_ACCEPT} disabled={disabled("add_source")} onChange={event => setFile(event.target.files?.[0] || null)}/><button className="button primary" disabled={disabled("add_source") || !file} onClick={async () => { if (file && await onUpload(file, task.intake_mode === 'equipment_background' ? sourcePurpose : undefined)) { setFile(null); setSourcePurpose('background'); } }}>{busy ? "正在上传并解析…" : "上传并保存"}</button></div><p className="pd-muted">补充资料会形成新的输入版本，相关蓝图和成果需重新核对。上传不会覆盖原始文件。</p></section>
+        <section className="pd-workbench-section"><div className="pd-panel-heading"><h3>原始资料</h3><span className="pd-muted">{task.sources.length} 份资料</span></div>{task.sources.length ? <ul className="pd-upload-list">{task.sources.map(source => <li key={source.id}><ProductIcon name="file"/><div><strong>{source.original_name}</strong><small>{source.purpose === 'equipment' ? '设备清单 · ' : source.purpose === 'background' ? '项目背景材料 · ' : ''}{source.parsed ? `${extractionNames[source.parsed.status]} · ` : ""}{formatBytes(source.size)} · {formatDate(source.created_at)}{source.warnings?.length ? ` · ${source.warnings.length} 项待核对` : ""}</small></div><button className="button secondary" disabled={Boolean(downloading)} onClick={() => void download(sourceDownload(source.id), source.original_name)}>下载原文件</button></li>)}</ul> : <EmptyState title="尚未上传附件" detail="可以先填写建设目标，也可以补充设备清单和背景资料。"/>}<div className="pd-source-upload">{task.intake_mode === 'equipment_background' && <><label htmlFor="source-purpose">资料类型</label><select id="source-purpose" value={sourcePurpose} onChange={event => setSourcePurpose(event.target.value as 'equipment' | 'background')}><option value="background">项目背景材料</option><option value="equipment" disabled={task.sources.some(source => source.purpose === 'equipment')}>设备清单（仅一份）</option></select></>}<label htmlFor="project-more-file">补充资料</label><input id="project-more-file" type="file" accept={SOURCE_ACCEPT} disabled={disabled("add_source")} onChange={event => setFile(event.target.files?.[0] || null)}/><button className="button primary" disabled={disabled("add_source") || !file} onClick={async () => { if (file && await onUpload(file, task.intake_mode === 'equipment_background' ? sourcePurpose : undefined)) { setFile(null); setSourcePurpose('background'); } }}>{busy ? "正在上传并解析…" : "上传并保存"}</button></div><p className="pd-muted">补充资料会形成新的输入版本，相关蓝图和成果需重新核对。上传不会覆盖原始文件。</p></section>
         <SourceMaterials task={task} busy={busy} onSourceAction={onSourceAction} onAction={onAction} disabled={disabled}/>
         <section className="pd-workbench-section"><div className="pd-panel-heading"><h3>设备清单事实</h3><span className="pd-badge neutral">{task.input?.items.length || 0} 行</span></div>{task.input?.items.length ? <div className="pd-table-wrap"><table className="pd-table"><thead><tr><th>原行号</th><th>设备名称</th><th>数量</th><th>单位</th><th>来源位置</th></tr></thead><tbody>{task.input.items.map((item, index) => <tr key={index}><td>{item.row_id || "未提供"}</td><td>{item.name || "名称缺失"}</td><td>{item.quantity === "" ? "未提供" : item.quantity}</td><td>{item.unit || "未提供"}</td><td>{task.sources.find(source => source.id === item.source_id)?.original_name || "人工录入"}{item.source_location && <small>{[item.source_location.sheet, item.source_location.part, item.source_location.range, item.source_location.table ? `表 ${item.source_location.table}` : "", item.source_location.row ? `第 ${item.source_location.row} 行` : ""].filter(Boolean).join(" · ")}</small>}</td></tr>)}</tbody></table></div> : <p className="pd-muted">尚未录入设备清单，可上传清单或在项目底稿中补充。</p>}{task.input_issues.length > 0 && <p className="pd-feedback">有 {task.input_issues.length} 项输入问题需要结合来源核对。</p>}<CenterLink className="pd-quiet-link" href={projectUrl(task.id, "sources")}>进入专业工作台核对输入问题 ›</CenterLink></section>
       </section>}
-      {tab === "history" && <section id="panel-history" role="tabpanel" aria-labelledby="tab-history" className="pd-tab-panel">
-        <section className="pd-workbench-section"><div className="pd-panel-heading"><h3>成果历史版本</h3><span className="pd-muted">保留旧版，不覆盖</span></div>{outputsError ? <p role="alert">{outputsError}</p> : outputs.length ? <div className="pd-table-wrap"><table className="pd-table"><thead><tr><th>成果</th><th>版本</th><th>状态</th><th>完整性摘要</th><th>下载</th></tr></thead><tbody>{[...outputs].reverse().map(item => <tr key={item.id}><td>{outputNames[item.family]}</td><td>v{item.version}</td><td>{item.current ? item.approved ? "当前 · 已批准" : "当前 · 已生成草稿" : "历史 · 已过期"}</td><td><code title={item.sha256}>{item.sha256.slice(0, 12)}…</code></td><td><a href={item.family === "technical-solution" ? item.current ? artifactDownload(item.id) : artifactHistoryDownload(item.id) : item.current ? draftDownload(item.id) : draftHistoryDownload(item.id)}>{item.current ? "下载当前文件" : "下载历史文件"}</a></td></tr>)}</tbody></table></div> : <EmptyState title="暂无成果版本" detail="已保存的输入和蓝图记录仍可在下方追溯。"/>}</section>
+      {activeTab === "history" && <section id="panel-history" role="tabpanel" aria-labelledby="tab-history" className="pd-tab-panel">
+        <section className="pd-workbench-section"><div className="pd-panel-heading"><h3>成果历史版本</h3><span className="pd-muted">保留旧版，不覆盖</span></div>{outputsError ? <p role="alert">{outputsError}</p> : outputs.length ? <div className="pd-table-wrap"><table className="pd-table"><thead><tr><th>成果</th><th>版本</th><th>状态</th><th>完整性摘要</th><th>下载</th></tr></thead><tbody>{[...outputs].reverse().map(item => <tr key={item.id}><td>{outputNames[item.family]}</td><td>v{item.version}</td><td>{item.current ? item.approved ? "当前 · 已批准" : "当前 · 已生成草稿" : "历史 · 已过期"}</td><td><code title={item.sha256}>{item.sha256.slice(0, 12)}…</code></td><td><button className="text-button" disabled={Boolean(downloading)} onClick={() => void download(item.family === "technical-solution" ? item.current ? artifactDownload(item.id) : artifactHistoryDownload(item.id) : item.current ? draftDownload(item.id) : draftHistoryDownload(item.id), `${task.title}-${outputNames[item.family]}-v${item.version}.${item.family === "presentation" ? "pptx" : "docx"}`)}>{item.current ? "下载当前文件" : "下载历史文件"}</button></td></tr>)}</tbody></table></div> : <EmptyState title="暂无成果版本" detail="已保存的输入和蓝图记录仍可在下方追溯。"/>}</section>
         <section className="pd-workbench-section"><h3>项目生成与审核记录</h3>{historyError ? <p role="alert">{historyError}</p> : !history ? <p role="status">正在读取版本链…</p> : <ol className="pd-timeline">{[...history.timeline].reverse().map(event => <li key={`${event.event}-${event.id}`}><span className="pd-timeline-dot"/><div><strong>{({ revision: "版本保存", external_upload: "资料上传", ai_task: "后台处理", artifact: "成果生成", approval: "人工审核" } as Record<string, string>)[event.event] || "项目记录"}{event.family ? ` · ${outputNames[event.family] || event.family}` : ""}{event.version ? ` v${event.version}` : ""}</strong><p>{event.reason || event.kind || "服务端已记录"} · {event.actor?.name || "系统"}</p>{event.sha256 && <small>摘要 {event.sha256.slice(0, 16)}…</small>}</div></li>)}</ol>}</section>
       </section>}
     </div>
   </div>;
 }
 
-function ArtifactWorkspace({ family, task, outputs, outputsError, disabled, onAction, move }: { family: OutputFamily; task: DocumentTask; outputs: DraftOutput[]; outputsError: string; disabled: (action: string) => boolean; onAction: Action; move: (tab: WorkspaceTab) => void }) {
-  const output = outputs.filter(item => item.family === family && item.current).at(-1);
+function ArtifactWorkspace({ family, task, outputs, outputsError, disabled, onAction, move, onDownload, downloading }: { family: OutputFamily; task: DocumentTask; outputs: DraftOutput[]; outputsError: string; disabled: (action: string) => boolean; onAction: Action; move: (tab: WorkspaceTab) => void; onDownload: (path: string, filename: string) => Promise<void>; downloading: boolean }) {
+  const output = outputs.filter(item => item.family === family && item.current && !item.stale).at(-1);
   const artifact = output && task.artifacts.find(item => item.id === output.id);
   const progress = family === "presentation" ? undefined : task.output_generation?.[family];
   const target = family === "presentation" ? undefined : task.output_targets?.[family];
@@ -167,7 +176,7 @@ function ArtifactWorkspace({ family, task, outputs, outputsError, disabled, onAc
     <header className="pd-artifact-title"><div className="pd-artifact-head"><DocumentSymbol family={family}/><div><span className="pd-section-label">成果工作区</span><h3 id={`${family}-title`}>{outputNames[family]}</h3><small>{format}</small></div></div>{output ? <span className={`pd-badge ${output.approved ? "good" : "warning"}`}>{output.approved ? "已批准" : "草稿 · 未正式发布"}</span> : <span className="pd-badge neutral">尚未生成</span>}</header>
     {output ? <>
       <dl className="pd-artifact-facts"><div><dt>当前版本</dt><dd>v{output.version}</dd></div><div><dt>审批状态</dt><dd>{output.approved ? "已批准" : "待业务确认"}</dd></div><div><dt>内容来源</dt><dd>{output.content_version ? `内容 v${output.content_version} · ${output.content_approved ? "已审" : "来源快照"}` : "结构化内容来源"}</dd></div>{targetLabel && <div><dt>篇幅结果</dt><dd>{progress ? `${progress.actual_characters.toLocaleString()} / ${targetLabel} · ${meetsMinimum ? "已达目标" : "未达当前最低要求，可续写或重试"}` : targetLabel}</dd></div>}</dl>
-      <div className="pd-workbench-command"><div><span className="pd-section-label">可执行操作</span><h3>当前成果文件</h3></div><div className="pd-actions"><a className="button primary" href={family === "technical-solution" ? artifactDownload(output.id) : draftDownload(output.id)}><ProductIcon name="download"/>下载文件</a>{artifact?.render_evidence?.pages.length ? <a className="button secondary" href={artifactPreview(artifact.id, 1)} target="_blank" rel="noreferrer">预览第 1 页</a> : <span className="pd-muted">暂无 Office 预览证据</span>}<button className="button secondary" onClick={() => move("history")}>查看历史版本</button></div></div>
+      <div className="pd-workbench-command"><div><span className="pd-section-label">可执行操作</span><h3>当前成果文件</h3></div><div className="pd-actions"><button className="button primary" disabled={downloading} onClick={() => void onDownload(family === "technical-solution" ? artifactDownload(output.id) : draftDownload(output.id), `${task.title}-${outputNames[family]}.${family === "presentation" ? "pptx" : "docx"}`)}><ProductIcon name="download"/>{downloading ? "正在下载…" : "下载文件"}</button>{artifact?.render_evidence?.pages.length ? <a className="button secondary" href={artifactPreview(artifact.id, 1)} target="_blank" rel="noreferrer">预览第 1 页</a> : <span className="pd-muted">暂无 Office 预览证据</span>}<button className="button secondary" onClick={() => move("history")}>查看历史版本</button></div></div>
     </> : <div className="pd-artifact-empty"><h3>{task.blueprint_approved ? runningOutputMessage(task) : "蓝图尚未确认，成果生成保持锁定"}</h3><p>{task.blueprint_approved ? "生成完成后，当前版本将在此提供下载。" : "请先在蓝图审批中完成确认。"}</p><div className="pd-actions"><button className="button primary" onClick={() => move("blueprint")}>查看蓝图审批</button>{!disabled("retry") && <button className="button secondary" onClick={() => void onAction("retry/", {})}>重试生成</button>}</div></div>}
     <BlockerNotes task={task}/>
   </section>;
@@ -181,11 +190,13 @@ function BlueprintPanel({ task, disabled, busy, onAction }: { task: DocumentTask
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<BlueprintPayload | null>(null);
   const [baseVersion, setBaseVersion] = useState(task.version);
-  const [comment, setComment] = useState("");
+  const [commentDraft, setCommentDraft] = useState({ key: '', value: '' });
   useUnsavedWarning(editing);
   const blueprint = task.blueprint;
+  const commentKey = `${blueprint?.id || ''}:${blueprint?.sha256 || ''}`;
+  const comment = commentDraft.key === commentKey ? commentDraft.value : '';
+  const setComment = (value: string) => setCommentDraft({ key: commentKey, value });
   const pendingReview = Boolean(blueprint && task.state === "WAITING_REVIEW" && task.stage === "BLUEPRINT" && !task.blueprint_approved);
-  useEffect(() => { setComment(""); }, [blueprint?.id, blueprint?.sha256]);
   const changed = editing && task.version !== baseVersion;
   const decide = async (decision: "approve" | "revise") => {
     if (!blueprint) return;
@@ -238,5 +249,3 @@ function BlueprintReviewContent({ task, blueprint }: { task: DocumentTask; bluep
     <p className="pd-review-round"><strong>蓝图审核轮次</strong><span>已修改 {task.blueprint_review.revision_count} 次 · 最多 {task.blueprint_review.revision_limit} 次 · 剩余 {task.blueprint_review.revisions_remaining} 次</span></p>
   </>;
 }
-
-

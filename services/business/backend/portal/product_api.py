@@ -357,6 +357,7 @@ def _task_detail(task, user):
         },
         "blueprint_knowledge": knowledge,
         "output_profile": settings.PRODUCT_OUTPUT_PROFILE,
+        "output_families": task.checkpoint.get("output_families", ["technical-solution", "feasibility", "presentation"]),
         "output_targets": {
             "technical-solution": int(getattr(settings, "PRODUCT_TECHNICAL_TARGET_CHARACTERS", 50000)),
             "feasibility": int(getattr(settings, "PRODUCT_FEASIBILITY_TARGET_CHARACTERS", 70000)),
@@ -626,10 +627,18 @@ def tasks(request):
         queryset = DocumentTask.objects.filter(scope).order_by("-updated_at")
         audit(request.user, "product_task_list", f"list:r{request.product_request_id}")
         return Response([_task_summary(task) for task in queryset])
-    body = _body(request, {"title", "input"}, {"reviewer_id", "intake_mode"})
+    body = _body(request, {"title", "input"}, {"reviewer_id", "intake_mode", "output_families"})
     intake_mode = body.get("intake_mode", "manual")
     if not isinstance(intake_mode, str) or intake_mode not in {"manual", "equipment_background"}:
         raise ProductError("invalid_intake_mode", "项目资料模式无效。")
+    output_families = body.get("output_families", ["technical-solution", "feasibility", "presentation"])
+    if (not isinstance(output_families, list) or len(output_families) not in {2, 3}
+            or any(not isinstance(family, str) or family not in {"technical-solution", "feasibility", "presentation"}
+                   for family in output_families)
+            or len(output_families) != len(set(output_families))
+            or not {"technical-solution", "feasibility"} <= set(output_families)):
+        raise ProductError("invalid_output_families", "请选择技术方案和可行性研究报告，可另选汇报PPT。")
+    output_families = [family for family in ("technical-solution", "feasibility", "presentation") if family in output_families]
     key = request.headers.get("Idempotency-Key", "")
     if not key or len(key) > 128 or any(ord(character) < 33 for character in key):
         raise ProductError("invalid_idempotency_key", "Idempotency-Key 无效。")
@@ -639,6 +648,8 @@ def tasks(request):
     payload_hash = digest({"title": title, "input": input_payload, "reviewer_id": reviewer_id})
     if intake_mode != "manual":
         payload_hash = digest({"base": payload_hash, "intake_mode": intake_mode})
+    if "output_families" in body:
+        payload_hash = digest({"base": payload_hash, "output_families": output_families})
     created = False
     with transaction.atomic():
         owner = User.objects.select_for_update().get(pk=request.user.pk)
@@ -651,14 +662,15 @@ def tasks(request):
             reviewer = eligible_reviewer(reviewer_id, owner)
             task = DocumentTask.objects.create(
                 owner=owner, reviewer=reviewer, title=title,
-                idempotency_key=key, payload_hash=payload_hash, checkpoint={"intake_mode": intake_mode},
+                idempotency_key=key, payload_hash=payload_hash,
+                checkpoint={"intake_mode": intake_mode, "output_families": output_families},
             )
             revision = append_revision(task, DocumentRevision.Kind.INPUT, input_payload, actor=owner,
                                        reason="task_created")
             task.input_version = revision.version
             task.save(update_fields=["input_version", "updated_at"])
             created = True
-    _audit(request, "product_task_create" if created else "product_task_create_replay", task, changes=["title", "input", "reviewer_id"] if created else [])
+    _audit(request, "product_task_create" if created else "product_task_create_replay", task, changes=["title", "input", "reviewer_id", "output_families"] if created else [])
     return Response(_task_detail(task, request.user), status=201 if created else 200)
 
 

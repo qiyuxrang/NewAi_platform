@@ -63,6 +63,66 @@ class ProductApiTests(PortalTestCase):
         allowed = client.post("/api/product/tasks/", payload, content_type="application/json", HTTP_IDEMPOTENCY_KEY="csrf-test", HTTP_X_CSRFTOKEN=token)
         self.assertEqual(allowed.status_code, 201, allowed.content)
 
+    def test_report_pair_selection_is_persisted_and_part_of_idempotency(self):
+        body = {"title": "两报告项目", "input": self.input_payload(),
+                "output_families": ["feasibility", "technical-solution"]}
+        def submit(payload):
+            return self.owner_client.post("/api/product/tasks/", json_body(**payload),
+                                          content_type="application/json", HTTP_IDEMPOTENCY_KEY="report-pair")
+        created = submit(body)
+        self.assertEqual(created.status_code, 201, created.content)
+        expected = ["technical-solution", "feasibility"]
+        self.assertEqual(created.json()["output_families"], expected)
+        record = DocumentTask.objects.get(pk=created.json()["id"])
+        self.assertEqual(record.checkpoint["output_families"], expected)
+        self.assertEqual(submit({**body, "output_families": expected}).status_code, 200)
+        conflict = submit({**body, "output_families": [*expected, "presentation"]})
+        self.assertEqual(conflict.status_code, 409)
+        self.assertEqual(DocumentTask.objects.filter(owner=self.owner, idempotency_key="report-pair").count(), 1)
+        self.assertFalse(created.json()["blueprint_approved"])
+
+    def test_report_selection_rejects_invalid_values_and_preserves_legacy_default(self):
+        for index, families in enumerate((None, "technical-solution", [], ["presentation"],
+                                         ["technical-solution", "technical-solution"],
+                                         ["technical-solution", "feasibility", "unknown"],
+                                         ["technical-solution", "feasibility", {}])):
+            with self.subTest(families=families):
+                response = self.owner_client.post(
+                    "/api/product/tasks/", json_body(title="非法产物", input=self.input_payload(), output_families=families),
+                    content_type="application/json", HTTP_IDEMPOTENCY_KEY=f"bad-families-{index}")
+                self.assertEqual(response.status_code, 400, response.content)
+                self.assertEqual(response.json()["code"], "invalid_output_families")
+        legacy = self.create_task(key="legacy-output-selection")
+        self.assertEqual(legacy["output_families"], ["technical-solution", "feasibility", "presentation"])
+
+    @override_settings(PRODUCT_MODEL_CALLS_ALLOWED=True)
+    def test_equipment_and_multiple_backgrounds_keep_report_pair_when_started(self):
+        facts = {**self.input_payload(), "items": []}
+        response = self.owner_client.post(
+            "/api/product/tasks/", json_body(title="乙方设备与多份背景", input=facts,
+                intake_mode="equipment_background", output_families=["technical-solution", "feasibility"]),
+            content_type="application/json", HTTP_IDEMPOTENCY_KEY="multiple-backgrounds")
+        self.assertEqual(response.status_code, 201, response.content)
+        task = response.json()
+        materials = (("equipment", "乙方设备.csv", "row_id,name,quantity,unit\n1,防火墙,2,台\n"),
+                     ("background", "项目现状.txt", "项目背景：保留现有网络，提升边界安全。"),
+                     ("background", "建设约束.txt", "项目约束：使用乙方设备清单，数量不得增加。"))
+        for purpose, name, content in materials:
+            response = self.owner_client.post(f"/api/product/tasks/{task['id']}/sources/", {
+                "expected_version": task["version"], "purpose": purpose,
+                "file": SimpleUploadedFile(name, content.encode("utf-8"))})
+            self.assertEqual(response.status_code, 201, response.content)
+            task = response.json()["task"]
+        self.assertEqual([source["purpose"] for source in task["sources"]], ["equipment", "background", "background"])
+        self.assertEqual(len(task["input"]["items"]), 1)
+        self.assertEqual(task["input"]["items"][0]["name"], "防火墙")
+        queued = self.owner_client.post(f"/api/product/tasks/{task['id']}/queue/",
+            json_body(expected_version=task["version"], action="start"), content_type="application/json")
+        self.assertEqual(queued.status_code, 200, queued.content)
+        self.assertEqual(queued.json()["state"], "QUEUED")
+        self.assertEqual(queued.json()["output_families"], ["technical-solution", "feasibility"])
+        self.assertFalse(queued.json()["blueprint_approved"])
+
     def test_disguised_and_oversize_uploads_leave_no_source(self):
         task = self.create_task()
         for name, content in (("payload.txt", b"MZ\x00binary"), ("payload.exe", b"text"), ("oversize.txt", b"x" * (1024 * 1024 + 1))):

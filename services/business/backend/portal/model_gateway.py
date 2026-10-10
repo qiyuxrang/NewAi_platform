@@ -132,7 +132,8 @@ def _gateway_request(payload, endpoint=None):
         endpoint = '/v1/generate-vision' if vision else '/v1/generate'
     request = Request(url.rstrip("/") + endpoint, data=json.dumps(payload, ensure_ascii=False).encode(),
                       headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"}, method="POST")
-    return request, payload.get("model", {}).get("timeout_seconds", 15) + 5
+    model_timeout = payload.get("model", {}).get("timeout_seconds", 15)
+    return request, model_timeout + (30 if model_timeout > 60 else 5)
 
 
 def fetch_model_catalog(provider):

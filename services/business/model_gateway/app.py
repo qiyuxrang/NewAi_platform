@@ -83,7 +83,7 @@ class CatalogRequest(StrictModel):
 
 class ModelConfig(StrictModel):
     model_name: str = Field(min_length=1, max_length=200)
-    timeout_seconds: int = Field(ge=1, le=60)
+    timeout_seconds: int = Field(ge=1, le=600)
     max_output_tokens: int = Field(ge=1, le=8192)
     token_parameter: Literal["max_tokens", "max_completion_tokens"]
 

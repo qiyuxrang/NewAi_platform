@@ -3,6 +3,14 @@
 .pd-live-progress p, .pd-upload-progress p { margin: 6px 0 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
 .pd-upload-progress progress { width: 100%; margin-top: 10px; accent-color: var(--accent); }
 .pd-upload-progress > div { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.pd-clean-layout .pd-new-aside ul li { display: grid; grid-template-columns: 16px minmax(0,1fr); gap: 4px 9px; }
+.pd-new-aside li > small { grid-column: 2; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.pd-report-downloads { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 14px; margin: 20px 0; }
+.pd-report-downloads > div { display: flex; align-items: center; gap: 12px; padding: 18px; border: 1px solid var(--line); border-radius: 12px; background: var(--soft); }
+.pd-report-downloads > div > div { flex: 1; min-width: 0; }
+.pd-report-downloads strong,.pd-report-downloads small { display: block; overflow-wrap: anywhere; }
+.pd-report-downloads small { margin-top: 5px; font-size: 12px; color: var(--muted); }
+@media (max-width: 1000px) { .pd-report-downloads { grid-template-columns: 1fr; } }
 .pd-optional-project-fields { margin-bottom: 20px; }
 .pd-optional-project-fields summary, .pd-activity-log summary { cursor: pointer; font-weight: 600; padding: 10px 0; }
 .pd-activity-log { margin-bottom: 20px; }

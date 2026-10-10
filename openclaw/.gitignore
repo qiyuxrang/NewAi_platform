@@ -89,6 +89,8 @@ docs/internal/
 tmp/
 IDENTITY.md
 USER.md
+!bridge-deploy-copy/Agents/*/IDENTITY.md
+!bridge-deploy-copy/Agents/*/USER.md
 .tgz
 .idea
 

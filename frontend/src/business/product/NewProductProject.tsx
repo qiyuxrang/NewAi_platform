@@ -3,7 +3,7 @@ import { flushSync } from "react-dom";
 import { ApiError } from "../api";
 import { CenterLink, Field } from "../shared";
 import { createTask, getTask, updateTask, uploadSource, type CreateTask, type DocumentTask } from "./product-api";
-import { formatBytes, goProduct, LoadState, outputNames, ProductIcon, productError, projectUrl, useProductOverview, useUnsavedWarning } from "./workbench-shared";
+import { formatBytes, goProduct, LoadState, ProductIcon, productError, projectUrl, useProductOverview, useUnsavedWarning } from "./workbench-shared";
 import './project-analysis.css';
 import "./product-clean-layout.css";
 
@@ -27,7 +27,7 @@ export default function NewProductProject() {
   const lock = useRef(false);
   const request = useRef<AbortController | null>(null);
   const input = useRef<HTMLInputElement>(null);
-  useUnsavedWarning(!leaving && Boolean(title || requirements || files.length || equipment || pending));
+  useUnsavedWarning(!leaving && Boolean(title || requirements || background || conditions || files.length || equipment || pending));
   useEffect(() => () => request.current?.abort(), []);
 
   function addFiles(next: File[]) {
@@ -58,7 +58,7 @@ export default function NewProductProject() {
     if (!submission.current) {
       setUploadProgress({ completed: 0, total: files.length + 1 });
       submission.current = { key: crypto.randomUUID(), task: null, remaining: [...(equipment ? [equipment] : []), ...files], equipment, start,
-        body: { title: projectName, intake_mode: 'equipment_background', input: { project: projectName, requirements: requirements.trim() || '根据上传的设备清单和甲方调研、项目需求及背景材料，完整编制项目蓝图、技术方案、可行性研究报告和汇报PPT。保持来源一致，不编造缺失参数，资料不足处明确列为待确认。', background: background.trim(), conditions: conditions.split("\n").map(value => value.trim()).filter(Boolean), items: [] } } };
+        body: { title: projectName, intake_mode: 'equipment_background', output_families: ['technical-solution', 'feasibility'], input: { project: projectName, requirements: ['根据上传的乙方设备清单和甲方调研、项目需求及背景材料，完整编制项目蓝图、技术方案和可行性研究报告。技术方案正文不少于50000字、Mermaid图不少于15张；可行性研究报告正文不少于70000字、Mermaid图不少于20张。保持来源一致，不编造缺失参数，资料不足处明确列为待确认。', requirements.trim()].filter(Boolean).join('\n'), background: background.trim(), conditions: conditions.split("\n").map(value => value.trim()).filter(Boolean), items: [] } } };
     }
     const record = submission.current;
     setPending(true);
@@ -104,7 +104,7 @@ export default function NewProductProject() {
   }
   if (!data) return <LoadState error={loadError} reload={reload}/>;
   const canGenerate = data.capabilities.model_generation;
-  return <div className="pd-workspace pd-clean-layout"><div className="pd-page-title"><div><CenterLink href="/centers/product/projects" className="pd-back-link">← 历史项目</CenterLink><h1>上传资料生成文档</h1><p>上传设备清单和项目背景，自动建立项目。</p></div><span className="pd-badge info">设备清单 + 项目资料</span></div>
+  return <div className="pd-workspace pd-clean-layout"><div className="pd-page-title"><div><CenterLink href="/centers/product/projects" className="pd-back-link">← 历史项目</CenterLink><h1>生成技术方案与可研报告</h1><p>上传一份乙方设备清单和多份项目背景，查看处理节点并下载两份报告。</p></div><span className="pd-badge info">1 份设备清单 + N 份背景</span></div>
     <div className="pd-new-layout"><form className="pd-panel pd-project-form" onSubmit={event => { event.preventDefault(); void submit(canGenerate); }}>
       <div className="pd-panel-heading"><h3>上传项目资料</h3></div>
       {error && <div className="pd-feedback" role="alert">{error}</div>}
@@ -115,7 +115,7 @@ export default function NewProductProject() {
         <Field id="new-project-requirements" label="额外编制要求" hint="甲方需求已在背景文件中说明时，可不重复填写。"><textarea id="new-project-requirements" value={requirements} onChange={event => setRequirements(event.target.value)} maxLength={10000} rows={4} placeholder="补充需要强调的建设目标或编制要求…"/></Field>
         <div className="pd-form-columns"><Field id="new-project-background" label="项目背景"><textarea id="new-project-background" value={background} onChange={event => setBackground(event.target.value)} maxLength={10000} rows={3} placeholder="现状、使用场景或已有基础…"/></Field><Field id="new-project-conditions" label="约束条件" hint="每行一项，生成蓝图时保留这些条件。"><textarea id="new-project-conditions" value={conditions} onChange={event => setConditions(event.target.value)} maxLength={10000} rows={3} placeholder="例如：不改变现有设备数量"/></Field></div>
         </details>
-        <div className="pd-panel-heading"><h3>设备清单 <small>1 份</small></h3></div>
+        <div className="pd-panel-heading"><h3>乙方设备清单 <small>1 份</small></h3></div>
         <Field id="equipment-source" label="设备清单文件" hint="用于读取设备名称、数量和单位。"><input id="equipment-source" type="file" accept={data.capabilities.upload_extensions.join(',')} onChange={event => { chooseEquipment(event.target.files?.[0] || null); event.target.value = ''; }}/></Field>
         {equipment && <p className="pd-service-note">{equipment.name} · {formatBytes(equipment.size)} <button className="text-button" type="button" onClick={() => setEquipment(null)}>移除设备清单</button></p>}
         <div className="pd-panel-heading"><h3>项目背景材料 <small>支持多份</small></h3><span className="pd-muted">{files.length} 个待上传</span></div>
@@ -123,9 +123,9 @@ export default function NewProductProject() {
         {files.length > 0 && <ul className="pd-upload-list" aria-label="待上传项目资料">{files.map((file, index) => <li key={`${file.name}-${index}`}><ProductIcon name="file"/><div><strong>{file.name}</strong><small>{formatBytes(file.size)}</small></div><button type="button" className="text-button" aria-label={`移除 ${file.name}`} onClick={() => setFiles(values => values.filter((_, i) => i !== index))}>移除</button></li>)}</ul>}
       </fieldset>
       {busy && <section className="pd-upload-progress" role="status" aria-live="polite" aria-busy="true"><span className="pd-spinner"/><div><strong>{progress}</strong><progress className="pd-native-progress" max={uploadProgress.total || 1} value={uploadProgress.completed} aria-label="资料上传解析进度" aria-valuetext={`${uploadProgress.completed} / ${uploadProgress.total} 份资料已完成`}/><p>已完成 {uploadProgress.completed} / {uploadProgress.total} 份资料</p></div></section>}
-      <div className="pd-form-footer"><span role="status" aria-live="polite">{busy ? '完成后自动打开项目进度。' : "完成后自动保存，可在成果页下载。"}</span><div className="pd-actions">{createdId && !busy && <button type="button" className="button secondary" onClick={() => leave(createdId)}>查看项目进度</button>}<button className="button primary" disabled={busy}>{busy ? "正在提交…" : pending ? "重试并继续" : canGenerate ? "上传并开始生成" : "上传并保存资料"}<ProductIcon name="arrow"/></button></div></div>
+      <div className="pd-form-footer"><span role="status" aria-live="polite">{busy ? '资料提交后自动打开节点进度。' : "生成蓝图后需本人确认，再自动编制两份报告。"}</span><div className="pd-actions">{createdId && !busy && <button type="button" className="button secondary" onClick={() => leave(createdId)}>查看项目进度</button>}<button className="button primary" disabled={busy}>{busy ? "正在提交…" : pending ? "重试并继续" : canGenerate ? "开始生成" : "上传并保存资料"}<ProductIcon name="arrow"/></button></div></div>
     </form>
-    <aside className="pd-new-aside"><section className="pd-panel"><h3>将生成</h3><ul>{Object.values(outputNames).map(name => <li key={name}><ProductIcon name="file"/>{name}</li>)}</ul></section><section className="pd-panel pd-subtle"><h3>流程</h3><ol><li>解析资料</li><li>审核蓝图</li><li>生成文档</li></ol></section>{!data.capabilities.retrieval && <section className="pd-service-note" role="note"><ProductIcon name="shield"/><p><strong>仅使用项目资料</strong><br/>知识库未启用。</p></section>}{!canGenerate && <section className="pd-service-note"><ProductIcon name="shield"/><p>生成授权未开通，资料仍可保存。</p></section>}</aside></div>
+    <aside className="pd-new-aside"><section className="pd-panel"><h3>两份报告 · Word</h3><ul><li><ProductIcon name="file"/>技术方案<small>正文 ≥ 50,000 字 · Mermaid ≥ 15 图</small></li><li><ProductIcon name="file"/>可行性研究报告<small>正文 ≥ 70,000 字 · Mermaid ≥ 20 图</small></li></ul></section><section className="pd-panel pd-subtle"><h3>处理流程</h3><ol><li>解析背景与设备清单</li><li>检索知识并生成蓝图</li><li>本人确认蓝图</li><li>编制正文、渲染图表并排版</li><li>下载两份报告</li></ol></section>{!data.capabilities.retrieval && <section className="pd-service-note" role="note"><ProductIcon name="shield"/><p>知识库未启用；生成能否继续以后台实际状态为准。</p></section>}{!canGenerate && <section className="pd-service-note"><ProductIcon name="shield"/><p>生成授权未开通，资料仍可保存。</p></section>}</aside></div>
   </div>;
 }
 

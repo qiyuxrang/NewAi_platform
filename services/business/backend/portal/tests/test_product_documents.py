@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 from django.test import SimpleTestCase, override_settings
 
-from portal.product_documents import _diagram_evidence, _refresh_word_field_cache, DocumentError, content_document, frozen_pack, render_candidate, render_draft, render_report_draft
+from portal.product_documents import _diagram_evidence, _diagram_sources, _refresh_word_field_cache, DocumentError, content_document, frozen_pack, render_candidate, render_draft, render_report_draft
 from portal.product_diagrams import validate_document_requirements
 from portal.product_docx_layout import normalize_docx_layout
 from portal.product_documents import _normalize_word_layout
@@ -186,6 +186,7 @@ class DiagramEvidenceTests(SimpleTestCase):
         return {"rendered": 15, "engine": "mermaid-js-12.0.0", "sourcePersisted": False,
                 "securityLevel": "strict", "blockedNetworkRequests": 0, "bundleSha256": "a" * 64,
                 "manifestSha256": "b" * 64,
+                "figures": [{"figure_id": f"D{index}", "sourceSha256": "c" * 64, "imageSha256": "d" * 64} for index in range(15)],
                 "runtimeVersions": {"mermaid": "12.0.0", "katex": "0.18.2", "lodash-es": "4.18.1"}}
 
     def test_actual_bundle_and_loaded_versions_are_retained(self):
@@ -197,6 +198,7 @@ class DiagramEvidenceTests(SimpleTestCase):
     def test_unverified_bundle_missing_figures_or_network_use_fails_closed(self):
         for changes in ({"rendered": 0}, {"sourcePersisted": True}, {"securityLevel": "loose"},
                         {"blockedNetworkRequests": 1}, {"bundleSha256": "unknown"},
+                        {"figures": []}, {"figures": [{"figure_id": "D1", "sourceSha256": "unknown", "imageSha256": "d" * 64}] * 15},
                         {"runtimeVersions": {"mermaid": "12.0.0", "katex": "0.16.47", "lodash-es": "4.18.1"}}):
             with self.subTest(changes=changes), self.assertRaises(DocumentError):
                 _diagram_evidence(json.dumps({**self.result(), **changes}), 15)
@@ -215,6 +217,17 @@ class ProductDocumentTests(SimpleTestCase):
             "items": [{"row_id": "r1", "name": "测试设备", "quantity": "2", "unit": "台"}], "sources": [], "issues": []})
         self.blueprint = SimpleNamespace(payload={"template_version": "frozen-original-v1", "missing": [], "conflicts": []})
         self.chapter = SimpleNamespace(sha256="2" * 64, payload={"chapter_id": "c1", "title": "项目概述", "source_ids": ["r1"], "paragraphs": ["本合成样例仅使用2台测试设备，不用于实际工程。"]})
+        def synthetic_diagrams(document):
+            block = next(item for item in document["blocks"] if item["type"] == "paragraph")
+            anchor = block["text"][:20]
+            return [{"figure_id": figure["id"], "title": figure["caption"], "description": "合成图依据正文说明，仅验证嵌图与版式。",
+                     "source": f'flowchart LR\nA["{anchor}"] --> B["合成图{index}待核对"]',
+                     "evidence_block_ids": [block["id"]], "anchor_text": anchor}
+                    for index, figure in enumerate(item for item in document["blocks"] if item["type"] == "figure")]
+        diagrams = patch("portal.product_documents._diagram_sources",
+                         side_effect=lambda document, generator: _diagram_sources(document, generator or synthetic_diagrams))
+        diagrams.start()
+        self.addCleanup(diagrams.stop)
 
     def test_frozen_assets_have_exact_hashes(self):
         manifest = frozen_pack()

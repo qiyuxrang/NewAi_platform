@@ -81,6 +81,22 @@ class GatewayAppTests(unittest.TestCase):
         payload["messages"][0]["role"] = "tool"
         self.assertEqual(self.post(payload).status_code, 422)
 
+    @patch("model_gateway.app.chat_completion", return_value={"content": "synthetic-result", "prompt_tokens": None, "completion_tokens": None})
+    def test_timeout_boundaries_precede_outbound(self, call):
+        for timeout in (20, 300, 600, 0, 601, True, False, float("nan"), float("inf"), float("-inf")):
+            payload = copy.deepcopy(self.payload)
+            payload["model"]["timeout_seconds"] = timeout
+            call.reset_mock()
+            with self.subTest(timeout=timeout):
+                response = self.client.post("/v1/generate", content=json.dumps(payload),
+                    headers={**self.headers, "Content-Type": "application/json"})
+                if type(timeout) is int and 1 <= timeout <= 600:
+                    self.assertEqual(response.status_code, 200)
+                    self.assertEqual(call.call_args.args[1]["timeout_seconds"], timeout)
+                else:
+                    self.assertEqual(response.status_code, 422)
+                    call.assert_not_called()
+
     @patch("model_gateway.app.chat_completion")
     def test_invalid_message_content_still_fails_closed(self, call):
         for content in ("", [], {"invalid": True}):

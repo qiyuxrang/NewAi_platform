@@ -461,7 +461,7 @@ def retrieve(question, history, scope, config):
             if chunk_id in seen:
                 fail("invalid_response", 502)
             seen.add(chunk_id)
-            content = text(chunk.get("content"), 16000)
+            content = text(chunk.get("content"), CHUNK_CONTENT_LIMIT)
             title = text(chunk.get("document_keyword"), 300)
             sources.append({"id": "", "chunk_id": chunk_id, "dataset_id": dataset,
                             "document_id": chunk["document_id"], "title": title, "content": content[:1200]})

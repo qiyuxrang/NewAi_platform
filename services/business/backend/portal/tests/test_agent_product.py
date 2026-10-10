@@ -211,6 +211,28 @@ class AgentProductTests(TransactionTestCase):
         self.assertEqual({(row.object_id, row.revision) for row in references},
                          {(str(artifact.pk), str(artifact.version)) for artifact in artifacts})
 
+    def test_completed_report_pair_does_not_require_presentation(self):
+        task_id = self.tools.create_product_task("两份报告成果引用", "create-pair-result")['task_id']
+        task = DocumentTask.objects.get(pk=task_id)
+        task.state = "QUEUED"
+        task.pending_action = "generate_outputs"
+        task.checkpoint = {"output_families": ["technical-solution", "feasibility"]}
+        task.save(update_fields=["state", "pending_action", "checkpoint"])
+        claimed = claim_task()
+        self.assertIsNotNone(claimed)
+        artifacts = [DocumentArtifact.objects.create(
+            task=task, family=family, version=index, path=f"synthetic-pair-{family}",
+            sha256="a" * 64, blueprint_hash="b" * 64, input_hash="c" * 64,
+            template_hash="d" * 64)
+            for index, family in enumerate(("technical-solution", "feasibility"), 1)]
+        with patch("portal.product_pair.output_current", return_value=True), patch(
+                "portal.product_storage.verified_artifact", return_value=True):
+            self.assertTrue(_finish(*claimed, "COMPLETED", "FINAL_REVIEW"))
+        self.work.refresh_from_db()
+        self.assertEqual({row["object_id"] for row in self.work.result_references},
+                         {str(artifact.pk) for artifact in artifacts})
+        self.assertFalse(task.artifacts.filter(family="presentation").exists())
+
     def test_owner_confirmed_source_registers_exact_file_hash(self):
         task_id = self.tools.create_product_task("来源引用项目", "create-source")['task_id']
         task = DocumentTask.objects.get(pk=task_id)

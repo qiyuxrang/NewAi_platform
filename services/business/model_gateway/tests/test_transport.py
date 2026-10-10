@@ -66,6 +66,25 @@ class TransportProtocolSimulationTests(unittest.TestCase):
         self.assertEqual(caught.exception.code, code)
         return caught.exception
 
+    def test_dashscope_flash_direct_mode_is_scoped_and_applies_to_streaming(self):
+        dashscope = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        for base, name, direct in ((dashscope, "qwen3.8-flash", True),
+                                   (dashscope, "qwen3.7-flash", False),
+                                   (BASE, "qwen3.8-flash", False)):
+            for stream in (False, True):
+                with self.subTest(base=base, model=name, stream=stream):
+                    body, timeout = transport._request(
+                        {**self.provider, "base_url": base},
+                        {**self.model, "model_name": name}, self.messages, 50, stream=stream)
+                    request = json.loads(body)
+                    if direct:
+                        self.assertIs(request["enable_thinking"], False)
+                    else:
+                        self.assertNotIn("enable_thinking", request)
+                    self.assertEqual(request["max_tokens"], 50)
+                    self.assertEqual(request["stream"], stream)
+                    self.assertEqual(timeout, self.model["timeout_seconds"])
+
     def test_catalog_lists_bounded_model_ids_without_secret(self):
         response = self.response({"data": [{"id": "qwen-plus"}, {"id": "qwen3.8-flash"}]})
         response.read.side_effect = io.BytesIO(json.dumps({"data": [
@@ -284,7 +303,7 @@ class TransportProtocolSimulationTests(unittest.TestCase):
                 self.messages = messages
                 self.assert_code("invalid_request")
             self.messages = [{"role": "user", "content": "x"}]
-            for key, values in {"timeout_seconds": [0, 61, True, float("nan")], "token_parameter": ["bad"],
+            for key, values in {"timeout_seconds": [0, 601, True, False, float("nan"), float("inf"), float("-inf")], "token_parameter": ["bad"],
                                 "max_output_tokens": [0, True], "enabled": [False], "supports_text": [False]}.items():
                 for value in values:
                     with patch.dict(self.model, {key: value}):
@@ -294,6 +313,13 @@ class TransportProtocolSimulationTests(unittest.TestCase):
             self.provider["protocol"] = "unknown"
             self.assert_code("unsupported_protocol")
             connection.assert_not_called()
+
+    def test_extended_timeout_is_preserved_without_network(self):
+        for timeout in (20, 300, 600):
+            with self.subTest(timeout=timeout):
+                _, actual = transport._request(self.provider, {**self.model, "timeout_seconds": timeout},
+                                               self.messages, None)
+                self.assertEqual(actual, timeout)
 
     def test_long_utf8_message_is_serialized_and_sent_without_truncation(self):
         text = "中文" * 12000

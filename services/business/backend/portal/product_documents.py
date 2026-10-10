@@ -17,6 +17,9 @@ from .product_formal import has_repeated_filler, unsupported_financial_conclusio
 from .product_diagrams import (
     SUBSECTION_TITLES,
     add_structural_blocks,
+    apply_diagram_descriptions,
+    diagram_contract_hash,
+    validate_diagram_batch,
     inspect_docx_requirements,
     validate_document_requirements,
 )
@@ -110,6 +113,7 @@ def content_document(task, input_revision, blueprint, chapters, family="technica
             requirement_ids,
             chapter_index=chapter_index,
             chapter_count=chapter_count,
+            chapter_title=payload["title"],
         )
     if facts.get("items"):
         rows = [[str(item.get(key, "")).strip() or "待确认" for key in ("row_id", "name", "quantity", "unit")]
@@ -199,11 +203,19 @@ def _diagram_evidence(output, figure_count):
                 or not isinstance(manifest_hash, str) or re.fullmatch(r"[0-9a-f]{64}", manifest_hash) is None
                 or any(result["runtimeVersions"].get(name) != version for name, version in versions.items())):
             raise ValueError
+        figures = result["figures"]
+        if (not isinstance(figures, list) or len(figures) != figure_count
+                or any(not isinstance(item, dict) or set(item) != {"figure_id", "sourceSha256", "imageSha256"}
+                       or not isinstance(item["figure_id"], str)
+                       or any(not isinstance(item[key], str) or re.fullmatch(r"[0-9a-f]{64}", item[key]) is None
+                              for key in ("sourceSha256", "imageSha256")) for item in figures)
+                or len({item["figure_id"] for item in figures}) != figure_count):
+            raise ValueError
         return {"engine": result["engine"], "color": True, "source_persisted": False,
                 "figure_count": figure_count, "bundle_sha256": bundle_hash,
                 "manifest_sha256": manifest_hash,
                 "runtime_versions": result["runtimeVersions"], "security_level": "strict",
-                "blocked_network_requests": 0}
+                "blocked_network_requests": 0, "figures": figures}
     except (ValueError, KeyError, TypeError, AttributeError):
         raise DocumentError("document_validation_failed") from None
 
@@ -340,7 +352,24 @@ def _normalize_word_layout(target, document):
         raise DocumentError("document_validation_failed") from None
 
 
-def _render_document(task, chapters, manifest, runtime, document, filename, status, business_approval, extra_evidence=None):
+def _diagram_sources(document, generator):
+    if generator is None:
+        raise DocumentError("diagram_generation_required")
+    try:
+        diagrams = generator(document)
+        validate_diagram_batch({"diagrams": diagrams},
+                               [block for block in document["blocks"] if block["type"] == "figure"],
+                               [block for block in document["blocks"] if block["type"] == "paragraph"
+                                and not block["id"].startswith("DIAGRAM_")])
+        apply_diagram_descriptions(document, diagrams)
+        validate_document_requirements(document)
+        return diagrams
+    except (ValueError, KeyError, TypeError):
+        raise DocumentError("diagram_generation_invalid") from None
+
+
+def _render_document(task, chapters, manifest, runtime, document, filename, status, business_approval, extra_evidence=None,
+                     *, diagram_generator=None, diagram_progress=None):
     root = private_root().resolve()
     directory = (root / str(task.pk) / "artifacts" / uuid.uuid4().hex).resolve()
     if not directory.is_relative_to(root):
@@ -349,17 +378,49 @@ def _render_document(task, chapters, manifest, runtime, document, filename, stat
     content_path = directory / "content.json"
     target = directory / filename
     structural = validate_document_requirements(document)
-    content_path.write_text(json.dumps(document, ensure_ascii=False, allow_nan=False), encoding="utf-8")
     try:
-        diagram_environment = _safe_environment()
-        diagram_environment["PORTAL_CHROMIUM_PATH"] = str(_mermaid_chromium())
-        diagrams = subprocess.run([str(_mermaid_runtime()), str(PACK.parent / "mermaid-runtime" / "render.mjs"), str(content_path)],
-                                  cwd=directory, env=diagram_environment, capture_output=True,
-                                  timeout=int(getattr(settings, "PRODUCT_DOCUMENT_RENDER_TIMEOUT_SECONDS", 300)),
-                                  creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        if diagrams.returncode != 0:
-            raise DocumentError("document_validation_failed")
-        diagram_evidence = _diagram_evidence(diagrams.stdout, structural["figure_count"])
+        if diagram_progress:
+            diagram_progress("running", figure_count=structural["figure_count"])
+        try:
+            sources = _diagram_sources(document, diagram_generator)
+            content_path.write_text(json.dumps(document, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+            # Source is confined to owned private temporary input, even on renderer failure.
+            with tempfile.TemporaryDirectory(prefix="mermaid-", dir=directory) as temporary:
+                source_path = Path(temporary) / "input.json"
+                source_path.write_text(json.dumps({"diagrams": sources}, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+                diagram_environment = _safe_environment()
+                diagram_environment["PORTAL_CHROMIUM_PATH"] = str(_mermaid_chromium())
+                diagrams = subprocess.run([str(_mermaid_runtime()), str(PACK.parent / "mermaid-runtime" / "render.mjs"),
+                                          str(content_path), str(source_path)],
+                                         cwd=directory, env=diagram_environment, capture_output=True,
+                                         timeout=int(getattr(settings, "PRODUCT_DOCUMENT_RENDER_TIMEOUT_SECONDS", 300)),
+                                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            if diagrams.returncode != 0:
+                raise DocumentError("diagram_render_failed")
+            diagram_evidence = _diagram_evidence(diagrams.stdout, structural["figure_count"])
+            rendered = {item["figure_id"]: item for item in diagram_evidence["figures"]}
+            planned = {block["id"]: block for block in document["blocks"] if block["type"] == "figure"}
+            if set(rendered) != set(planned):
+                raise DocumentError("diagram_render_failed")
+            for item in sources:
+                actual = rendered[item["figure_id"]]
+                image_path = (directory / planned[item["figure_id"]]["path"]).resolve()
+                if (not image_path.is_relative_to(directory) or not image_path.is_file()
+                        or hashlib.sha256(image_path.read_bytes()).hexdigest() != actual["imageSha256"]
+                        or hashlib.sha256(item["source"].encode()).hexdigest() != actual["sourceSha256"]):
+                    raise DocumentError("diagram_render_failed")
+            diagram_evidence = {**diagram_evidence,
+                                "contract_sha256": diagram_contract_hash(), "source_scope": "authored_chapter_blocks",
+                                "semantic_review": "human_review_required",
+                                "figures": [{"id": item["figure_id"], "source_sha256": rendered[item["figure_id"]]["sourceSha256"],
+                                             "image_sha256": rendered[item["figure_id"]]["imageSha256"],
+                                             "evidence_block_ids": item["evidence_block_ids"]} for item in sources]}
+            if diagram_progress:
+                diagram_progress("completed", figure_count=structural["figure_count"])
+        except Exception:
+            if diagram_progress:
+                diagram_progress("failed", figure_count=structural["figure_count"])
+            raise
         result = subprocess.run([str(runtime), "-B", str(PACK / "scripts" / "artifacts.py"), "docx", str(content_path), str(target)],
                                 cwd=directory, env=_safe_environment(), capture_output=True,
                                 timeout=int(getattr(settings, "PRODUCT_DOCUMENT_RENDER_TIMEOUT_SECONDS", 300)),
@@ -385,7 +446,8 @@ def _render_document(task, chapters, manifest, runtime, document, filename, stat
             "template_hash": template["sha256"], "render_evidence": evidence}
 
 
-def render_report_draft(task, input_revision, blueprint, chapters, family):
+def render_report_draft(task, input_revision, blueprint, chapters, family, *, document=None, diagram_generator=None, diagram_progress=None):
+    from .product_blueprint_knowledge import blueprint_knowledge_status
     paragraphs = [paragraph for chapter in chapters for paragraph in chapter.payload.get("paragraphs", [])]
     if has_repeated_filler(paragraphs):
         raise DocumentError("repeated_body_filler")
@@ -393,12 +455,14 @@ def render_report_draft(task, input_revision, blueprint, chapters, family):
         raise DocumentError("investment_evidence_required")
     manifest = frozen_pack(family)
     runtime = _document_runtime()
-    document = content_document(task, input_revision, blueprint, chapters, family)
-    return _render_document(task, chapters, manifest, runtime, document, "draft.docx", "draft_unverified", "blocked")
+    document = document if document is not None else content_document(task, input_revision, blueprint, chapters, family)
+    return _render_document(task, chapters, manifest, runtime, document, "draft.docx", "draft_unverified", "blocked",
+                            {"knowledge": blueprint_knowledge_status(input_revision.payload)},
+                            diagram_generator=diagram_generator, diagram_progress=diagram_progress)
 
 
-def render_draft(task, input_revision, blueprint, chapters):
-    return render_report_draft(task, input_revision, blueprint, chapters, "technical-solution")
+def render_draft(task, input_revision, blueprint, chapters, **diagram_options):
+    return render_report_draft(task, input_revision, blueprint, chapters, "technical-solution", **diagram_options)
 
 
 def _template_approval(manifest):
@@ -439,7 +503,8 @@ def _candidate_document(task, input_revision, blueprint, chapters, approval):
     return document
 
 
-def render_candidate(task, input_revision, blueprint, chapters):
+def render_candidate(task, input_revision, blueprint, chapters, **diagram_options):
+    from .product_blueprint_knowledge import blueprint_knowledge_status
     manifest = frozen_pack()
     approval = _template_approval(manifest)
     runtime = _document_runtime()
@@ -449,6 +514,7 @@ def render_candidate(task, input_revision, blueprint, chapters):
     ).encode("utf-8")).hexdigest()
     return _render_document(
         task, chapters, manifest, runtime, document, "candidate.docx", "candidate_unverified", "pending",
-        {"template_approval": approval, "template_approval_hash": approval_hash,
+        {"knowledge": blueprint_knowledge_status(input_revision.payload), "template_approval": approval, "template_approval_hash": approval_hash,
          "template_approval_hash_method": "sha256-canonical-json-v1"},
+        **diagram_options,
     )

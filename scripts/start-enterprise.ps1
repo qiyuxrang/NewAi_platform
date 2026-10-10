@@ -4,12 +4,14 @@ param(
     [switch]$BuildOnly,
     [switch]$BusinessOnly,
     [switch]$GatewayOnly,
+    [switch]$ModelGatewayOnly,
     [switch]$CheckOnly,
     [string]$PythonPath = '',
     [string]$EnvFile = ''
 )
 
 $ErrorActionPreference = 'Stop'
+if ($ModelGatewayOnly -and ($GatewayOnly -or $BuildOnly -or $BuildImage)) { throw 'ModelGatewayOnly cannot be combined with GatewayOnly or image build switches.' }
 $repo = Split-Path -Parent $PSScriptRoot
 $runtime = Join-Path $repo '.runtime/enterprise'
 $compose = Join-Path $repo 'docker-compose.enterprise.yml'
@@ -60,7 +62,7 @@ if ($BuildImage) {
     }
 }
 if ($BuildOnly) { return }
-if (!$BusinessOnly) {
+if (!$BusinessOnly -and !$ModelGatewayOnly) {
     & docker image inspect aicompany-claw:20261008 --format '{{.Id}}' | Out-Null
     if ($LASTEXITCODE) { throw 'Runtime image is absent; run this script with -BuildImage first.' }
 }
@@ -175,6 +177,12 @@ $locked = $false
 try {
     try { $locked = $mutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $locked = $true }
     if (!$locked) { throw 'Another enterprise service helper is active; no duplicate was started.' }
+if ($ModelGatewayOnly) {
+    Start-OwnedService 'modelgateway' 18411 $businessPython @($businessRunner,'gateway','--repository',$business) $business
+    Wait-Url 'http://127.0.0.1:18411/health'
+    Write-Host 'Owned model gateway is healthy; other services retained.'
+    return
+}
 & docker @composeArgs up --detach --wait postgres
 if ($LASTEXITCODE) { throw 'Enterprise PostgreSQL did not become healthy.' }
 if (!$GatewayOnly) {

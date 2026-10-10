@@ -156,6 +156,15 @@ class ProductKnowledgeServiceTests(SimpleTestCase):
         with patch.object(service, "_open", return_value=Response(raw + b" " * (262144 - len(raw)))):
             self.assertEqual(service.retrieve("q", [], SCOPE, CONFIG), [])
 
+    def test_long_authorized_chunks_keep_bounded_source_summaries(self):
+        for length in (21386, service.CHUNK_CONTENT_LIMIT):
+            with self.subTest(length=length), patch.object(service, "_open", return_value=Response(
+                    wire([chunk(content="x" * length)]))):
+                sources = service.retrieve("q", [], SCOPE, CONFIG)
+                self.assertEqual(len(sources), 1)
+                self.assertEqual(sources[0]["content"], "x" * 1200)
+                self.assertEqual(sources[0]["document_id"], "document-1")
+
     def test_invalid_retrieval_responses_fail_closed(self):
         invalid = [b"not json", b"\xff", b'{"code":0,"code":0,"data":{"chunks":[]}}',
                    b'{"code":0,"data":{"chunks":[]},"extra":NaN}',
@@ -163,7 +172,10 @@ class ProductKnowledgeServiceTests(SimpleTestCase):
                    b'{"code":1,"data":{"chunks":[]}}', b'{"code":0,"data":{}}',
                    wire([chunk(dataset_id="other")]), wire([chunk(document_id="other")]),
                    wire([chunk(), chunk()]), wire([chunk(id=str(i)) for i in range(13)]),
-                   wire([chunk(content="")]), wire([chunk(content="x" * 16001)]),
+                   wire([chunk(content="")]), wire([chunk(content="x" * (service.CHUNK_CONTENT_LIMIT + 1))]),
+                   wire([chunk(content="x" * 21386 + "\x00")]),
+                   wire([chunk(content="x" * 21386 + chr(0xD800))]),
+                   wire([chunk(content="x" * 21386, document_id="other")]),
                    wire([chunk(document_keyword="x" * 301)]), wire([chunk(id="bad\x00id")]),
                    wire([None]), wire([chunk(content=chr(0xD800))])]
         for raw in invalid:

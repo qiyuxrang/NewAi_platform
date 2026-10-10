@@ -5,7 +5,7 @@ from pathlib import Path
 from django.test import override_settings
 
 from portal.product_models import DocumentArtifact
-from portal.product_pair import pair_snapshot, save_report_content
+from portal.product_pair import _report_generation_hash, pair_snapshot, save_report_content
 from portal.product_service import ProductError, append_revision, digest
 from portal.product_storage import verified_artifact
 from .test_product_api import ProductApiTests
@@ -30,8 +30,7 @@ class PairDraftTests(PortalTestCase):
                                       input_hash=input_revision.sha256, blueprint_hash=blueprint.sha256,
                                       actor=self.owner, family=family, reason="test_lineage")
             report = save_report_content(task, family, {"blocks": [{"id": "same", "text": text, "source_ids": ["SINPUT"]}], "pending": [{"id": pending_id, "text": "同一待确认事项"}]}, input_hash=input_revision.sha256, blueprint_hash=blueprint.sha256, actor=self.owner)
-            generation_hash = digest({"family": family, "input": input_revision.sha256, "blueprint": blueprint.sha256,
-                                      "chapters": [chapter.sha256], "title": task.title})
+            generation_hash = _report_generation_hash(task, family, input_revision, blueprint)
             DocumentArtifact.objects.create(task=task, family=family, version=version, path=f"legacy/{family}.docx",
                 sha256=str(version) * 64, input_hash=input_revision.sha256, blueprint_hash=blueprint.sha256,
                 template_hash="a" * 64, generation_hash=generation_hash, render_evidence={"report_id": str(report.pk)})

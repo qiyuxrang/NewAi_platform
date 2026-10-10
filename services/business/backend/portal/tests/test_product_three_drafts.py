@@ -96,17 +96,60 @@ class ThreeDraftFlowTests(PortalTestCase):
     @patch("portal.product_presentation.render_presentation_draft")
     @patch("portal.product_three_drafts.render_report_draft")
     @patch("portal.product_worker.generate_for_use")
+    def test_report_pair_generation_skips_ppt_and_preserves_full_review(self, model, render_report, render_presentation):
+        responses = []
+        for family in ("technical-solution", "feasibility"):
+            responses.extend([
+                json.dumps({"chapter_id": "overview", "title": "项目概述",
+                            "paragraphs": [f"合成段{'甲乙丙丁戊己庚'[index]}" + "正文" * 5000
+                                           for index in range(5 if family == "technical-solution" else 7)],
+                            "source_ids": ["1"]}),
+                json.dumps({"passed": True, "issues": []}),
+            ])
+        model.side_effect = [{"content": value, "prompt_tokens": 10, "completion_tokens": 20} for value in responses]
+        def report_result(task, input_revision, blueprint, chapters, family, **diagram_options):
+            path = Path(self.storage.name) / str(task.pk) / f"{family}.docx"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"synthetic-report-" + family.encode())
+            import hashlib
+            return {"path": path.relative_to(self.storage.name).as_posix(),
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+                    "template_hash": "b" * 64, "render_evidence": {"status": "draft_unverified"}}
+        render_report.side_effect = report_result
+        created = self.create_task(reviewer=False)
+        record = DocumentTask.objects.get(pk=created["id"])
+        record.checkpoint = {**record.checkpoint, "output_families": ["technical-solution", "feasibility"]}
+        record.save(update_fields=["checkpoint"])
+        approved = self.approve_blueprint(self.save_blueprint(created))["task"]
+        self.assertEqual(approved["pending_action"], "generate_outputs")
+        self.assertTrue(run_once())
+        current = self.owner_client.get(f"/api/product/tasks/{record.pk}/").json()
+        self.assertEqual(current["state"], "WAITING_REVIEW", current.get("error_code"))
+        self.assertEqual({item["family"] for item in current["reports"]}, {"technical-solution", "feasibility"})
+        self.assertGreaterEqual(current["output_generation"]["technical-solution"]["actual_characters"], 50000)
+        self.assertGreaterEqual(current["output_generation"]["feasibility"]["actual_characters"], 70000)
+        self.assertTrue(current["analysis_progress"]["outputs"]["full_document_human_review_required"])
+        self.assertEqual({item.family for item in DocumentArtifact.objects.filter(task=record)},
+                         {"technical-solution", "feasibility"})
+        render_presentation.assert_not_called()
+        self.assertEqual(render_report.call_count, 2)
+        self.assertFalse(DocumentApproval.objects.filter(task=record, revision__kind="report").exists())
+
+    @override_settings(PRODUCT_MODEL_CALLS_ALLOWED=True)
+    @patch("portal.product_presentation.render_presentation_draft")
+    @patch("portal.product_three_drafts.render_report_draft")
+    @patch("portal.product_worker.generate_for_use")
     def test_owner_blueprint_confirmation_generates_three_outputs_without_report_approval(self, model, render_report, render_presentation):
         responses = []
         for family in ("technical-solution", "feasibility"):
             responses.extend([
                 json.dumps({"chapter_id": "overview", "title": "项目概述",
-                            "paragraphs": [f"第{index}段" + "正文" * 5000 for index in range(5 if family == "technical-solution" else 7)], "source_ids": ["1"]}),
+                            "paragraphs": [f"合成段{'甲乙丙丁戊己庚'[index]}" + "正文" * 5000 for index in range(5 if family == "technical-solution" else 7)], "source_ids": ["1"]}),
                 json.dumps({"passed": True, "issues": []}),
             ])
         model.side_effect = [{"content": value, "prompt_tokens": 10, "completion_tokens": 20} for value in responses]
 
-        def report_result(task, input_revision, blueprint, chapters, family):
+        def report_result(task, input_revision, blueprint, chapters, family, **diagram_options):
             path = Path(self.storage.name) / str(task.pk) / f"{family}.docx"
             path.parent.mkdir(parents=True, exist_ok=True)
             content = b"PK-report-" + family.encode()
@@ -139,7 +182,7 @@ class ThreeDraftFlowTests(PortalTestCase):
         self.assertTrue(run_once())
 
         current = self.owner_client.get(f"/api/product/tasks/{task_id}/").json()
-        self.assertEqual(current["state"], "COMPLETED", current.get("error_code"))
+        self.assertEqual(current["state"], "WAITING_REVIEW", current.get("error_code"))
         self.assertEqual({item["family"] for item in current["reports"]}, {"technical-solution", "feasibility"})
         self.assertTrue(all(report["current"] for report in current["reports"]))
         self.assertTrue(all(not report["approved"] for report in current["reports"]))
@@ -148,7 +191,7 @@ class ThreeDraftFlowTests(PortalTestCase):
         outputs = result.json()["outputs"]
         self.assertFalse(DocumentApproval.objects.filter(task_id=task_id, revision__kind="report").exists())
         record = DocumentTask.objects.get(pk=task_id)
-        self.assertEqual(record.state, "COMPLETED", record.error_code)
+        self.assertEqual(record.state, "WAITING_REVIEW", record.error_code)
         self.assertEqual(record.pending_action, "")
         self.assertEqual({item["family"] for item in outputs}, {"technical-solution", "feasibility", "presentation"})
         self.assertTrue(all(item["current"] and item["draft"] for item in outputs))

@@ -46,6 +46,17 @@ class MessageSizeTests(SimpleTestCase):
 
 
 class ProviderUrlValidationTests(SimpleTestCase):
+    @override_settings(MODEL_GATEWAY_URL="http://127.0.0.1:18410", MODEL_GATEWAY_TOKEN="x" * 48,
+        MODEL_GATEWAY_ALLOWED_URLS=("http://127.0.0.1:18410",))
+    def test_long_document_requests_keep_gateway_response_margin(self):
+        for seconds, expected in ((20, 25), (60, 65), (300, 330), (600, 630)):
+            with self.subTest(seconds=seconds):
+                _, timeout = model_gateway._gateway_request({
+                    "model": {"timeout_seconds": seconds},
+                    "messages": [{"role": "user", "content": "test"}],
+                })
+                self.assertEqual(timeout, expected)
+
     @override_settings(MODEL_GATEWAY_URL="http://127.0.0.1:18410", MODEL_GATEWAY_TOKEN="x" * 48)
     @patch("portal.model_gateway.build_opener")
     def test_malformed_upstream_error_codes_are_sanitized_for_both_transports(self, opener):

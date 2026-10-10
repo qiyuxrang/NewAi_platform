@@ -154,6 +154,8 @@ def record_product_artifacts(task, root, work):
         raise ProductError("invalid_state", "成果尚未完成。", 409)
     for family, label in (("technical-solution", "技术方案"), ("feasibility", "可行性研究报告"),
                           ("presentation", "汇报PPT")):
+        if family not in task.checkpoint.get("output_families", ["technical-solution", "feasibility", "presentation"]):
+            continue
         artifact = task.artifacts.filter(family=family).order_by("-version").first()
         if artifact is None or not output_current(task, artifact):
             raise ProductError("stale_output", "成果版本未通过当前来源与蓝图核对。", 409)

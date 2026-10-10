@@ -124,10 +124,20 @@ PRODUCT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024
 PRODUCT_PARSER_PYTHON = Path(os.environ.get("PORTAL_PRODUCT_PARSER_PYTHON", BASE_DIR / ".runtime" / "product-parser-python" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")))
 PRODUCT_PARSE_TIMEOUT_SECONDS = 120
 PRODUCT_OCR_ENABLED = os.environ.get("PORTAL_PRODUCT_OCR_ENABLED", "1") == "1"
-PRODUCT_MAX_ATTEMPTS = 8
+try:
+    PRODUCT_MAX_ATTEMPTS = int(os.environ.get("PORTAL_PRODUCT_MAX_ATTEMPTS", "8"))
+except ValueError:
+    raise ImproperlyConfigured("产品任务执行次数上限必须为整数") from None
+if not 1 <= PRODUCT_MAX_ATTEMPTS <= 32:
+    raise ImproperlyConfigured("产品任务执行次数上限必须位于1至32之间")
 PRODUCT_OUTPUT_PROFILE = "formal"
 PRODUCT_BLUEPRINT_MAX_REVISIONS = 3
-PRODUCT_LEASE_SECONDS = 180
+try:
+    PRODUCT_LEASE_SECONDS = int(os.environ.get("PORTAL_PRODUCT_LEASE_SECONDS", "900"))
+except ValueError:
+    raise ImproperlyConfigured("产品任务租约必须为整数秒") from None
+if not 180 <= PRODUCT_LEASE_SECONDS <= 3600:
+    raise ImproperlyConfigured("产品任务租约必须位于180至3600秒之间")
 try:
     PRODUCT_TECHNICAL_TARGET_CHARACTERS = int(os.environ.get("PORTAL_PRODUCT_TECHNICAL_TARGET_CHARACTERS", "50000"))
     PRODUCT_FEASIBILITY_TARGET_CHARACTERS = int(os.environ.get("PORTAL_PRODUCT_FEASIBILITY_TARGET_CHARACTERS", "70000"))

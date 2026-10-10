@@ -50,7 +50,9 @@ class ProductWorkerTests(PortalTestCase):
 
         payload = json.loads(model.call_args.args[2][1]["content"])
         self.assertEqual(payload["allowed_source_ids"], ["r1"])
-        self.assertEqual(payload["schema"]["chapters"][0]["source_ids"], ["r1"])
+        self.assertEqual(payload["schema"]["chapters"][0]["source_ids"], ["source-id-from-allowed_source_ids"])
+        self.assertIn("不得将allowed_source_ids整体复制到每章", payload["response_instruction"])
+        self.assertIn(json.dumps(payload["schema"], ensure_ascii=False), model.call_args.args[2][0]["content"])
 
     @patch("portal.product_worker.generate_for_use")
     def test_stage_rules_are_sent_and_bound_to_call_evidence(self, model):
