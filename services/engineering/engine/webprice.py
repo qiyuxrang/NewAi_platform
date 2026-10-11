@@ -21,9 +21,10 @@ import time
 import threading
 
 from engine.tiering import classify_tier, discount_for
+from engine.paths import data_path
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-CACHE_DB = os.path.join(ROOT, "data", "library", "网价缓存.sqlite")
+CACHE_DB = data_path("library", "网价缓存.sqlite")
 TAX = 1.13
 
 
@@ -856,8 +857,7 @@ def price_item(name, spec, unit, qty, cfg, key, cache, brand="", attempt=1):
     return res
 
 
-MEMO = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                    "data", "library", "网价入库.jsonl")
+MEMO = data_path("library", "网价入库.jsonl")
 
 
 def remember(name, spec, unit, price, meta):

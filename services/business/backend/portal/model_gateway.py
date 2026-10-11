@@ -11,12 +11,15 @@ from urllib.request import ProxyHandler, Request, build_opener
 
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.db import transaction
+from django.db import connection, transaction
+from django.db.models import F
 from django.utils import timezone
 from django.utils.crypto import salted_hmac
 
 from .integration import NoRedirect
 from .model_messages import TEXT_REQUEST_LIMIT
+from .model_response_format import (supports_chapter_response_format, validate_response_format,
+                                    validate_generation_profile, validate_profile_usage)
 from .security import audit, authorized_modules, can_use_department
 
 
@@ -176,7 +179,10 @@ def _request_gateway(payload):
             if len(raw) > 1048576:
                 raise GatewayError("response_too_large")
             result = json.loads(raw)
-        if not isinstance(result, dict) or set(result) != {"content", "duration_ms", "prompt_tokens", "completion_tokens"}:
+        fields = {"content", "duration_ms", "prompt_tokens", "completion_tokens"}
+        profile = payload.get("generation_profile")
+        if (not isinstance(result, dict) or not fields <= set(result)
+                or set(result) - fields - ({"reasoning_tokens"} if profile is not None else set())):
             raise ValueError
         if payload["purpose"] == "business" and (not isinstance(result["content"], str) or not result["content"].strip()):
             raise ValueError
@@ -187,6 +193,8 @@ def _request_gateway(payload):
                 continue
             if type(result[field]) is not int or not 0 <= result[field] <= 2147483647:
                 raise ValueError
+        if profile is not None:
+            validate_profile_usage(result, payload["model"]["max_output_tokens"])
         return result
     except HTTPError as error:
         try:
@@ -432,6 +440,11 @@ def validate_model_selection(user, purpose_code, selection=None, required_capabi
 def _reserve(user, model, purpose, route, config_version=""):
     from .models import GatewayModel, ModelCallLog, User
     with transaction.atomic():
+        if connection.vendor == "sqlite":
+            # SELECT FOR UPDATE is ignored by SQLite. Reserve its write lock
+            # before reading limits so competing writers wait using the busy
+            # timeout rather than fail while upgrading a deferred read lock.
+            User.objects.filter(pk=user.pk).update(grant_version=F("grant_version"))
         User.objects.select_for_update().get(pk=user.pk)
         GatewayModel.objects.select_for_update().get(pk=model.pk)
         recent = ModelCallLog.objects.filter(actor=user, created_at__gte=timezone.now() - timedelta(minutes=1))
@@ -449,11 +462,33 @@ def _reserve(user, model, purpose, route, config_version=""):
                                            config_version=config_version)
 
 
-def _invoke(user, model, messages, purpose, route=None, config_version="", selection_pinned=False):
+def _invoke(user, model, messages, purpose, route=None, config_version="", selection_pinned=False,
+            *, response_format=None, generation_profile=None):
     from .models import GatewayModel
     config = _model_config(model)
     revisions = (model.provider.updated_at, model.updated_at, route.updated_at if route else None)
+    output_format = None
+    if generation_profile is not None:
+        try:
+            validate_generation_profile(generation_profile, provider=config["provider"], model=config["model"],
+                                        response_format=response_format, messages=messages, purpose=purpose)
+        except (ValueError, TypeError, RecursionError):
+            raise GatewayError("invalid_request", status=400) from None
+    if response_format is not None:
+        try:
+            output_format = validate_response_format(response_format)
+            if (purpose != "business" or not supports_chapter_response_format(config["provider"], config["model"])
+                    or not isinstance(messages, list)
+                    or any(not isinstance(message, dict) or not isinstance(message.get("content"), str)
+                           for message in messages)):
+                raise ValueError
+        except (ValueError, TypeError, RecursionError):
+            raise GatewayError("invalid_request", status=400) from None
     payload = {**config, "messages": _messages(messages, model.supports_vision), "purpose": purpose}
+    if output_format is not None:
+        payload["response_format"] = output_format
+    if generation_profile is not None:
+        payload["generation_profile"] = generation_profile
     record = _reserve(user, model, purpose, route, config_version)
     started = monotonic()
     try:
@@ -496,11 +531,15 @@ def _invoke(user, model, messages, purpose, route=None, config_version="", selec
         audit(user, "model_test" if purpose == "test" else "model_call", record.pk, result=record.status)
 
 
-def generate_for_use(user, purpose_code, messages, model_selection=None):
+def generate_for_use(user, purpose_code, messages, model_selection=None, *, response_format=None,
+                     generation_profile=None):
     user, route = _route_for(user, purpose_code)
     model, option, config_version = _select_route_model(user, route, model_selection)
+    options = {"response_format": response_format} if response_format is not None else {}
+    if generation_profile is not None:
+        options["generation_profile"] = generation_profile
     return _invoke(user, model, messages, "business", route, config_version,
-                   selection_pinned=model_selection is not None)
+                   selection_pinned=model_selection is not None, **options)
 
 
 def stream_for_use(user, purpose_code, messages):

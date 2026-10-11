@@ -1,6 +1,7 @@
 """Task-authorized endpoints for independent review-only outputs."""
 
 import re
+import hashlib
 
 from django.db import transaction
 from django.http import FileResponse
@@ -14,6 +15,8 @@ from .product_pair import FAMILIES, latest_report_content, output_current
 from .product_service import (ProductError, approved_blueprint, current_revision, effective_artifact_approval, input_authorized,
                               require_owner, require_version, task_for, source_ids_belong, validate_chapter, append_revision)
 from .product_storage import StorageError, verified_artifact
+from .product_release import evidence_file
+from .product_output_preview import draft_preview_evidence, public_draft_preview
 from .security import audit
 
 
@@ -40,6 +43,7 @@ def outputs(request, task_id):
                        "content_version": report.version if report else None,
                        "content_sha256": report.sha256 if report else None,
                        "content_approved": False if report else None,
+                       **public_draft_preview(artifact, current=current),
                        "source_versions": artifact.render_evidence.get("source_versions", [])})
     return Response({"task_version": task.version, "outputs": result})
 
@@ -79,6 +83,75 @@ def draft_download(request, artifact_id):
     return response
 
 
+def _preview_authorized(request, artifact):
+    task = task_for(request.user, artifact.task_id)
+    if artifact.family not in (*FAMILIES, "presentation"):
+        raise ProductError("not_found", "对象不存在。", 404)
+    if not input_authorized(task, task.revisions.filter(kind="input", sha256=artifact.input_hash).first()):
+        raise ProductError("source_permission_changed", "来源授权已变化。", 404)
+    if not output_current(task, artifact):
+        raise ProductError("stale_output", "此成果已过期，请重新生成后预览。", 409)
+    return task
+
+
+@api_view(["GET"])
+@product_endpoint
+def draft_preview(request, artifact_id):
+    try:
+        artifact = DocumentArtifact.objects.select_related("task").get(pk=artifact_id)
+    except (DocumentArtifact.DoesNotExist, ValueError, TypeError):
+        raise ProductError("not_found", "对象不存在。", 404) from None
+    task = _preview_authorized(request, artifact)
+    preview = draft_preview_evidence(artifact)
+    if preview is None:
+        raise ProductError("preview_unavailable", "当前版本缺少可验证预览证据，需生成新的内容版本后预览。", 409)
+    page = request.query_params.get("page", "1")
+    if (not page.isascii() or not page.isdigit() or len(page) > 6
+            or not 1 <= int(page) <= preview["page_count"]):
+        raise ProductError("invalid_page", "页面编号无效。")
+    record = preview["pages"][int(page) - 1]
+    stream = None
+    try:
+        verified_artifact(artifact)
+        evidence_file(preview["pdf"])
+        target = evidence_file(record)
+        # Keep the checked file descriptor, so replacing a path after hashing
+        # cannot substitute different bytes into this response.
+        stream = target.open("rb")
+        checksum = hashlib.sha256()
+        signature = stream.read(8)
+        checksum.update(signature)
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            checksum.update(chunk)
+        if signature != b"\x89PNG\r\n\x1a\n" or checksum.hexdigest() != record["sha256"]:
+            raise StorageError("artifact_hash_mismatch", "预览页面完整性校验失败。")
+        stream.seek(0)
+        # Disk I/O must not preserve permissions, versions or evidence that were
+        # revoked/changed while the files were checked.
+        artifact = DocumentArtifact.objects.select_related("task").get(pk=artifact_id)
+        task = _preview_authorized(request, artifact)
+        if draft_preview_evidence(artifact) != preview:
+            raise ProductError("stale_evidence", "预览证据已变化，请刷新后重试。", 409)
+        audit(request.user, "product_draft_page_preview",
+              f"{artifact.pk}:v{task.version}:{artifact.family}:{artifact.sha256}:p{page}:{record['sha256']}")
+        response = FileResponse(stream, content_type="image/png")
+        stream = None
+        response["Cache-Control"] = "private, no-store"
+        response["X-Content-Type-Options"] = "nosniff"
+        response["X-Product-Artifact-Sha256"] = artifact.sha256
+        response["X-Product-Page-Sha256"] = record["sha256"]
+        return response
+    except (StorageError, OSError) as error:
+        if isinstance(error, StorageError):
+            raise ProductError(error.code, error.detail, 409) from None
+        raise ProductError("preview_unavailable", "当前草稿预览文件不可读取，请重新生成。", 409) from None
+    except DocumentArtifact.DoesNotExist:
+        raise ProductError("not_found", "对象不存在。", 404) from None
+    finally:
+        if stream is not None:
+            stream.close()
+
+
 @api_view(["POST"])
 @product_endpoint
 def report_chapter(request, task_id):
@@ -109,4 +182,5 @@ def report_chapter(request, task_id):
 
 urlpatterns = [path("tasks/<uuid:task_id>/outputs/", outputs),
                path("tasks/<uuid:task_id>/report-chapters/", report_chapter),
-               path("outputs/<uuid:artifact_id>/download/", draft_download)]
+               path("outputs/<uuid:artifact_id>/download/", draft_download),
+               path("outputs/<uuid:artifact_id>/preview/", draft_preview)]

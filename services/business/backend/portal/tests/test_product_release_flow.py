@@ -14,6 +14,7 @@ from .base import PortalTestCase, json_body
 from .test_product_api import ProductApiTests
 
 
+@override_settings(PRODUCT_TECHNICAL_TARGET_CHARACTERS=5000)
 class ProductReleaseFlowTests(PortalTestCase):
     setUp = ProductApiTests.setUp
     input_payload = ProductApiTests.input_payload
@@ -34,8 +35,14 @@ class ProductReleaseFlowTests(PortalTestCase):
         model_task = DocumentTask.objects.get(pk=task["id"])
         input_revision = model_task.revisions.get(kind="input", version=model_task.input_version)
         blueprint = model_task.revisions.get(kind="blueprint", version=model_task.blueprint_version)
-        chapter = append_revision(model_task, "chapter", {"chapter_id": "overview", "title": "项目概述", "paragraphs": [f"测试设备第{index}段" + "正文" * 5000 for index in range(5)], "source_ids": ["1"]}, input_revision.sha256, blueprint.sha256)
-        review = append_revision(model_task, "review", {"passed": True, "issues": [], "chapter_hashes": {"overview": chapter.sha256}}, input_revision.sha256, blueprint.sha256)
+        # This suite verifies formal-release contracts. A bounded isolated body
+        # permits an actual complete single-request model review; production
+        # length floors and batched-human-review requirements have separate tests.
+        symbols = "甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳"
+        values = "".join(hashlib.sha256(f"release-fixture:{part}".encode()).hexdigest() for part in range(94))
+        text = "".join(symbols[int(value, 16)] for value in values)[:6000]
+        chapter = append_revision(model_task, "chapter", {"chapter_id": "overview", "title": "项目概述",
+            "paragraphs": [text], "source_ids": ["1"]}, input_revision.sha256, blueprint.sha256)
         template_hash = next(entry["sha256"] for entry in frozen_pack()["files"] if entry["path"].endswith("template.docx"))
         self.policy = {"template_hash": template_hash, "approval_ref": "ISOLATED-CONTRACT-TEST-NOT-BUSINESS-APPROVAL", "organization": "隔离测试单位"}
         self.release_settings = override_settings(PRODUCT_TEMPLATE_APPROVAL=self.policy, PRODUCT_FORMAL_RELEASE_ENABLED=True, PRODUCT_OFFICE_RENDER_ENABLED=True)
@@ -52,12 +59,19 @@ class ProductReleaseFlowTests(PortalTestCase):
                   "pages": [self.file(f"{prefix}/office/page-001.png", b"isolated-image-contract-fixture")]}
         model_task.state, model_task.pending_action, model_task.stage = "QUEUED", "candidate", "RENDER"
         model_task.save()
-        with patch("portal.product_documents.render_draft", return_value=draft), patch("portal.product_documents.render_candidate", return_value=candidate), patch("portal.product_rendering.render_office", return_value=office):
+        with override_settings(PRODUCT_MODEL_CALLS_ALLOWED=True), patch("portal.product_documents.render_draft", return_value=draft), patch("portal.product_documents.render_candidate", return_value=candidate), patch("portal.product_rendering.render_office", return_value=office), patch("portal.product_worker.generate_for_use", return_value={"content": '{"passed":true,"issues":[]}'}) as model:
             self.assertTrue(run_once())
+            model.assert_called_once()
         model_task.refresh_from_db()
         self.assertEqual(model_task.state, "WAITING_REVIEW", model_task.error_code)
         artifact = DocumentArtifact.objects.get(task=model_task)
-        self.assertEqual(artifact.review_id, review.pk)
+        review = artifact.review
+        self.assertTrue(review.payload["passed"])
+        self.assertEqual(review.change_reason, "worker_review")
+        self.assertEqual(review.payload["chapter_hashes"], {"overview": chapter.sha256})
+        self.assertEqual(review.payload["model_review"]["scope"], "full")
+        self.assertTrue(review.payload["model_review"]["coverage"]["complete"])
+        self.assertEqual(review.payload["model_review"]["coverage"]["raw_characters"], len(text))
         self.assertEqual(artifact.sha256, office["rendered_docx"]["sha256"])
         return model_task, artifact
 

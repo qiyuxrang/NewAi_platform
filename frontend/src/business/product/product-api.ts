@@ -31,7 +31,7 @@ export interface BlueprintPayload {
 }
 export interface ChapterPayload { chapter_id: string; title: string; paragraphs: string[]; source_ids: string[] }
 export type OutputFamily = "technical-solution" | "feasibility" | "presentation";
-export interface DraftOutput { id: string; family: OutputFamily; version: number; sha256: string; current: boolean; stale: boolean; draft: boolean; approved: boolean; review_status: "stale" | "approved" | "pending_review"; engine: string; content_version: number | null; content_sha256: string | null; content_approved: boolean | null; source_versions: { family: string; version: number; sha256: string; approval_id?: string }[] }
+export interface DraftOutput { id: string; family: OutputFamily; version: number; sha256: string; current: boolean; stale: boolean; draft: boolean; approved: boolean; review_status: "stale" | "approved" | "pending_review"; engine: string; content_version: number | null; content_sha256: string | null; content_approved: boolean | null; source_versions: { family: string; version: number; sha256: string; approval_id?: string }[]; has_preview?: boolean; page_count?: number; preview_url?: string | null }
 export type ReviewCategory = "fact" | "inference" | "conflict" | "missing";
 export interface InputIssue { issue_hash: string; [key: string]: unknown }
 export interface RenderEvidence {
@@ -168,6 +168,7 @@ export const artifactDownload = (id: string) => `/api/product/artifacts/${encode
 export const artifactHistoryDownload = (id: string) => `${artifactDownload(id)}?history=1`;
 export const draftDownload = (id: string) => `/api/product/outputs/${encodeURIComponent(id)}/download/`;
 export const draftHistoryDownload = (id: string) => `${draftDownload(id)}?history=1`;
+export const draftPreview = (id: string, page = 1) => `/api/product/outputs/${encodeURIComponent(id)}/preview/?page=${encodeURIComponent(String(page))}`;
 export const getDraftOutputs = (id: string, signal: AbortSignal) => apiRequest<{ task_version: number; outputs: DraftOutput[] }>(`${pathFor(id)}outputs/`, { signal });
 export const getTaskHistory = (id: string, signal: AbortSignal) => apiRequest<TaskHistory>(`${pathFor(id)}history/`, { signal });
 export const artifactPreview = (id: string, page: number) => `/api/product/artifacts/${encodeURIComponent(id)}/preview/?page=${encodeURIComponent(String(page))}`;

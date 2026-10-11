@@ -7,10 +7,11 @@ import type { Requirement, RecruitmentHistoryData } from './recruitment-api';
 
 const channels: Record<string, string> = { general: '通用版', boss: 'BOSS直聘', zhaopin: '智联招聘' };
 function MessageBody({ content }: { content: string }) {
+  let value: unknown;
   try {
-    const value: unknown = JSON.parse(content);
-    if (value && typeof value === 'object' && !Array.isArray(value)) return <dl>{Object.entries(value).map(([key, text]) => <div key={key}><dt>{requirementLabels[key] || key}</dt><dd>{Array.isArray(text) ? text.join('、') : String(text ?? '未填写')}</dd></div>)}</dl>;
+    value = JSON.parse(content);
   } catch { /* Conversation prose is the normal case. */ }
+  if (value && typeof value === 'object' && !Array.isArray(value)) return <dl>{Object.entries(value).map(([key, text]) => <div key={key}><dt>{requirementLabels[key] || key}</dt><dd>{Array.isArray(text) ? text.join('、') : String(text ?? '未填写')}</dd></div>)}</dl>;
   return <p>{content}</p>;
 }
 export default function RecruitmentHistory({ managerId }: { managerId?: number | string }) {

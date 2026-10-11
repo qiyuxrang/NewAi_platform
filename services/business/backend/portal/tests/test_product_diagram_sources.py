@@ -26,21 +26,26 @@ class DiagramSourceTests(SimpleTestCase):
         self.document = content_document(self.task, self.input, self.blueprint, [self.chapter])
 
     def reply(self, figures, paragraphs):
-        return {"diagrams": [{"figure_id": figure["id"], "title": f"合成网关日志分图{figure['id']}",
+        return {"diagrams": [{"figure_id": figure["id"], "title": f"合成网关日志分图{self.figure_label(figure['id'])}",
             "description": "合成网关到合成审计服务的日志流向，验收待确认。",
-            "source": f'flowchart LR\nA["合成网关"] --> B["合成审计服务{figure["id"]}"]',
+            "source": f'flowchart LR\nA["合成网关"] --> B["合成审计服务（图{self.figure_label(figure["id"])}）"]',
             "evidence_block_ids": [paragraphs[0]["id"]], "anchor_text": "合成网关"} for figure in figures]}
+
+    @staticmethod
+    def figure_label(identifier):
+        return "甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳午未申酉"[int(identifier.split("_")[1]) - 1]
 
     @patch("portal.product_worker._model")
     def test_model_batches_use_full_current_chapter_and_exact_source_lineage(self, model):
-        def response(*args):
+        def response(*args, output_validator=None):
             request = args[-1]
             self.assertEqual(request["action"], "diagram")
             self.assertEqual(request["project_title"], self.task.title + "（技术方案）")
             self.assertEqual(request["report_blocks"][0]["text"], self.chapter.payload["paragraphs"][0])
             self.assertEqual(request["report_blocks"][0]["source_ids"], ["S1"])
             self.assertLessEqual(len(request["figures"]), 4)
-            return self.reply([{"id": figure["figure_id"]} for figure in request["figures"]], request["report_blocks"])
+            self.assertIsNotNone(output_validator)
+            return output_validator(self.reply([{"id": figure["figure_id"]} for figure in request["figures"]], request["report_blocks"]))
         model.side_effect = response
         diagrams = _generate_diagrams(self.task.pk, 1, "mocked-attempt", self.document)
         self.assertEqual(model.call_count, 4)
@@ -78,8 +83,9 @@ class DiagramSourceTests(SimpleTestCase):
             with self.subTest(text=text), self.assertRaises(ValueError):
                 validate_document_requirements(document)
 
-    @patch("portal.product_worker._model", return_value={"diagrams": []})
+    @patch("portal.product_worker._model")
     def test_model_missing_figures_are_not_replaced_with_generic_charts(self, model):
+        model.side_effect = lambda *args, output_validator=None: output_validator({"diagrams": []})
         with self.assertRaises(ExecutionError) as error:
             _generate_diagrams(self.task.pk, 1, "mocked-attempt", self.document)
         self.assertEqual(error.exception.code, "diagram_generation_invalid")
@@ -130,14 +136,16 @@ class DiagramSourceTests(SimpleTestCase):
         self.task.title = "合成供配电项目"
         self.chapter.payload["paragraphs"] = ["配电柜接入母线，电能经馈线输送至合成车间，接地校验待确认。"]
         document = content_document(self.task, self.input, self.blueprint, [self.chapter])
-        def response(*args):
+        def response(*args, output_validator=None):
             request = args[-1]
             self.assertIn("不得套用通用平台架构", request["instruction"])
             self.assertIn("建议主题若与本章无关", request["instruction"])
-            return {"diagrams": [{"figure_id": figure["figure_id"], "title": f"配电柜供配电设计{index}",
-                "description": "配电柜与馈线供电关系，接地校验待确认。", "source": f'flowchart LR\nA["配电柜"] --> B["合成车间馈线{figure["figure_id"]}"]',
+            payload = {"diagrams": [{"figure_id": figure["figure_id"], "title": f"配电柜供配电设计图{self.figure_label(figure['figure_id'])}",
+                "description": "配电柜与馈线供电关系，接地校验待确认。", "source": f'flowchart LR\nA["配电柜"] --> B["合成车间馈线（图{self.figure_label(figure["figure_id"])}）"]',
                 "evidence_block_ids": [request["report_blocks"][0]["id"]], "anchor_text": "配电柜"}
-                for index, figure in enumerate(request["figures"])]}
+                for figure in request["figures"]]}
+            self.assertIsNotNone(output_validator)
+            return output_validator(payload)
         model.side_effect = response
         diagrams = _generate_diagrams(self.task.pk, 1, "mocked-attempt", document)
         _diagram_sources(document, lambda document: diagrams)

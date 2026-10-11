@@ -51,6 +51,11 @@ def main():
 
 if __name__ == "__main__":
     try: main()
+    except ImportError:
+        failure = {"ok": False, "code": "parser_unavailable",
+                   "detail": "资料解析环境缺少必要组件，请修复解析环境后重试。"}
+        Path(sys.argv[2]).write_text(json.dumps(failure, ensure_ascii=False), encoding="utf-8")
+        sys.exit(2)
     except Exception as error:
         failure = {"ok": False, "code": getattr(error, "code", "parse_failed"),
                    "detail": getattr(error, "detail", "无法解析该文件，请检查文件是否损坏或重新导出。")}

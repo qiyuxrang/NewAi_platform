@@ -7,6 +7,7 @@ from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
 from backend.portal.model_messages import TEXT_REQUEST_LIMIT
+from backend.portal.model_response_format import chapter_response_format
 from model_gateway.app import app, slots
 from model_gateway.errors import GatewayError
 
@@ -25,6 +26,130 @@ class GatewayAppTests(unittest.TestCase):
 
     def post(self, payload=None):
         return self.client.post("/v1/generate", json=self.payload if payload is None else payload, headers=self.headers)
+
+    def chapter_payload(self):
+        payload = copy.deepcopy(self.payload)
+        payload["provider"]["base_url"] = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+        payload["model"].update(model_name="qwen3.8-flash", max_output_tokens=4096, timeout_seconds=120)
+        payload["response_format"] = chapter_response_format({"id": "c", "title": "approved", "source_ids": ["s"]})
+        return payload
+
+    @patch("model_gateway.app.chat_completion", return_value={"content": "synthetic", "prompt_tokens": 1,
+                                                             "completion_tokens": 1000, "reasoning_tokens": 512})
+    def test_bounded_profile_dto_forwarded_once_with_safe_optional_usage(self, call):
+        payload = {**self.chapter_payload(), "generation_profile": "bounded_chapter_v1"}
+        response = self.post(payload)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["reasoning_tokens"], 512)
+        self.assertNotIn("reasoning_content", response.json())
+        call.assert_called_once()
+        self.assertEqual(call.call_args.kwargs["generation_profile"], "bounded_chapter_v1")
+        call.return_value = {"content": "synthetic", "prompt_tokens": 1, "completion_tokens": 2}
+        self.assertNotIn("reasoning_tokens", self.post(payload).json())
+        self.assertEqual(set(self.post().json()), {"content", "duration_ms", "prompt_tokens", "completion_tokens"})
+        self.assertNotIn("generation_profile", call.call_args.kwargs)
+        self.assertEqual(set(self.post({**self.payload, "generation_profile": None}).json()),
+                         {"content", "duration_ms", "prompt_tokens", "completion_tokens"})
+        self.assertNotIn("generation_profile", call.call_args.kwargs)
+
+    @patch("model_gateway.app.chat_completion")
+    @patch("model_gateway.app.stream_completion")
+    def test_bounded_profile_rejects_invalid_contexts_before_transport(self, stream, call):
+        changes = [lambda p: p.update(generation_profile="unknown"),
+                   lambda p: p.update(generation_profile=True),
+                   lambda p: p.update(response_format=None),
+                   lambda p: p.update(purpose="test"),
+                   lambda p: p["provider"].update(base_url="https://unknown.example/v1"),
+                   lambda p: p["model"].update(model_name="qwen3.7-flash"),
+                   lambda p: p["model"].update(max_output_tokens=522),
+                   lambda p: p["model"].update(timeout_seconds=121),
+                   lambda p: p.update(thinking_budget=512), lambda p: p.update(reasoning_effort="low")]
+        for index, change in enumerate(changes):
+            payload = {**self.chapter_payload(), "generation_profile": "bounded_chapter_v1"}
+            change(payload)
+            with self.subTest(index=index):
+                response = self.post(payload)
+                self.assertEqual(response.status_code, 422)
+                self.assertEqual(response.json()["code"], "invalid_request")
+        for endpoint, status in (("/v1/generate-vision", 422), ("/v1/generate-stream", 400),
+                                 ("/v1/generate-agent", 422)):
+            response = self.client.post(endpoint, json={**self.chapter_payload(), "generation_profile": "bounded_chapter_v1"}, headers=self.headers)
+            self.assertEqual(response.status_code, status)
+        call.assert_not_called()
+        stream.assert_not_called()
+
+    @patch("model_gateway.app.chat_completion")
+    def test_bounded_profile_rejects_bad_numeric_usage_without_retry(self, call):
+        payload = {**self.chapter_payload(), "generation_profile": "bounded_chapter_v1"}
+        for usage, valid in (({"completion_tokens": 0, "reasoning_tokens": 0}, True),
+                             ({"completion_tokens": 4096, "reasoning_tokens": 4096}, True),
+                             ({"completion_tokens": 4097}, False),
+                             ({"completion_tokens": True}, False),
+                             ({"completion_tokens": 100, "reasoning_tokens": 101}, False),
+                             ({"completion_tokens": 100, "reasoning_tokens": -1}, False),
+                             ({"completion_tokens": 100, "reasoning_tokens": True}, False)):
+            call.reset_mock()
+            call.return_value = {"content": "synthetic", "prompt_tokens": 1, **usage}
+            response = self.post(payload)
+            self.assertEqual(response.status_code, 200 if valid else 502)
+            if not valid:
+                self.assertEqual(response.json()["code"], "invalid_response")
+            call.assert_called_once()
+
+    @patch("model_gateway.app.chat_completion", side_effect=GatewayError("output_truncated", "模型输出被截断。"))
+    def test_bounded_profile_transport_failure_has_no_fallback(self, call):
+        response = self.post({**self.chapter_payload(), "generation_profile": "bounded_chapter_v1"})
+        self.assertEqual(response.json()["code"], "output_truncated")
+        call.assert_called_once()
+
+    @patch("model_gateway.app.chat_completion", return_value={"content": "synthetic", "prompt_tokens": 1, "completion_tokens": 2})
+    def test_chapter_response_format_forwarded_once_and_default_not_forwarded(self, call):
+        payload = self.chapter_payload()
+        self.assertEqual(self.post(payload).status_code, 200)
+        call.assert_called_once()
+        self.assertEqual(call.call_args.kwargs["response_format"], payload["response_format"])
+        self.assertEqual(call.call_args.args[1]["max_output_tokens"], 4096)
+        self.assertEqual(call.call_args.args[1]["timeout_seconds"], 120)
+        call.reset_mock()
+        self.assertEqual(self.post().status_code, 200)
+        self.assertNotIn("response_format", call.call_args.kwargs)
+        self.assertEqual(self.post({**self.payload, "response_format": None}).status_code, 200)
+        self.assertNotIn("response_format", call.call_args.kwargs)
+
+    @patch("model_gateway.app.chat_completion")
+    def test_chapter_format_invalid_contract_and_unknown_combinations_fail_before_outbound(self, call):
+        changes = [lambda p: p.update(response_format={"type": "json_object"}),
+                   lambda p: p["response_format"]["json_schema"].update(strict=True, unknown="private-sentinel"),
+                   lambda p: p["model"].update(model_name="unknown"),
+                   lambda p: p["provider"].update(base_url="https://other.example/v1"),
+                   lambda p: p.update(purpose="test"),
+                   lambda p: p.update(tools=[]), lambda p: p.update(stream=True)]
+        for index, change in enumerate(changes):
+            payload = self.chapter_payload()
+            change(payload)
+            with self.subTest(index=index):
+                response = self.post(payload)
+                self.assertEqual(response.status_code, 422)
+                self.assertEqual(response.json()["code"], "invalid_request")
+                self.assertNotIn("private-sentinel", response.text)
+        call.assert_not_called()
+
+    @patch("model_gateway.app.stream_completion")
+    @patch("model_gateway.app.chat_completion")
+    def test_chapter_mode_vision_stream_agent_rejected_without_transport(self, call, stream):
+        for endpoint, status in (("/v1/generate-vision", 422), ("/v1/generate-stream", 400),
+                                 ("/v1/generate-agent", 422)):
+            response = self.client.post(endpoint, json=self.chapter_payload(), headers=self.headers)
+            self.assertEqual(response.status_code, status)
+            self.assertEqual(response.json()["code"], "invalid_request")
+        call.assert_not_called()
+        stream.assert_not_called()
+
+    @patch("model_gateway.app.chat_completion", side_effect=GatewayError("output_truncated", "模型输出被截断。"))
+    def test_chapter_format_transport_error_has_no_fallback(self, call):
+        response = self.post(self.chapter_payload())
+        self.assertEqual(response.json()["code"], "output_truncated")
+        call.assert_called_once()
 
     @patch("model_gateway.app.list_models", return_value=["qwen-plus", "qwen-flash"])
     def test_catalog_requires_service_token_and_provider_only(self, listing):

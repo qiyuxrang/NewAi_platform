@@ -9,7 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth.dependencies import get_current_user
-from app.auth.service import decode_token, get_user_by_id
+from app.auth.service import decode_token, get_user_by_id, token_matches_user
 from app.config import settings
 from app.db.engine import async_session, get_db
 from app.db.models import User
@@ -86,7 +86,7 @@ async def shared_events_stream(
 
     async with async_session() as db:
         user = await get_user_by_id(db, payload["sub"])
-        if user is None or not user.is_active:
+        if not token_matches_user(payload, user):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User not found")
         ctx = await ensure_shared_agent_binding(db, user)
 

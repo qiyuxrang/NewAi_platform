@@ -3,7 +3,8 @@ import { flushSync } from "react-dom";
 import { ApiError } from "../api";
 import { CenterLink, Field } from "../shared";
 import { createTask, getTask, updateTask, uploadSource, type CreateTask, type DocumentTask } from "./product-api";
-import { formatBytes, goProduct, LoadState, ProductIcon, productError, projectUrl, useProductOverview, useUnsavedWarning } from "./workbench-shared";
+import { LoadState, ProductIcon } from "./workbench-shared";
+import { formatBytes, goProduct, productError, projectUrl, useProductOverview, useUnsavedWarning } from "./workbench-state";
 import './project-analysis.css';
 import "./product-clean-layout.css";
 
@@ -58,7 +59,7 @@ export default function NewProductProject() {
     if (!submission.current) {
       setUploadProgress({ completed: 0, total: files.length + 1 });
       submission.current = { key: crypto.randomUUID(), task: null, remaining: [...(equipment ? [equipment] : []), ...files], equipment, start,
-        body: { title: projectName, intake_mode: 'equipment_background', output_families: ['technical-solution', 'feasibility'], input: { project: projectName, requirements: ['根据上传的乙方设备清单和甲方调研、项目需求及背景材料，完整编制项目蓝图、技术方案和可行性研究报告。技术方案正文不少于50000字、Mermaid图不少于15张；可行性研究报告正文不少于70000字、Mermaid图不少于20张。保持来源一致，不编造缺失参数，资料不足处明确列为待确认。', requirements.trim()].filter(Boolean).join('\n'), background: background.trim(), conditions: conditions.split("\n").map(value => value.trim()).filter(Boolean), items: [] } } };
+        body: { title: projectName, intake_mode: 'equipment_background', output_families: ['technical-solution', 'feasibility', 'presentation'], input: { project: projectName, requirements: ['根据上传的乙方设备清单和甲方调研、项目需求及背景材料，完整编制项目蓝图、技术方案、可行性研究报告和基于两份报告的汇报演示文稿。技术方案正文不少于50000字、Mermaid图不少于15张；可行性研究报告正文不少于70000字、Mermaid图不少于20张。保持来源一致，不编造缺失参数，资料不足处明确列为待确认。', requirements.trim()].filter(Boolean).join('\n'), background: background.trim(), conditions: conditions.split("\n").map(value => value.trim()).filter(Boolean), items: [] } } };
     }
     const record = submission.current;
     setPending(true);
@@ -104,7 +105,7 @@ export default function NewProductProject() {
   }
   if (!data) return <LoadState error={loadError} reload={reload}/>;
   const canGenerate = data.capabilities.model_generation;
-  return <div className="pd-workspace pd-clean-layout"><div className="pd-page-title"><div><CenterLink href="/centers/product/projects" className="pd-back-link">← 历史项目</CenterLink><h1>生成技术方案与可研报告</h1><p>上传一份乙方设备清单和多份项目背景，查看处理节点并下载两份报告。</p></div><span className="pd-badge info">1 份设备清单 + N 份背景</span></div>
+  return <div className="pd-workspace pd-clean-layout wb-new-project"><div className="pd-page-title"><div><span className="wb-welcome-mark">✦</span><h1>从项目资料，开始一次完整交付</h1><p>上传设备清单与项目背景，一起完成技术方案、可研报告和汇报 PPT。</p></div><CenterLink href="/centers/product/projects" className="pd-back-link">查看历史项目 →</CenterLink></div>
     <div className="pd-new-layout"><form className="pd-panel pd-project-form" onSubmit={event => { event.preventDefault(); void submit(canGenerate); }}>
       <div className="pd-panel-heading"><h3>上传项目资料</h3></div>
       {error && <div className="pd-feedback" role="alert">{error}</div>}
@@ -123,9 +124,9 @@ export default function NewProductProject() {
         {files.length > 0 && <ul className="pd-upload-list" aria-label="待上传项目资料">{files.map((file, index) => <li key={`${file.name}-${index}`}><ProductIcon name="file"/><div><strong>{file.name}</strong><small>{formatBytes(file.size)}</small></div><button type="button" className="text-button" aria-label={`移除 ${file.name}`} onClick={() => setFiles(values => values.filter((_, i) => i !== index))}>移除</button></li>)}</ul>}
       </fieldset>
       {busy && <section className="pd-upload-progress" role="status" aria-live="polite" aria-busy="true"><span className="pd-spinner"/><div><strong>{progress}</strong><progress className="pd-native-progress" max={uploadProgress.total || 1} value={uploadProgress.completed} aria-label="资料上传解析进度" aria-valuetext={`${uploadProgress.completed} / ${uploadProgress.total} 份资料已完成`}/><p>已完成 {uploadProgress.completed} / {uploadProgress.total} 份资料</p></div></section>}
-      <div className="pd-form-footer"><span role="status" aria-live="polite">{busy ? '资料提交后自动打开节点进度。' : "生成蓝图后需本人确认，再自动编制两份报告。"}</span><div className="pd-actions">{createdId && !busy && <button type="button" className="button secondary" onClick={() => leave(createdId)}>查看项目进度</button>}<button className="button primary" disabled={busy}>{busy ? "正在提交…" : pending ? "重试并继续" : canGenerate ? "开始生成" : "上传并保存资料"}<ProductIcon name="arrow"/></button></div></div>
+      <div className="pd-form-footer"><span role="status" aria-live="polite">{busy ? '资料提交后自动打开节点进度。' : "蓝图需本人确认，再编制三类成果。"}</span><div className="pd-actions">{createdId && !busy && <button type="button" className="button secondary" onClick={() => leave(createdId)}>查看项目进度</button>}<button className="button primary" disabled={busy}>{busy ? "正在提交…" : pending ? "重试并继续" : canGenerate ? "开始生成" : "上传并保存资料"}<ProductIcon name="arrow"/></button></div></div>
     </form>
-    <aside className="pd-new-aside"><section className="pd-panel"><h3>两份报告 · Word</h3><ul><li><ProductIcon name="file"/>技术方案<small>正文 ≥ 50,000 字 · Mermaid ≥ 15 图</small></li><li><ProductIcon name="file"/>可行性研究报告<small>正文 ≥ 70,000 字 · Mermaid ≥ 20 图</small></li></ul></section><section className="pd-panel pd-subtle"><h3>处理流程</h3><ol><li>解析背景与设备清单</li><li>检索知识并生成蓝图</li><li>本人确认蓝图</li><li>编制正文、渲染图表并排版</li><li>下载两份报告</li></ol></section>{!data.capabilities.retrieval && <section className="pd-service-note" role="note"><ProductIcon name="shield"/><p>知识库未启用；生成能否继续以后台实际状态为准。</p></section>}{!canGenerate && <section className="pd-service-note"><ProductIcon name="shield"/><p>生成授权未开通，资料仍可保存。</p></section>}</aside></div>
+    <aside className="pd-new-aside"><section className="pd-panel"><h3>本次交付</h3><ul><li><ProductIcon name="file"/>技术方案 · DOCX<small>正文 ≥ 50,000 字 · 图表 ≥ 15 张</small></li><li><ProductIcon name="file"/>可行性研究报告 · DOCX<small>正文 ≥ 70,000 字 · 图表 ≥ 20 张</small></li><li><ProductIcon name="layers"/>汇报演示文稿 · PPTX<small>基于两份报告编制，共用事实来源</small></li></ul><p className="pd-muted">创建后显示真实成果状态与版本。</p></section><section className="pd-panel pd-subtle"><h3>一起推进项目</h3><ol><li>解析背景与设备清单</li><li>检索知识并生成蓝图</li><li>本人确认蓝图</li><li>编制正文、图表与汇报文稿</li><li>下载三件套成果</li></ol></section>{!data.capabilities.retrieval && <section className="pd-service-note" role="note"><ProductIcon name="shield"/><p>知识库未启用；生成能否继续以后台实际状态为准。</p></section>}{!canGenerate && <section className="pd-service-note"><ProductIcon name="shield"/><p>生成授权未开通，资料仍可保存。</p></section>}</aside></div>
   </div>;
 }
 

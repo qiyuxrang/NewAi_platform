@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Field } from "../shared";
 import { extractionNames, getSourceDetail, sourceDownload, sourcePreview, type DocumentTask, type ExtractedBlock, type SourceAction, type SourceDetail } from "./product-api";
-import { formatBytes, formatDate, LoadState, ProductIcon, productError, useUnsavedWarning } from "./workbench-shared";
+import { LoadState, ProductIcon } from "./workbench-shared";
+import { formatBytes, formatDate, productError, useUnsavedWarning } from "./workbench-state";
 import "./source-materials.css";
 import { BusinessImage } from '../BusinessSurface';
 
@@ -14,38 +15,56 @@ interface Props {
 }
 interface EditDraft { block: ExtractedBlock; text: string; cells?: string[]; reason: string; version: number; hash: string }
 
-export default function SourceMaterials({ task, busy, onSourceAction, onAction, disabled }: Props) {
+export default function SourceMaterials(props: Props) {
+  return <ProjectSourceMaterials key={props.task.id} {...props}/>;
+}
+
+function ProjectSourceMaterials(props: Props) {
   const [selected, setSelected] = useState("");
-  const [data, setData] = useState<SourceDetail | null>(null);
-  const [error, setError] = useState("");
+  const id = props.task.sources.some(source => source.id === selected) ? selected : props.task.sources[0]?.id || "";
+  return id ? <SourceInspector key={id} {...props} id={id} select={setSelected}/> : null;
+}
+
+function SourceInspector({ task, busy, onSourceAction, onAction, disabled, id, select }: Props & { id: string; select: (id: string) => void }) {
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
   const [revision, setRevision] = useState("");
   const [refresh, setRefresh] = useState(0);
   const [draft, setDraft] = useState<EditDraft | null>(null);
-  const [previewPage, setPreviewPage] = useState<number | null>(null);
-  const [previewError, setPreviewError] = useState(false);
   const [review, setReview] = useState<Record<string, { category: string; reason: string }>>({});
   useUnsavedWarning(Boolean(draft));
-  const id = task.sources.some(source => source.id === selected) ? selected : task.sources[0]?.id || "";
+  const taskId = task.id;
+  const taskVersion = task.version;
+  const requestQuery = new URLSearchParams({ q: query, page: String(page), revision }).toString();
+  const requestKey = useMemo(() => ({ id, taskId, taskVersion, requestQuery, refresh }), [id, taskId, taskVersion, requestQuery, refresh]);
+  const [response, setResponse] = useState<{ key: typeof requestKey; data: SourceDetail | null; error: string } | null>(null);
+  const current = response?.key === requestKey ? response : null;
+  const data = current?.data ?? null;
+  const error = current?.error ?? "";
+  const [preview, setPreview] = useState<{ key: typeof requestKey; page: number | null; error: boolean } | null>(null);
+  const previewPage = preview?.key === requestKey ? preview.page : null;
+  const previewError = preview?.key === requestKey && preview.error;
+  function setPreviewPage(nextPage: number | null) {
+    setPreview(value => ({ key: requestKey, page: nextPage, error: value?.key === requestKey && value.error }));
+  }
+  function setPreviewError(nextError: boolean) {
+    setPreview(value => ({ key: requestKey, page: value?.key === requestKey ? value.page : null, error: nextError }));
+  }
 
   useEffect(() => {
-    if (!id) { setData(null); return; }
     const controller = new AbortController();
-    setData(null); setError(""); setPreviewPage(null); setPreviewError(false);
-    void getSourceDetail(id, new URLSearchParams({ q: query, page: String(page), revision }).toString(), controller.signal)
+    void getSourceDetail(requestKey.id, requestKey.requestQuery, controller.signal)
       .then(value => {
-        if (!value.summary || !Array.isArray(value.blocks) || value.id !== id || value.task_id !== task.id) throw new Error("资料响应与当前项目不一致，请重新加载。");
-        if (!controller.signal.aborted) setData(value);
-      }).catch(reason => { if (!controller.signal.aborted) { setData(null); setError(productError(reason)); } });
+        if (!value.summary || !Array.isArray(value.blocks) || value.id !== requestKey.id || value.task_id !== requestKey.taskId) throw new Error("资料响应与当前项目不一致，请重新加载。");
+        if (!controller.signal.aborted) setResponse({ key: requestKey, data: value, error: "" });
+      }).catch(reason => { if (!controller.signal.aborted) setResponse({ key: requestKey, data: null, error: productError(reason) }); });
     return () => controller.abort();
-  }, [id, task.id, task.version, page, query, revision, refresh]);
+  }, [requestKey]);
 
-  if (!task.sources.length) return null;
   function choose(next: string) {
     if (draft && !window.confirm("放弃尚未保存的解析校正？")) return;
-    setDraft(null); setSelected(next); setPage(1); setQuery(""); setSearch(""); setRevision(""); setReview({});
+    if (next !== id) select(next);
   }
   function edit(block: ExtractedBlock) {
     if (!data) return;

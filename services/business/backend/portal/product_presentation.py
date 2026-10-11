@@ -107,6 +107,15 @@ def render_presentation_draft(task, pair):
         raise DocumentError("presentation_unavailable", diagnostic={"stage": "presentation_manifest", "reason": "invalid_manifest"})
     if quality["quality_gate"].get("status") != "pass" or quality["missing_source_refs"]:
         raise DocumentError("presentation_unavailable", diagnostic={"stage": "presentation_quality", "reason": "quality_failed"})
+    office = None
+    if (getattr(settings, "PRODUCT_OFFICE_RENDER_ENABLED", False)
+            and getattr(settings, "PRODUCT_OFFICE_RENDERER", "word") == "libreoffice"):
+        from .product_rendering import render_office
+        try:
+            office = render_office(output.relative_to(root).as_posix(), hashlib.sha256(output.read_bytes()).hexdigest())
+        except DocumentError as error:
+            raise DocumentError("presentation_unavailable", diagnostic={
+                "stage": "presentation_office_render", "reason": error.code}) from None
     return {"path": output.relative_to(root).as_posix(), "sha256": hashlib.sha256(output.read_bytes()).hexdigest(),
             "template_hash": presentation_renderer_hash(),
             "render_evidence": {"kind": "draft", "status": "draft_unverified", "engine": quality["engine"],
@@ -126,4 +135,6 @@ def render_presentation_draft(task, pair):
                                 "pair_hash": pair["sha256"], "source_versions": pair["sources"],
                                 "block_refs": [{"ref": block["ref"], "source_ids": block.get("source_ids", [])}
                                                for block in pair["blocks"] if block["ref"] in set(quality["mapped_source_refs"])],
-                                "office_render": "not_run", "visual_review": "not_run", "business_approval": "blocked"}}
+                                "office_render": "completed" if office else "not_run",
+                                **({"office_render_evidence": office} if office else {}),
+                                "visual_review": "not_run", "business_approval": "blocked"}}

@@ -12,6 +12,7 @@ from django.conf import settings
 from django.utils import timezone
 
 from .product_storage import private_root
+from .product_office_runtime import run_office
 from .product_docx_layout import normalize_docx_layout
 from .product_formal import has_repeated_filler, unsupported_financial_conclusion
 from .product_diagrams import (
@@ -185,9 +186,26 @@ def _mermaid_chromium():
 
 def _safe_environment():
     environment = {key: value for key, value in os.environ.items() if key.upper() in
-                   {"SYSTEMROOT", "WINDIR", "TEMP", "TMP", "PATH", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)"}}
+                   {"SYSTEMROOT", "WINDIR", "TEMP", "TMP", "TMPDIR", "PATH", "HOME", "LANG", "LC_ALL", "USERPROFILE", "LOCALAPPDATA", "APPDATA", "PROGRAMFILES", "PROGRAMFILES(X86)"}}
     environment.update(PYTHONIOENCODING="utf-8", PYTHONUTF8="1", PYTHONNOUSERSITE="1")
     return environment
+
+
+def _office_command(runtime, source, output, timeout, *, kind="word"):
+    """Select an explicit renderer; never fall back after a failed render."""
+    renderer = getattr(settings, "PRODUCT_OFFICE_RENDERER", "word")
+    if renderer == "word":
+        return [str(runtime), "-B", str(PACK / "scripts" / "office_render.py"),
+                kind, str(source), str(output), "--timeout", str(timeout)]
+    if renderer != "libreoffice":
+        raise DocumentError("office_render_unavailable")
+    executable = Path(getattr(settings, "PRODUCT_LIBREOFFICE_EXECUTABLE", "/usr/bin/libreoffice"))
+    uno_python = Path(getattr(settings, "PRODUCT_UNO_PYTHON", "/usr/bin/python3"))
+    if not all(path.is_absolute() and path.is_file() for path in (executable, uno_python)):
+        raise DocumentError("office_render_unavailable")
+    script = Path(__file__).parent / "product_assets" / "libreoffice_render.py"
+    return [str(runtime), "-B", str(script), kind, str(source), str(output),
+            "--timeout", str(timeout), "--executable", str(executable), "--uno-python", str(uno_python)]
 
 
 def _diagram_evidence(output, figure_count):
@@ -245,13 +263,13 @@ def _refresh_word_field_cache(target, runtime, directory):
             stage = Path(temporary).resolve()
             source = stage / "input.docx"
             output = stage / "render"
-            if any(len(str(path)) >= 260 for path in
+            if os.name == "nt" and any(len(str(path)) >= 260 for path in
                    (source, output / "reviewed.docx", output / "document.pdf")):
                 diagnostic["reason"] = "office_path_too_long"
                 raise ValueError("Office staging path exceeds MAX_PATH")
             shutil.copy2(target, source)
-            command = [str(runtime), "-B", str(PACK / "scripts" / "office_render.py"),
-                       "word", str(source), str(output), "--timeout", str(timeout)]
+            command = _office_command(runtime, source, output, timeout)
+            script_hash = hashlib.sha256(Path(command[2]).read_bytes()).hexdigest()
 
             def retained_paths(value):
                 if isinstance(value, dict):
@@ -265,10 +283,11 @@ def _refresh_word_field_cache(target, runtime, directory):
 
             try:
                 diagnostic["reason"] = "renderer_failed"
-                result = subprocess.run(
+                result = run_office(
                     command, cwd=stage, env=_safe_environment(), capture_output=True,
                     text=True, encoding="utf-8", errors="replace", timeout=timeout + 30,
                     creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+                    linux=getattr(settings, "PRODUCT_OFFICE_RENDERER", "word") == "libreoffice",
                 )
                 diagnostic["returncode"] = result.returncode
             finally:
@@ -292,11 +311,38 @@ def _refresh_word_field_cache(target, runtime, directory):
 
             reviewed = retained / "reviewed.docx"
             if (result.returncode != 0 or report.get("rendered") is not True
-                    or int(report.get("toc_count", 0)) < 1 or not reviewed.is_file()):
+                    or type(report.get("toc_count")) is not int or report["toc_count"] < 1
+                    or type(report.get("page_count")) is not int or report["page_count"] < 1
+                    or not reviewed.is_file()
+                    or hashlib.sha256(Path(command[2]).read_bytes()).hexdigest() != script_hash):
                 raise ValueError("Word field refresh did not pass")
+            if getattr(settings, "PRODUCT_OFFICE_RENDERER", "word") == "libreoffice":
+                from .product_rendering import _validated_outputs
+                _validated_outputs(retained, report, hashlib.sha256(original).hexdigest(), "word")
+                if (source.read_bytes() != original or target.read_bytes() != original
+                        or report.get("toc_cached") is not True):
+                    raise ValueError("LibreOffice input or TOC cache verification failed")
             cache = {"status": "completed", "renderer": report.get("renderer", "Microsoft Word"),
                      "toc_count": int(report["toc_count"]),
-                     "page_count": int(report.get("page_count", 0))}
+                     "page_count": report["page_count"], "office_render_script_sha256": script_hash,
+                     "input_sha256": hashlib.sha256(original).hexdigest(),
+                     "output_sha256": hashlib.sha256(reviewed.read_bytes()).hexdigest(),
+                     "visual_review": "not_run"}
+            # Canonical preview records bind pages to the promoted DOCX, whose
+            # hash differs from the pre-refresh input. Paths stay private and
+            # are never rebuilt later from an untrusted render.json file.
+            if "structural_pass" in report:
+                from .product_rendering import _validated_outputs, _relative_evidence
+                pdf, pdf_hash, pages, page_hashes, _, output_hash = _validated_outputs(
+                    retained, report, cache["input_sha256"], "word")
+                root = private_root().resolve()
+                cache["preview"] = {
+                    "status": "rendered", "verified": False, "visual_review": "not_run",
+                    "docx_sha256": output_hash, "page_count": report["page_count"],
+                    "pdf": _relative_evidence(root, pdf, pdf_hash),
+                    "pages": [{"page": number, **_relative_evidence(root, page, checksum)}
+                              for number, (page, checksum) in enumerate(zip(pages, page_hashes), 1)],
+                }
             quality["output_sha256"] = hashlib.sha256(reviewed.read_bytes()).hexdigest()
             quality["word_field_cache"] = cache
             refreshed_quality = json.dumps(quality, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
@@ -316,7 +362,7 @@ def _refresh_word_field_cache(target, runtime, directory):
             target.write_bytes(original)
             quality_path.write_bytes(original_quality)
             raise
-    except (OSError, UnicodeError, ValueError, TypeError, KeyError, OverflowError, subprocess.TimeoutExpired):
+    except (OSError, UnicodeError, ValueError, TypeError, KeyError, OverflowError, subprocess.TimeoutExpired, DocumentError):
         try:
             (retained / "refresh.json").write_text(json.dumps(diagnostic), encoding="utf-8")
         except OSError:

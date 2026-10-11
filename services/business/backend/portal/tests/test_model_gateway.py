@@ -1,19 +1,274 @@
 import json
+import copy
+from types import SimpleNamespace
 from io import BytesIO
 from urllib.error import HTTPError
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from django.core.exceptions import ValidationError
 from django.test import SimpleTestCase, override_settings
 
 from portal import model_gateway
 from portal.model_messages import TEXT_REQUEST_LIMIT, validate_messages
+from portal.model_response_format import (chapter_response_format, supports_chapter_response_format,
+                                         validate_response_format, generation_profile_metadata,
+                                         validate_generation_profile, validate_profile_usage)
 from portal.models import AuditEvent, GatewayModel, ModelCallLog, ModelRoute, Module, Provider, Role
 
 from .base import PortalTestCase
 
 
 LOCAL_PROVIDER_URL = "http://127.0.0.1:19880/api/v1/openai/0123456789abcdef0123456789abcdef"
+
+
+class ChapterResponseFormatTests(SimpleTestCase):
+    def setUp(self):
+        self.chapter = {"id": "approved-chapter", "title": "批准标题", "source_ids": ["source-1", "source-2"]}
+        self.format = chapter_response_format(self.chapter)
+        self.config = {
+            "provider": {"protocol": "openai_chat", "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                         "api_key_env": "PORTAL_MODEL_KEY_TEST"},
+            "model": {"model_name": "qwen3.8-flash", "token_parameter": "max_tokens",
+                      "max_output_tokens": 4096, "timeout_seconds": 120},
+        }
+        self.messages = [{"role": "user", "content": "synthetic chapter JSON"}]
+        self.user = SimpleNamespace(grant_version=1)
+        self.model = SimpleNamespace(provider=SimpleNamespace(updated_at=1), updated_at=1,
+                                     supports_vision=False, public_id="model", pk=1)
+        self.route = SimpleNamespace(updated_at=1, code="solution")
+
+    def test_fixed_schema_is_detached_and_binds_approved_values(self):
+        schema = self.format["json_schema"]["schema"]
+        self.assertIs(self.format["json_schema"]["strict"], True)
+        self.assertIs(schema["additionalProperties"], False)
+        self.assertEqual(set(schema["required"]), {"chapter_id", "title", "paragraphs", "source_ids"})
+        self.assertEqual(schema["properties"]["chapter_id"]["const"], self.chapter["id"])
+        self.assertEqual(schema["properties"]["title"]["const"], self.chapter["title"])
+        self.assertEqual(schema["properties"]["source_ids"]["items"]["enum"], self.chapter["source_ids"])
+        self.assertEqual(schema["properties"]["source_ids"]["minItems"], 1)
+        self.assertEqual(schema["properties"]["paragraphs"], {"type": "array", "minItems": 1, "items": {"type": "string"}})
+        normalized = validate_response_format(self.format)
+        normalized["json_schema"]["schema"]["properties"]["source_ids"]["items"]["enum"].append("new")
+        self.assertEqual(self.chapter["source_ids"], ["source-1", "source-2"])
+        self.assertEqual(self.format["json_schema"]["schema"]["properties"]["source_ids"]["items"]["enum"], ["source-1", "source-2"])
+        self.assertIsNone(validate_response_format(None))
+
+    def test_arbitrary_schema_options_and_unbounded_values_are_rejected(self):
+        changes = [
+            lambda x: x.update(type="json_object"),
+            lambda x: x.update(extra="private-sentinel"),
+            lambda x: x["json_schema"].update(strict=1),
+            lambda x: x["json_schema"].update(name="arbitrary"),
+            lambda x: x["json_schema"]["schema"].update(additionalProperties=0),
+            lambda x: x["json_schema"]["schema"].update(required=[]),
+            lambda x: x["json_schema"]["schema"].update(anyOf=[]),
+            lambda x: x["json_schema"]["schema"]["properties"]["paragraphs"].update(minItems=True),
+            lambda x: x["json_schema"]["schema"]["properties"]["paragraphs"]["items"].update(pattern=".*"),
+            lambda x: x["json_schema"]["schema"]["properties"]["chapter_id"].update(const=True),
+            lambda x: x["json_schema"]["schema"]["properties"]["title"].update(const="x" * 1001),
+            lambda x: x["json_schema"]["schema"]["properties"]["source_ids"]["items"].update(enum=[]),
+            lambda x: x["json_schema"]["schema"]["properties"]["source_ids"]["items"].update(enum=["s"] * 2),
+            lambda x: x["json_schema"]["schema"]["properties"]["source_ids"]["items"].update(enum=[True]),
+            lambda x: x["json_schema"]["schema"]["properties"]["source_ids"]["items"].update(enum=[str(i) for i in range(257)]),
+            lambda x: x["json_schema"]["schema"]["properties"]["source_ids"]["items"].update(enum=[str(i) + "文" * 190 for i in range(100)]),
+        ]
+        for index, change in enumerate(changes):
+            value = copy.deepcopy(self.format)
+            change(value)
+            with self.subTest(index=index), self.assertRaises(ValueError) as caught:
+                validate_response_format(value)
+            self.assertEqual(str(caught.exception), "invalid response format")
+        for value in (False, [], "json_schema", {"id": "c", "title": "t", "source_ids": []},
+                      {**self.chapter, "id": "x" * 201}, {**self.chapter, "source_ids": ["x" * 201]}):
+            with self.subTest(chapter=value), self.assertRaises(ValueError):
+                chapter_response_format(value)
+
+    def test_support_is_exact_for_dicts_and_public_model_objects(self):
+        self.assertTrue(supports_chapter_response_format(self.config["provider"], self.config["model"]))
+        self.assertTrue(supports_chapter_response_format(SimpleNamespace(**self.config["provider"]),
+                                                       SimpleNamespace(**self.config["model"])))
+        for provider, model in (
+                ({**self.config["provider"], "protocol": "other"}, self.config["model"]),
+                ({**self.config["provider"], "base_url": self.config["provider"]["base_url"] + "/"}, self.config["model"]),
+                (self.config["provider"], {**self.config["model"], "model_name": "qwen3.7-flash"})):
+            self.assertFalse(supports_chapter_response_format(provider, model))
+
+    def test_invalid_opt_in_precedes_reservation_and_outbound(self):
+        for config, messages, purpose, value in (
+                (self.config, self.messages, "business", {"type": "json_object"}),
+                ({**self.config, "model": {**self.config["model"], "model_name": "unknown"}}, self.messages, "business", self.format),
+                (self.config, [{"role": "user", "content": [{"type": "text", "text": "image path"}]}], "business", self.format),
+                (self.config, self.messages, "test", self.format)):
+            with patch.object(model_gateway, "_model_config", return_value=config), \
+                    patch.object(model_gateway, "_reserve") as reserve, \
+                    patch.object(model_gateway, "_request_gateway") as outbound:
+                with self.assertRaises(model_gateway.GatewayError) as caught:
+                    model_gateway._invoke(self.user, self.model, messages, purpose, self.route,
+                                          response_format=value)
+                self.assertEqual(caught.exception.code, "invalid_request")
+                reserve.assert_not_called()
+                outbound.assert_not_called()
+
+    def test_generate_for_use_optional_argument_and_authorization_are_preserved(self):
+        with patch.object(model_gateway, "_route_for", return_value=(self.user, self.route)) as route, \
+                patch.object(model_gateway, "_select_route_model", return_value=(self.model, None, "version")) as select, \
+                patch.object(model_gateway, "_invoke", return_value={}) as invoke:
+            model_gateway.generate_for_use(self.user, "solution", self.messages)
+            self.assertNotIn("response_format", invoke.call_args.kwargs)
+            model_gateway.generate_for_use(self.user, "solution", self.messages, response_format=self.format)
+            self.assertEqual(invoke.call_args.kwargs["response_format"], self.format)
+            self.assertEqual(route.call_count, 2)
+            self.assertEqual(select.call_count, 2)
+        with patch.object(model_gateway, "_route_for", side_effect=model_gateway.GatewayError("forbidden")), \
+                patch.object(model_gateway, "_invoke") as invoke:
+            with self.assertRaises(model_gateway.GatewayError) as caught:
+                model_gateway.generate_for_use(self.user, "solution", self.messages, response_format=self.format)
+            self.assertEqual(caught.exception.code, "forbidden")
+            invoke.assert_not_called()
+
+    def test_opt_in_one_call_retains_refresh_audit_and_failures(self):
+        reply = {"content": "synthetic", "prompt_tokens": 1, "completion_tokens": 2}
+        for output_format, revoked in ((None, False), (self.format, False), (self.format, True)):
+            record = MagicMock()
+            fresh = SimpleNamespace(grant_version=2) if revoked else self.user
+            with patch.object(model_gateway, "_model_config", return_value=self.config), \
+                    patch.object(model_gateway, "_reserve", return_value=record) as reserve, \
+                    patch.object(model_gateway, "_request_gateway", return_value=reply) as outbound, \
+                    patch.object(model_gateway, "_fresh_user", return_value=fresh), \
+                    patch.object(model_gateway, "_route_for", return_value=(self.user, self.route)), \
+                    patch.object(model_gateway, "_select_route_model", return_value=(self.model, None, "version")), \
+                    patch.object(model_gateway, "audit") as audit:
+                if revoked:
+                    with self.assertRaises(model_gateway.GatewayError) as caught:
+                        model_gateway._invoke(self.user, self.model, self.messages, "business", self.route,
+                                              "version", response_format=output_format)
+                    self.assertEqual(caught.exception.code, "forbidden")
+                else:
+                    self.assertEqual(model_gateway._invoke(self.user, self.model, self.messages, "business", self.route,
+                                                          "version", response_format=output_format), reply)
+                reserve.assert_called_once()
+                outbound.assert_called_once()
+                record.save.assert_called_once()
+                audit.assert_called_once()
+                payload = outbound.call_args.args[0]
+                if output_format is None:
+                    self.assertEqual(payload, {**self.config, "messages": self.messages, "purpose": "business"})
+                else:
+                    self.assertEqual(payload["response_format"], self.format)
+
+    def test_bounded_profile_metadata_is_fixed_and_detached(self):
+        metadata = generation_profile_metadata("bounded_chapter_v1")
+        self.assertEqual(metadata, {"name": "bounded_chapter_v1", "enable_thinking": True,
+                                   "thinking_budget": 512, "maximum_requested_tokens": 4096,
+                                   "token_parameter": "max_completion_tokens", "token_safety_margin": 10,
+                                   "maximum_timeout_seconds": 120})
+        metadata["thinking_budget"] = 999
+        self.assertEqual(generation_profile_metadata("bounded_chapter_v1")["thinking_budget"], 512)
+        self.assertIsNone(generation_profile_metadata(None))
+        for value in (True, {}, "arbitrary-profile"):
+            with self.assertRaises(ValueError):
+                generation_profile_metadata(value)
+
+    def test_bounded_profile_context_and_request_boundaries(self):
+        options = {"provider": self.config["provider"], "model": self.config["model"],
+                   "response_format": self.format, "messages": self.messages}
+        self.assertEqual(validate_generation_profile("bounded_chapter_v1", **options), "bounded_chapter_v1")
+        self.assertIsNone(validate_generation_profile(None, provider={}, model={}, response_format=None))
+        for tokens in (523, 4096, 8192):
+            changed = {**options, "model": {**self.config["model"], "max_output_tokens": tokens}}
+            self.assertEqual(validate_generation_profile("bounded_chapter_v1", **changed), "bounded_chapter_v1")
+        changes = [{"response_format": None}, {"response_format": {"type": "json_object"}},
+                   {"purpose": "test"}, {"stream": True}, {"agent_tools": []}, {"tool_choice": "none"},
+                   {"messages": [{"role": "user", "content": []}]},
+                   {"model": {**self.config["model"], "timeout_seconds": 121}},
+                   {"model": {**self.config["model"], "timeout_seconds": True}},
+                   {"provider": {**self.config["provider"], "base_url": "https://unknown.example/v1"}}]
+        changes += [{"requested": x} for x in (0, 522, True, 523.0, 4097)]
+        for change in changes:
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                validate_generation_profile("bounded_chapter_v1", **{**options, **change})
+        self.assertIsNone(validate_profile_usage({"completion_tokens": 4096, "reasoning_tokens": 4096}, 4096))
+        for usage in ({"completion_tokens": 4097}, {"completion_tokens": True},
+                      {"completion_tokens": 1, "reasoning_tokens": 2},
+                      {"completion_tokens": None, "reasoning_tokens": 0},
+                      {"completion_tokens": 1, "reasoning_tokens": False}):
+            with self.assertRaises(ValueError):
+                validate_profile_usage(usage, 4096)
+
+    def test_profile_invalid_context_precedes_reservation(self):
+        for config, profile, output_format in (
+                (self.config, "unknown", self.format), (self.config, "bounded_chapter_v1", None),
+                ({**self.config, "model": {**self.config["model"], "timeout_seconds": 121}}, "bounded_chapter_v1", self.format),
+                ({**self.config, "model": {**self.config["model"], "max_output_tokens": 522}}, "bounded_chapter_v1", self.format)):
+            with patch.object(model_gateway, "_model_config", return_value=config), \
+                    patch.object(model_gateway, "_reserve") as reserve, \
+                    patch.object(model_gateway, "_request_gateway") as outbound:
+                with self.assertRaises(model_gateway.GatewayError) as caught:
+                    model_gateway._invoke(self.user, self.model, self.messages, "business", self.route,
+                                          response_format=output_format, generation_profile=profile)
+                self.assertEqual(caught.exception.code, "invalid_request")
+                reserve.assert_not_called()
+                outbound.assert_not_called()
+
+    def test_profile_generation_one_call_and_authorization_refresh(self):
+        reply = {"content": "synthetic", "prompt_tokens": 1, "completion_tokens": 1000, "reasoning_tokens": 512}
+        for revoked in (False, True):
+            record = MagicMock()
+            fresh = SimpleNamespace(grant_version=2) if revoked else self.user
+            with patch.object(model_gateway, "_model_config", return_value=self.config), \
+                    patch.object(model_gateway, "_reserve", return_value=record) as reserve, \
+                    patch.object(model_gateway, "_request_gateway", return_value=reply) as outbound, \
+                    patch.object(model_gateway, "_fresh_user", return_value=fresh), \
+                    patch.object(model_gateway, "_route_for", return_value=(self.user, self.route)), \
+                    patch.object(model_gateway, "_select_route_model", return_value=(self.model, None, "version")), \
+                    patch.object(model_gateway, "audit") as audit:
+                if revoked:
+                    with self.assertRaises(model_gateway.GatewayError) as caught:
+                        model_gateway.generate_for_use(self.user, "solution", self.messages,
+                                                       response_format=self.format, generation_profile="bounded_chapter_v1")
+                    self.assertEqual(caught.exception.code, "forbidden")
+                else:
+                    result = model_gateway.generate_for_use(self.user, "solution", self.messages,
+                                                            response_format=self.format, generation_profile="bounded_chapter_v1")
+                    self.assertEqual(result["reasoning_tokens"], 512)
+                reserve.assert_called_once()
+                outbound.assert_called_once()
+                self.assertEqual(outbound.call_args.args[0]["generation_profile"], "bounded_chapter_v1")
+                audit.assert_called_once()
+                record.save.assert_called_once()
+
+    def test_profile_optional_usage_response_contract_and_budget(self):
+        reply = {"content": "synthetic", "duration_ms": 1, "prompt_tokens": 2, "completion_tokens": 4096}
+        payload = {**self.config, "messages": self.messages, "purpose": "business"}
+        cases = [(None, reply, True), (None, {**reply, "reasoning_tokens": 0}, False),
+                 ("bounded_chapter_v1", reply, True),
+                 ("bounded_chapter_v1", {**reply, "reasoning_tokens": 0}, True),
+                 ("bounded_chapter_v1", {**reply, "reasoning_tokens": 4096}, True),
+                 ("bounded_chapter_v1", {**reply, "reasoning_tokens": 4097}, False),
+                 ("bounded_chapter_v1", {**reply, "reasoning_tokens": True}, False),
+                 ("bounded_chapter_v1", {**reply, "completion_tokens": 4097}, False),
+                 ("bounded_chapter_v1", {**reply, "reasoning_content": "private-sentinel"}, False)]
+        for profile, value, valid in cases:
+            body = json.dumps(value).encode()
+            response = MagicMock()
+            response.__enter__.return_value.read.return_value = body
+            request_payload = {**payload, **({"generation_profile": profile} if profile else {})}
+            with patch.object(model_gateway, "_gateway_request", return_value=(MagicMock(), 5)), \
+                    patch.object(model_gateway, "build_opener") as opener:
+                opener.return_value.open.return_value = response
+                if valid:
+                    self.assertEqual(model_gateway._request_gateway(request_payload), value)
+                else:
+                    with self.assertRaises(model_gateway.GatewayError) as caught:
+                        model_gateway._request_gateway(request_payload)
+                    self.assertEqual(caught.exception.code, "invalid_response")
+
+    def test_explicit_none_profile_does_not_add_invoke_kwargs(self):
+        with patch.object(model_gateway, "_route_for", return_value=(self.user, self.route)), \
+                patch.object(model_gateway, "_select_route_model", return_value=(self.model, None, "version")), \
+                patch.object(model_gateway, "_invoke", return_value={}) as invoke:
+            model_gateway.generate_for_use(self.user, "solution", self.messages, generation_profile=None)
+            self.assertEqual(invoke.call_args.kwargs, {"selection_pinned": False})
 
 
 class MessageSizeTests(SimpleTestCase):

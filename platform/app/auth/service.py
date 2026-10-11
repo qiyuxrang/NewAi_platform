@@ -3,6 +3,8 @@
 from datetime import datetime, timedelta, timezone
 
 import bcrypt
+import hashlib
+import hmac
 from jose import JWTError, jwt
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,29 +29,43 @@ def verify_password(plain: str, hashed: str) -> bool:
 # JWT helpers
 # ---------------------------------------------------------------------------
 
-def create_access_token(user_id: str, role: str) -> str:
+def credential_fingerprint(password_hash: str) -> str:
+    """Bind tokens to current credentials without exposing the stored hash."""
+    return hmac.new(settings.jwt_secret.encode(), password_hash.encode(), hashlib.sha256).hexdigest()
+
+
+def token_matches_user(payload: dict, user: User | None) -> bool:
+    binding = payload.get("credential")
+    return bool(user is not None and user.is_active and isinstance(binding, str)
+                and hmac.compare_digest(binding, credential_fingerprint(user.password_hash)))
+
+
+def create_access_token(user_id: str, role: str, password_hash: str = "") -> str:
     expire = datetime.now(timezone.utc) + timedelta(minutes=settings.jwt_access_token_expire_minutes)
-    payload = {"sub": user_id, "role": role, "exp": expire, "type": "access"}
+    payload = {"sub": user_id, "role": role, "exp": expire, "type": "access", "credential": credential_fingerprint(password_hash)}
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
-def create_refresh_token(user_id: str) -> str:
+def create_refresh_token(user_id: str, password_hash: str = "") -> str:
     expire = datetime.now(timezone.utc) + timedelta(days=settings.jwt_refresh_token_expire_days)
-    payload = {"sub": user_id, "exp": expire, "type": "refresh"}
+    payload = {"sub": user_id, "exp": expire, "type": "refresh", "credential": credential_fingerprint(password_hash)}
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
-def create_api_token(user_id: str, role: str, expire_days: int = 365) -> str:
+def create_api_token(user_id: str, role: str, expire_days: int = 365, *, password_hash: str = "") -> str:
     """Create a long-lived API token for programmatic access."""
     expire = datetime.now(timezone.utc) + timedelta(days=expire_days)
-    payload = {"sub": user_id, "role": role, "exp": expire, "type": "access"}
+    payload = {"sub": user_id, "role": role, "exp": expire, "type": "access", "credential": credential_fingerprint(password_hash)}
     return jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
 
 
 def decode_token(token: str) -> dict | None:
     """Decode and validate a JWT. Returns payload dict or None."""
     try:
-        return jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+        payload = jwt.decode(token, settings.jwt_secret, algorithms=[settings.jwt_algorithm])
+        if not isinstance(payload.get("sub"), str) or not payload["sub"]:
+            return None
+        return payload
     except JWTError:
         return None
 

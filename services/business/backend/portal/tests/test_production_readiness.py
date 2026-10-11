@@ -229,3 +229,28 @@ class ProductionReadinessTests(SimpleTestCase):
                                         enabled_routes=[route()], environment={})
         self.assertFalse(report["release_approved"])
         self.assertIn("capacity_and_fault_acceptance", report["required_verifications"])
+
+    def test_configured_libreoffice_on_linux_keeps_real_render_acceptance_external(self):
+        with TemporaryDirectory() as directory, patch("portal.production_readiness.platform.system", return_value="Linux"):
+            runtime = Path(directory) / "runtime"
+            runtime.write_bytes(b"inert existence fixture")
+            report = evaluate_configuration(configured=configuration(PRODUCT_OFFICE_RENDER_ENABLED=True,
+                PRODUCT_OFFICE_RENDERER="libreoffice", PRODUCT_DOCUMENT_PYTHON=str(runtime),
+                PRODUCT_LIBREOFFICE_EXECUTABLE=str(runtime), PRODUCT_UNO_PYTHON=str(runtime)),
+                database_vendor="postgresql", enabled_routes=[route()], environment={})
+        self.assertEqual(report["blockers"], [])
+        self.assertFalse(report["release_approved"])
+        self.assertIn("product_office_acceptance", report["external_gates"])
+        self.assertIn("product_formal_quality", report["external_gates"])
+
+    def test_libreoffice_files_do_not_make_windows_or_missing_uno_ready(self):
+        with TemporaryDirectory() as directory:
+            runtime = Path(directory) / "runtime"
+            runtime.write_bytes(b"inert fixture")
+            for system, uno in (("Windows", str(runtime)), ("Linux", str(runtime) + "-missing")):
+                with self.subTest(system=system), patch("portal.production_readiness.platform.system", return_value=system):
+                    report = evaluate_configuration(configured=configuration(PRODUCT_OFFICE_RENDER_ENABLED=True,
+                        PRODUCT_OFFICE_RENDERER="libreoffice", PRODUCT_DOCUMENT_PYTHON=str(runtime),
+                        PRODUCT_LIBREOFFICE_EXECUTABLE=str(runtime), PRODUCT_UNO_PYTHON=uno),
+                        database_vendor="postgresql", enabled_routes=[route()], environment={})
+                    self.assertIn("product_office_platform", report["blockers"])

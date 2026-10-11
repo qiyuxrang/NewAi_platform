@@ -7,6 +7,10 @@ import re
 from pathlib import Path
 from zipfile import ZipFile
 
+from .product_content_quality import (
+    _evidence, _pending, content_quality_policy_hash, inspect_content_quality, unsupported_numeric_claims,
+)
+
 
 TECHNICAL_DIAGRAM_TOPICS = [
     "业务闭环流程", "总体架构", "应用架构", "技术架构", "部署架构", "网络拓扑", "数据流转", "集成架构",
@@ -23,14 +27,15 @@ SUBSECTION_TITLES = {
     "feasibility": ("评价目标与分析边界", "现状依据与关键假设", "可行性论证与风险控制", "实施条件与决策建议"),
 }
 
-DIAGRAM_PROMPT_VERSION = "report-evidence-mermaid-v1"
-DIAGRAM_INSTRUCTION = "为本批每张图生成对应本项目正文的Mermaid代码、具体标题和图说明。仅据report_blocks中的节点与关系绘图；建议主题若与本章无关，改用本章已有设计、流程或实施示例，不得套用通用平台架构或补造设备、网络、参数、审批及收益。未确认的关系须明确标为待确认。每图引用正文块evidence_block_ids，anchor_text取自所引正文的连续原文且必须出现在图中。不同图表达不同正文机制，禁止重复图。仅用flowchart或sequenceDiagram，建议每图3至8节点，代码约1000字符以内；禁止Markdown围栏、配置指令、注释、HTML、URL、click、style、classDef和linkStyle。所有可见文字黑色由渲染器控制。仅返回schema规定的JSON。"
+DIAGRAM_PROMPT_VERSION = "report-evidence-mermaid-v2"
+DIAGRAM_INSTRUCTION = "为本批每张图生成对应本项目正文的Mermaid代码、具体标题和图说明。仅据report_blocks中的节点与关系绘图；建议主题若与本章无关，改用本章已有设计、流程或实施示例，不得套用通用平台架构或补造设备、网络、参数、审批及收益。未确认的关系须明确标为待确认。标题、图说明及所有节点、连线、分组和时序文字须保留本图所引正文中的候选、条件和待确认限定；锚点组件名称不能证明已选型、已部署或已实现等既有状态。每图引用正文块evidence_block_ids，anchor_text取自所引正文的连续原文且必须出现在图中。不同图表达不同正文机制，禁止重复图。仅用flowchart或sequenceDiagram，建议每图3至8节点，代码约1000字符以内；禁止Markdown围栏、配置指令、注释、HTML、URL、click、style、classDef和linkStyle。所有可见文字黑色由渲染器控制。仅返回schema规定的JSON。"
 MERMAID_SOURCE = re.compile(r"(?:flowchart\s+(?:TB|TD|BT|RL|LR)|graph\s+(?:TB|TD|BT|RL|LR)|sequenceDiagram|classDiagram|stateDiagram(?:-v2)?|erDiagram|gantt|journey|pie\b|mindmap\b|timeline\b)", re.I)
 
 
 def diagram_contract_hash() -> str:
     runtime = Path(__file__).resolve().parent / "product_assets" / "mermaid-runtime"
-    return hashlib.sha256(DIAGRAM_PROMPT_VERSION.encode() + Path(__file__).read_bytes() + (runtime / "render.mjs").read_bytes()
+    return hashlib.sha256(DIAGRAM_PROMPT_VERSION.encode() + content_quality_policy_hash().encode()
+                          + Path(__file__).read_bytes() + (runtime / "render.mjs").read_bytes()
                           + (runtime / "dist" / "runtime-manifest.json").read_bytes()).hexdigest()
 
 
@@ -91,6 +96,173 @@ def diagram_batches(document: dict):
             yield figures[start:start + 4], paragraphs
 
 
+def _diagram_visible_labels(source: str) -> list[str]:
+    """Extract displayed Mermaid text, without treating graph IDs as prose.
+
+    The renderer remains responsible for syntax. This extraction covers both
+    permitted dialects and deliberately keeps labels separate: a pending label
+    must not qualify an unrelated fixed value in another node or message.
+    """
+    labels = []
+    if source.lstrip().startswith("sequenceDiagram"):
+        for line in source.splitlines()[1:]:
+            line = line.strip()
+            participant = re.match(r"(?:participant|actor)\s+(\S+)(?:\s+as\s+(.+))?$", line)
+            if participant:
+                display = participant.group(2) or participant.group(1)
+                if not re.fullmatch(r"[A-Za-z_]\w*", display):
+                    labels.append(display)
+            elif ":" in line:
+                # Message/note labels occur after the first colon, never in
+                # sender/receiver IDs or their activation markers.
+                labels.append(line.split(":", 1)[1].strip())
+            else:
+                display = re.match(r"(?:loop|alt|else|opt|par|and|critical|option|break|box)\s+(.+)$", line)
+                if display:
+                    labels.append(display.group(1))
+        return labels
+
+    masked = list(source)
+    pairs = {"[": "]", "(": ")", "{": "}"}
+    position = 0
+    while position < len(source):
+        if source[position] not in pairs:
+            position += 1
+            continue
+        start = position
+        stack, quoted = [pairs[source[position]]], False
+        position += 1
+        while position < len(source) and stack:
+            char = source[position]
+            if char == '"':
+                quoted = not quoted
+            elif not quoted:
+                if char in pairs:
+                    stack.append(pairs[char])
+                elif char == stack[-1]:
+                    stack.pop()
+            position += 1
+        if stack:
+            # An invalid/unclosed shape must not hide its text from the guard.
+            labels.append(source[start + 1:])
+            break
+        label = source[start + 1:position - 1].strip(' [](){}"')
+        if label:
+            labels.append(label)
+        masked[start:position] = " " * (position - start)
+    remaining = "".join(masked)
+    for pattern in (r"\|([^|\n]+)\|", r"(?:--|==|\-\.)(?!>)\s*(.+?)\s*(?:-->|==>|\.->)"):
+        for match in re.finditer(pattern, remaining):
+            labels.append(match.group(1).strip(' "'))
+            masked[match.start():match.end()] = " " * (match.end() - match.start())
+    for line in "".join(masked).splitlines()[1:]:
+        subgraph = re.match(r"\s*subgraph\s+(.*)", line)
+        if subgraph:
+            display = subgraph.group(1).strip()
+            display = re.sub(r"^[A-Za-z_]\w*\s+", "", display)
+            if display and not re.fullmatch(r"[A-Za-z_]\w*", display):
+                labels.append(display)
+            continue
+        # Bare Chinese node names are displayed; ASCII node IDs and numeric
+        # suffixes on internal IDs are not project quantities.
+        for token in re.split(r"\s+|[-=~.]+>|[;&|]", line):
+            if re.search(r"[\u3400-\u9fff]", token):
+                labels.append(token.strip(' "'))
+    return labels
+
+
+_DIAGRAM_STATE = re.compile(
+    r"已(?:经)?(?:选型|部署|实现|满足|采用|选用|接入|上线|建成|配置|建立|具备|完成|启用|落实)|"
+    r"(?:选型|部署|配置|建设|实施)(?:已)?(?:确定|确认|完成)|既定选型|最终选型|"
+    r"(?:现有|既有)(?=.{0,20}(?:能力|组件|系统|平台|服务|机制|认证|审计))")
+_DIAGRAM_UNCONFIRMED = re.compile(
+    r"候选|可选|备选|拟(?:采用|部署|选用|建立|实施)|计划|建议|设计目标|建设目标|"
+    r"(?:选型|部署|配置|建设|实施)(?:确定|确认|完成)(?:后|时)|"
+    r"并非|并未|不是|不代表|不证明|不等于|无法确认|不能确认")
+
+
+def _diagram_state_clauses(text: str) -> list[str]:
+    # Keep qualifiers local to their own assertion, including a second status
+    # assertion joined without punctuation. A pending node cannot qualify any
+    # other displayed node, edge, caption or message.
+    return [part.strip() for part in re.split(
+        r"[。！？!?；;\n，,]|(?:但是|然而|同时|并且|以及|但|而|且|并|及)"
+        r"(?=(?:本项目|该项目)?(?:已|既定|最终|现有|既有))",
+        text) if part.strip()]
+
+
+def _diagram_state_text(text: str) -> str:
+    text = re.sub(r"\s+|[：:、()（）\"]", "", text).replace("已经", "已")
+    # Caption framing is not part of a state assertion; retain the component,
+    # action and scope instead of comparing only the anchored component name.
+    text = re.sub(r"^(?:本项目图示|本项目|该项目|图示)", "", text)
+    return re.sub(r"(?:示意图|流程图|架构图)$", "", text)
+
+
+def _unsupported_diagram_state_claims(visible: list[str], texts: list[str]) -> list[dict]:
+    """A cited candidate component is not evidence that it is already deployed.
+
+    Literal confirmed assertions are deliberately required here. Entity/anchor
+    overlap alone cannot establish selection, deployment or achieved capability.
+    This guard only checks stated existing facts; imperative design steps such
+    as implementing authentication or recording audits remain design steps.
+    """
+    confirmed = [_diagram_state_text(clause)
+                 for text in texts for clause in _diagram_state_clauses(text)
+                 if _DIAGRAM_STATE.search(clause) and not _pending(clause)
+                 and not _DIAGRAM_UNCONFIRMED.search(clause)
+                 and any(clause == accepted for accepted, _ in _evidence(clause))]
+    issues = []
+    for index, text in enumerate(visible):
+        for clause in _diagram_state_clauses(text):
+            if (not _DIAGRAM_STATE.search(clause) or _pending(clause)
+                    or _DIAGRAM_UNCONFIRMED.search(clause)):
+                continue
+            assertion = _diagram_state_text(clause)
+            if any(assertion in fact for fact in confirmed):
+                continue
+            issues.append({"code": "unsupported_diagram_state", "paragraph_index": index,
+                "claim": clause,
+                "correction": "该图可见的已选型、已部署或已实现等既有事实缺少本图引用正文中的已确认依据；"
+                              "保留候选、拟采用、待确认或条件限定，不能仅凭锚点组件名称证明既有状态。"})
+    return issues
+
+
+def _validate_diagram_content(item: dict, evidence: dict) -> None:
+    texts = [evidence[ref]["text"] for ref in item["evidence_block_ids"]]
+    # Conditional/pending statements may be drawn as such, but their numbers
+    # must not become a whitelist for an unqualified caption or node label.
+    confirmed = [clause for clause, _ in _evidence("\n".join(texts))]
+    visible = [item["title"], item["description"], item["anchor_text"],
+               *_diagram_visible_labels(item["source"])]
+    # Internal identifiers belong in metadata, never in rendered captions or labels.
+    leaked = [{"code": "body_source_identifier", "paragraph_index": index,
+               "claim": text, "correction": "删除可见文字中的内部图表标识，使用自然语言名称。"}
+              for index, text in enumerate(visible)
+              if re.search(r"DIAGRAM_\d+_(?:FIGURE|HEADING|NOTE)(?![A-Za-z0-9_])", text)]
+    # Human figure/outline numbering is not a project parameter.
+    visible = [re.sub(r"(?<=图)\d{1,3}(?=$|待(?:核对|确认)|[：:.\s])", "", text) for text in visible]
+    visible[0] = re.sub(r"((?:分图|示意图|流程图|架构图|设计|流程|架构|图))\d{1,3}$", r"\1", visible[0])
+    issues = leaked + inspect_content_quality(visible, project_facts=texts, source_context=texts)
+    issues.extend(_unsupported_diagram_state_claims(visible, texts))
+    issues.extend(unsupported_numeric_claims(visible, project_facts=confirmed, source_context=texts))
+    # Short labels such as “数据孤岛” still make a project assertion even when
+    # the subject is implicit. Preserve literal support from reviewed clauses.
+    contextual = inspect_content_quality(["本项目图示：" + text for text in visible],
+        project_facts=["本项目图示：" + text for text in confirmed])
+    issues.extend(issue for issue in contextual
+                  if issue["code"] in {"unsupported_project_status", "unsupported_capability_claim"})
+    if issues:
+        fields = ["title", "description", "anchor_text"]
+        for issue in issues:
+            index = issue["paragraph_index"]
+            issue.update(figure_id=item["figure_id"], field=fields[index] if index < 3 else "source_label",
+                         visible_text=visible[index])
+        error = ValueError(f"diagram content quality: {issues[0]['code']}: {issues[0]['claim']}")
+        error.quality_issues = issues
+        raise error
+
+
 def validate_diagram_batch(payload: dict, figures: list[dict], paragraphs: list[dict]) -> list[dict]:
     if not isinstance(payload, dict) or set(payload) != {"diagrams"} or not isinstance(payload["diagrams"], list):
         raise ValueError("invalid diagram model output")
@@ -120,6 +292,7 @@ def validate_diagram_batch(payload: dict, figures: list[dict], paragraphs: list[
         normalized = re.sub(r"\s+", "", source)
         if normalized in sources:
             raise ValueError("duplicate diagram source")
+        _validate_diagram_content(item, evidence)
         seen.add(identifier)
         sources.add(normalized)
     if seen != expected:

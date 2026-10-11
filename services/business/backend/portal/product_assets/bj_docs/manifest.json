@@ -61,22 +61,22 @@
     {
       "path": "scripts/contract.py",
       "source": "skills/bj-docs/scripts/contract.py",
-      "sha256": "a559c5e74327ffed6f2bd3d59a6d6b0fbde56ee723b0646109d1bca768673e0f",
-      "bytes": 6033,
+      "sha256": "77b7c2d88e305e26ca6e4305d3f199507435a2d1c84cc4a3bf858e0f09c041a8",
+      "bytes": 5938,
       "source_status": " M skills/bj-docs/scripts/contract.py"
     },
     {
       "path": "scripts/ooxml.py",
       "source": "skills/bj-docs/scripts/ooxml.py",
-      "sha256": "7802466984ed7a26a2ebe9007bcd38f43028d7c42849adef7a7eb9eab8da251a",
-      "bytes": 21765,
+      "sha256": "b1793c00d681a770ac3eb2ab8f55dde2f09d18888bd79d2aa6808c7fc9220b22",
+      "bytes": 21600,
       "source_status": " M skills/bj-docs/scripts/ooxml.py"
     },
     {
       "path": "scripts/prototypes.py",
       "source": "skills/bj-docs/scripts/prototypes.py",
-      "sha256": "f42da4d1ffaa2a1e4c4b1a39526d0cf71dcd9eb447da969baf005f8567237ef8",
-      "bytes": 7707,
+      "sha256": "7bf6baa53b1d7e35356485d6c18af3be93c654b4637f95a7bfb133bd30216f73",
+      "bytes": 7546,
       "source_status": "clean"
     },
     {
@@ -96,8 +96,8 @@
     {
       "path": "scripts/office_render.py",
       "source": "skills/bj-docs/scripts/office_render.py",
-      "sha256": "1f93daa6df29c6db7c142bac10150de150db85b2a584f4ce065e7390ecdd5693",
-      "bytes": 12932,
+      "sha256": "6d0ef53545087b4b7ad80c64ccd06450f5139538dc74e072698e67fad36589b2",
+      "bytes": 12768,
       "source_status": " M skills/bj-docs/scripts/office_render.py"
     },
     {

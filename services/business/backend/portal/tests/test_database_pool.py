@@ -68,6 +68,9 @@ class DatabasePoolConfigurationTests(SimpleTestCase):
             self.assertEqual(postgres_pool_evidence(SQLite()), {"enabled": False, "scope": "not_postgresql"})
 
     def test_pressure_identity_rejects_disabled_changed_missing_and_sensitive_fields(self):
+        import sys
+        from pathlib import Path
+        sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
         from importlib.metadata import version
         from qa.release_acceptance.run import validate_database_pool_identity
         good = {"database_kind": "postgresql", "database_pool": {

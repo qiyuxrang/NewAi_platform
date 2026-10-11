@@ -1,0 +1,199 @@
+name: aicompany-cloud
+
+x-business: &business
+  image: aicompany-business:${RELEASE_TAG:-cloud-20261011}
+  build:
+    context: ../..
+    dockerfile: deploy/cloud/business.Dockerfile
+  env_file: .env
+  environment: &business-environment
+    PORTAL_DEBUG: "0"
+    PORTAL_HTTPS: "1"
+    PORTAL_BEHIND_PROXY: "1"
+    PORTAL_ALLOWED_HOSTS: ${PORTAL_DOMAIN:?Set PORTAL_DOMAIN},portal
+    PORTAL_CSRF_TRUSTED_ORIGINS: https://${PORTAL_DOMAIN:?Set PORTAL_DOMAIN}
+    PORTAL_DB_NAME: enterprise_portal
+    PORTAL_DB_USER: ${POSTGRES_USER:?Set POSTGRES_USER}
+    PORTAL_DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    PORTAL_DB_HOST: postgres
+    PORTAL_MODEL_GATEWAY_URL: http://model-gateway:18410
+    PORTAL_MODEL_GATEWAY_ALLOWED_URLS: http://model-gateway:18410
+    PORTAL_MODEL_GATEWAY_TOKEN: ${MODEL_GATEWAY_SERVICE_TOKEN:?Set MODEL_GATEWAY_SERVICE_TOKEN}
+    PORTAL_PRODUCT_P1_ENABLED: "1"
+    PORTAL_PRODUCT_PARSER_PYTHON: /opt/product-parser/bin/python
+    PORTAL_PRODUCT_DOCUMENT_PYTHON: /usr/local/bin/python
+    PORTAL_PRODUCT_STORAGE_ROOT: /data/product
+    PORTAL_HR_STORAGE_ROOT: /data/hr
+    PORTAL_TENDER_STORAGE_ROOT: /data/tender
+    PORTAL_ENGINEERING_STORAGE_ROOT: /data/engineering
+    PORTAL_PRODUCT_IMPORT_ROOTS: /data/imports
+    PORTAL_PRODUCT_OFFICE_RENDER_ENABLED: "1"
+    PORTAL_PRODUCT_OFFICE_RENDERER: libreoffice
+    PORTAL_PRODUCT_LIBREOFFICE_EXECUTABLE: /usr/bin/libreoffice
+    PORTAL_PRODUCT_UNO_PYTHON: /usr/bin/python3
+    PORTAL_MERMAID_NODE: /usr/local/bin/node
+    PORTAL_MERMAID_CHROMIUM: /usr/bin/chromium
+    PORTAL_PRODUCT_FORMAL_RELEASE_ENABLED: "0"
+    PORTAL_ENGINEERING_PYTHON: /usr/local/bin/python
+    PORTAL_ENGINEERING_COST_CLI: /app/services/engineering/tools/cost_skill.py
+  volumes:
+    - business_data:/data
+    - portal_static:/app/services/business/staticfiles
+  networks: [internal, outbound]
+  init: true
+  restart: unless-stopped
+  stop_grace_period: 45s
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?Set POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+      POSTGRES_DB: platform
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./postgres-init.sh:/docker-entrypoint-initdb.d/10-enterprise.sh:ro
+    networks: [internal]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+
+  portal-init:
+    <<: *business
+    command: [init]
+    restart: "no"
+    profiles: [setup]
+    depends_on:
+      postgres: {condition: service_healthy}
+
+  portal:
+    <<: *business
+    command: [portal]
+    depends_on:
+      postgres: {condition: service_healthy}
+      model-gateway: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, python, -c, 'import urllib.request; r=urllib.request.Request("http://127.0.0.1:8100/health/",headers={"Host":"portal","X-Forwarded-Proto":"https"}); urllib.request.urlopen(r,timeout=5)']
+      interval: 15s
+      timeout: 8s
+      retries: 10
+
+  model-gateway:
+    <<: *business
+    command: [model-gateway]
+    healthcheck:
+      test: [CMD, python, -c, 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:18410/health",timeout=5)']
+      interval: 15s
+      timeout: 8s
+      retries: 10
+
+  product-worker:
+    <<: *business
+    command: [product-worker]
+    shm_size: 1gb
+    mem_limit: ${PRODUCT_WORKER_MEMORY:-4g}
+    depends_on:
+      portal: {condition: service_healthy}
+
+  hr-worker:
+    <<: *business
+    command: [hr-worker]
+    profiles: [departments]
+    depends_on:
+      portal: {condition: service_healthy}
+
+  engineering-worker:
+    <<: *business
+    command: [engineering-worker]
+    profiles: [departments]
+    depends_on:
+      portal: {condition: service_healthy}
+
+  gateway:
+    image: aicompany-gateway:${RELEASE_TAG:-cloud-20261011}
+    build:
+      context: ../..
+      dockerfile: deploy/cloud/gateway.Dockerfile
+    env_file: .env
+    environment:
+      PLATFORM_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:?Set POSTGRES_USER}:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@postgres:5432/platform
+      PLATFORM_PORTAL_BASE_URL: https://${PORTAL_DOMAIN:?Set PORTAL_DOMAIN}
+      PLATFORM_CORS_ORIGINS: https://${APP_DOMAIN:?Set APP_DOMAIN},https://${ADMIN_DOMAIN:?Set ADMIN_DOMAIN}
+      PLATFORM_SHARED_OPENCLAW_ENABLED: "false"
+      PLATFORM_CONTAINER_HOST_ACCESS: "false"
+      PLATFORM_CONTAINER_NETWORK: aicompany-cloud-internal
+      PLATFORM_CONTAINER_PROXY_URL: http://gateway:8080/llm/v1
+      PLATFORM_CONTAINER_MCP_URL: http://gateway:8080/api/enterprise/mcp
+      PLATFORM_USER_CONTAINER_PUBLISH_PORTS: "false"
+      PLATFORM_CONTAINER_DATA_DIR: /data/openclaw-users
+      PLATFORM_PUBLIC_BASE_URL: https://${APP_DOMAIN:?Set APP_DOMAIN}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - agent_data:/data/openclaw-users
+    networks:
+      internal:
+        aliases: [openclaw-gateway]
+      outbound: {}
+    depends_on:
+      postgres: {condition: service_healthy}
+    healthcheck:
+      test: [CMD, python, -c, 'import urllib.request; urllib.request.urlopen("http://127.0.0.1:8080/api/ping",timeout=5)']
+      interval: 15s
+      timeout: 8s
+      retries: 10
+    restart: unless-stopped
+
+  frontend:
+    image: aicompany-frontend:${RELEASE_TAG:-cloud-20261011}
+    build:
+      context: ../..
+      dockerfile: deploy/cloud/frontend.Dockerfile
+      args:
+        VITE_ADMIN_URL: https://${ADMIN_DOMAIN:?Set ADMIN_DOMAIN}
+    networks: [internal]
+    depends_on:
+      gateway: {condition: service_healthy}
+    restart: unless-stopped
+
+  management:
+    image: aicompany-management:${RELEASE_TAG:-cloud-20261011}
+    build:
+      context: ../..
+      dockerfile: deploy/cloud/management.Dockerfile
+    environment:
+      API_URL: http://gateway:8080
+    networks: [internal]
+    depends_on:
+      gateway: {condition: service_healthy}
+    restart: unless-stopped
+
+  edge:
+    image: caddy:2-alpine
+    env_file: .env
+    ports: ["80:80", "443:443", "443:443/udp"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./portal-access.html:/srv/portal-access.html:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    networks: [internal, outbound]
+    depends_on: [frontend, management, portal]
+    restart: unless-stopped
+
+networks:
+  internal:
+    name: aicompany-cloud-internal
+    driver: bridge
+  outbound: {}
+
+volumes:
+  postgres_data: {}
+  business_data: {}
+  portal_static: {}
+  agent_data: {}
+  caddy_data: {}
+  caddy_config: {}

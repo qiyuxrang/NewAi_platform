@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { CenterLink } from "../shared";
-import { EmptyState, formatDate, goProduct, LoadState, ProductIcon, projectUrl, stageNames, useProductOverview } from "./workbench-shared";
+import { EmptyState, LoadState, ProductIcon } from "./workbench-shared";
+import { formatDate, goProduct, projectUrl, stageNames, useProductOverview } from "./workbench-state";
 import "./project-workbench.css";
 import "./product-clean-layout.css";
 

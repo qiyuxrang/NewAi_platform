@@ -7,8 +7,9 @@ from pathlib import Path
 
 from django.conf import settings
 
-from .product_documents import PACK, DocumentError, _document_runtime, _safe_environment, frozen_pack
+from .product_documents import PACK, DocumentError, _document_runtime, _office_command, _safe_environment, frozen_pack
 from .product_storage import private_root
+from .product_office_runtime import run_office
 
 
 def _sha256(path):
@@ -25,7 +26,7 @@ def _private_docx(artifact_path, artifact_sha256):
     relative = Path(os.fspath(artifact_path))
     expected = artifact_sha256.lower()
     if (relative.is_absolute() or not relative.parts or ".." in relative.parts or "\x00" in str(relative)
-            or relative.suffix.lower() != ".docx" or len(expected) != 64
+            or relative.suffix.lower() not in {".docx", ".pptx"} or len(expected) != 64
             or any(character not in "0123456789abcdef" for character in expected)):
         raise DocumentError("invalid_artifact_path")
     root = private_root().resolve()
@@ -47,6 +48,8 @@ def _unchanged(target, expected):
 
 def _report(directory):
     try:
+        if (directory / "render.json").is_symlink():
+            raise ValueError
         value = json.loads((directory / "render.json").read_text(encoding="utf-8"))
     except (OSError, UnicodeError, ValueError):
         raise DocumentError("office_render_invalid_output") from None
@@ -71,6 +74,29 @@ def _relative_evidence(root, path, sha256):
     return {"path": target.relative_to(root).as_posix(), "sha256": sha256}
 
 
+def _validated_outputs(directory, report, source_sha256, kind):
+    if (report.get("rendered") is not True or report.get("structural_pass") is not True
+            or report.get("visually_reviewed") is not False):
+        raise DocumentError("office_render_failed")
+    page_count = report.get("page_count")
+    if type(page_count) is not int or not 1 <= page_count <= 10000:
+        raise DocumentError("office_render_invalid_output")
+    pdf = directory / ("document.pdf" if kind == "word" else "slides.pdf")
+    pages = [directory / f"page-{index:03}.png" for index in range(1, page_count + 1)]
+    if set(pages) != set(directory.glob("page-*.png")):
+        raise DocumentError("office_render_invalid_output")
+    pdf_sha256 = _output(pdf, b"%PDF-")
+    page_hashes = [_output(page, b"\x89PNG\r\n\x1a\n") for page in pages]
+    if (report.get("input_sha256") != source_sha256 or report.get("pdf_sha256") != pdf_sha256
+            or report.get("image_sha256", page_hashes) != page_hashes):
+        raise DocumentError("office_render_invalid_output")
+    reviewed = directory / "reviewed.docx" if kind == "word" else None
+    reviewed_sha256 = _output(reviewed, b"PK") if reviewed else None
+    if reviewed and report.get("rendered_docx_sha256") != reviewed_sha256:
+        raise DocumentError("office_render_invalid_output")
+    return pdf, pdf_sha256, pages, page_hashes, reviewed, reviewed_sha256
+
+
 def render_office(artifact_path, artifact_sha256):
     if not getattr(settings, "PRODUCT_OFFICE_RENDER_ENABLED", False):
         raise DocumentError("office_render_disabled")
@@ -80,18 +106,27 @@ def render_office(artifact_path, artifact_sha256):
     except DocumentError:
         raise DocumentError("office_render_unavailable") from None
     root, source, source_sha256 = _private_docx(artifact_path, artifact_sha256)
+    kind = "word" if source.suffix.lower() == ".docx" else "powerpoint"
     parent = (root / "office-renders").resolve()
     if not parent.is_relative_to(root):
         raise DocumentError("office_render_unavailable")
     parent.mkdir(parents=True, exist_ok=True)
     directory = parent / uuid.uuid4().hex
     timeout = int(getattr(settings, "PRODUCT_OFFICE_RENDER_TIMEOUT_SECONDS", 300))
-    command = [str(runtime), "-B", str(PACK / "scripts" / "office_render.py"), "word", str(source), str(directory), "--timeout", str(timeout)]
+    command = _office_command(runtime, source, directory, timeout, kind=kind)
+    renderer = getattr(settings, "PRODUCT_OFFICE_RENDERER", "word")
+    script = (PACK / "scripts" / "office_render.py" if renderer == "word" else
+              Path(__file__).parent / "product_assets" / "libreoffice_render.py")
     try:
-        result = subprocess.run(
+        script_hash = _sha256(script)
+    except OSError:
+        raise DocumentError("office_render_unavailable") from None
+    try:
+        result = run_office(
             command, cwd=parent, env=_safe_environment(), capture_output=True, text=True,
             encoding="utf-8", errors="replace", timeout=timeout + 15,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            linux=getattr(settings, "PRODUCT_OFFICE_RENDERER", "word") == "libreoffice",
         )
     except subprocess.TimeoutExpired:
         _unchanged(source, source_sha256)
@@ -100,6 +135,11 @@ def render_office(artifact_path, artifact_sha256):
         _unchanged(source, source_sha256)
         raise DocumentError("office_render_unavailable") from None
     _unchanged(source, source_sha256)
+    try:
+        if _sha256(script) != script_hash:
+            raise DocumentError("office_render_invalid_output")
+    except OSError:
+        raise DocumentError("office_render_invalid_output") from None
     if result.returncode != 0:
         try:
             report = _report(directory)
@@ -108,38 +148,29 @@ def render_office(artifact_path, artifact_sha256):
         failure = json.dumps(report.get("unverified_items", []), ensure_ascii=False).lower()
         raise DocumentError("office_render_timeout" if "timed out" in failure else "office_render_failed")
     report = _report(directory)
-    if report.get("rendered") is not True or report.get("structural_pass") is not True:
-        raise DocumentError("office_render_failed")
-    page_count = report.get("page_count")
-    if isinstance(page_count, bool) or not isinstance(page_count, int) or page_count < 1:
+    pdf, pdf_sha256, pages, page_hashes, rendered_docx, rendered_docx_sha256 = _validated_outputs(
+        directory, report, source_sha256, kind)
+    if renderer == "word" and script_hash != next(
+            entry["sha256"] for entry in manifest["files"] if entry["path"] == "scripts/office_render.py"):
         raise DocumentError("office_render_invalid_output")
-    pdf = directory / "document.pdf"
-    rendered_docx = directory / "reviewed.docx"
-    pages = [directory / f"page-{index:03}.png" for index in range(1, page_count + 1)]
-    if set(pages) != set(directory.glob("page-*.png")):
-        raise DocumentError("office_render_invalid_output")
-    pdf_sha256 = _output(pdf, b"%PDF-")
-    rendered_docx_sha256 = _output(rendered_docx, b"PK")
-    page_hashes = [_output(page, b"\x89PNG\r\n\x1a\n") for page in pages]
-    if report.get("input_sha256") != source_sha256:
-        raise DocumentError("office_render_invalid_output")
-    if report.get("pdf_sha256") not in (None, pdf_sha256) or report.get("rendered_docx_sha256") not in (None, rendered_docx_sha256):
-        raise DocumentError("office_render_invalid_output")
-    office_script = next(entry for entry in manifest["files"] if entry["path"] == "scripts/office_render.py")
-    return {
+    evidence = {
         "status": "rendered",
         "verified": False,
-        "docx_sha256": rendered_docx_sha256,
         "generation_sha256": source_sha256,
         "generation": _relative_evidence(root, source, source_sha256),
-        "page_count": page_count,
+        "page_count": report["page_count"],
         "pdf": _relative_evidence(root, pdf, pdf_sha256),
         "pages": [{"page": index, **_relative_evidence(root, page, sha256)}
                   for index, (page, sha256) in enumerate(zip(pages, page_hashes), start=1)],
-        "rendered_docx": {
+        "visual_review": "not_run",
+        "office_render_script_sha256": script_hash,
+        "renderer": renderer,
+    }
+    if rendered_docx:
+        evidence.update(docx_sha256=rendered_docx_sha256, rendered_docx={
             **_relative_evidence(root, rendered_docx, rendered_docx_sha256),
             "differs_from_input": rendered_docx_sha256 != source_sha256,
-        },
-        "visual_review": "not_run",
-        "office_render_script_sha256": office_script["sha256"],
-    }
+        })
+    else:
+        evidence["pptx_sha256"] = source_sha256
+    return evidence

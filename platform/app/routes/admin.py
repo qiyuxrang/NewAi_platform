@@ -7,7 +7,7 @@ from typing import Annotated, Literal
 
 import docker
 from docker.errors import NotFound as DockerNotFound
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, SecretStr, field_validator
 from sqlalchemy import cast, Date, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -74,7 +74,15 @@ class UpdateUserRequest(BaseModel):
 
 
 class ResetPasswordRequest(BaseModel):
-    new_password: str
+    model_config = ConfigDict(extra="forbid")
+    new_password: str = Field(min_length=8, max_length=72)
+
+    @field_validator("new_password")
+    @classmethod
+    def password_bytes(cls, value):
+        if len(value.encode()) > 72:
+            raise ValueError("Password must be at most 72 UTF-8 bytes")
+        return value
 
 
 class CreateUserRequest(UpdateUserRequest):
@@ -164,8 +172,8 @@ async def _sync_container_status(db: AsyncSession, docker_id: str, db_status: st
 @router.get("/users", response_model=PaginatedUsers)
 async def list_users(
     search: str | None = None,
-    page: int = 1,
-    page_size: int = 20,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
     db: AsyncSession = Depends(get_db),
 ):
     today_start = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
@@ -338,7 +346,8 @@ async def reset_user_password(
     if user is None:
         raise HTTPException(status_code=404, detail="User not found")
     await db.execute(
-        update(User).where(User.id == user_id).values(password_hash=hash_password(req.new_password))
+        update(User).where(User.id == user_id).values(
+            password_hash=hash_password(req.new_password), portal_session_enc=None)
     )
     await write_audit_log(
         db,
@@ -486,13 +495,16 @@ async def usage_summary(db: AsyncSession = Depends(get_db)):
     )).scalar_one()
     total_users = (await db.execute(select(func.count(User.id)))).scalar_one()
     
-    # Get containers with real running status from Docker
+    tracked_ids = set((await db.execute(select(Container.docker_id).where(
+        Container.docker_id.is_not(None)))).scalars().all())
+    # Count only this platform's registered containers, and preserve a real zero.
+    real_running = None
     try:
         client = docker.from_env()
         all_containers = client.containers.list(all=True)
-        real_running = sum(1 for c in all_containers if c.status == "running")
+        real_running = sum(1 for c in all_containers if c.id in tracked_ids and c.status == "running")
     except Exception:
-        real_running = 0
+        pass
     
     # Fallback to DB status if Docker query fails
     db_active = (await db.execute(
@@ -502,13 +514,15 @@ async def usage_summary(db: AsyncSession = Depends(get_db)):
     return {
         "total_tokens_today": total_today,
         "total_users": total_users,
-        "active_containers": real_running or db_active,
+        "active_containers": real_running if real_running is not None else db_active,
+        "container_status_verified": real_running is not None,
+        "recorded_active_containers": db_active,
     }
 
 
 @router.get("/usage/history")
 async def usage_history(
-    days: int = 30,
+    days: int = Query(30, ge=1, le=366),
     user_id: str | None = None,
     db: AsyncSession = Depends(get_db),
 ):
@@ -593,8 +607,8 @@ class PaginatedAuditLogs(BaseModel):
 
 @router.get("/audit", response_model=PaginatedAuditLogs)
 async def list_audit_logs(
-    page: int = 1,
-    page_size: int = 20,
+    page: int = Query(1, ge=1),
+    page_size: int = Query(20, ge=1, le=200),
     user_id: str | None = None,
     action: str | None = None,
     db: AsyncSession = Depends(get_db),

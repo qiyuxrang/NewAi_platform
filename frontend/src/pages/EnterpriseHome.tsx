@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import { ArrowRight, MessageSquare } from 'lucide-react'
-import { EnterpriseAccountStatus, useEnterprise } from '../components/EnterpriseContext'
+import { EnterpriseAccountStatus } from '../components/EnterpriseContext'
+import { useEnterprise } from '../components/enterprise-context'
 import { availableDepartments, departmentPath } from '../enterprise-navigation'
 
 export default function EnterpriseHome() {

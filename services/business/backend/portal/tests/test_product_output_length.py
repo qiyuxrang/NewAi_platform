@@ -55,7 +55,7 @@ class ProductOutputLengthTests(PortalTestCase):
     def test_formal_families_continue_in_bounded_parts_and_meet_exact_minimum(self, model):
         for family, minimum in (("technical-solution", 50000), ("feasibility", 70000)):
             model.reset_mock()
-            def reply(*args):
+            def reply(*args, **kwargs):
                 payload = args[-1]
                 length = payload["length_target"]["this_response_characters"]
                 self.assertLessEqual(length, 2400)

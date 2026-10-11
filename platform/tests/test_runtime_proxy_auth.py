@@ -7,6 +7,7 @@ import asyncio
 import json
 import sys
 import unittest
+import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
@@ -25,8 +26,22 @@ from app.routes import proxy
 
 
 class ProxyAuthTests(unittest.TestCase):
+    def test_password_reset_blocks_sse_file_and_both_websocket_entrypoints(self):
+        from starlette.websockets import WebSocketDisconnect
+        token = self.token('alice')
+        self.users['alice'].password_hash = 'changed-credential'
+        for endpoint in ('events/stream', 'filemanager/serve', 'filemanager/download'):
+            response = self.client.get('/api/openclaw/'+endpoint+'?token='+token)
+            self.assertIn(response.status_code, (401, 403))
+        for endpoint in ('ws', 'terminal/ws'):
+            with self.assertRaises(WebSocketDisconnect) as error:
+                with self.client.websocket_connect('/api/openclaw/'+endpoint+'?token='+token):
+                    pass
+            self.assertEqual(error.exception.code, 4001)
+        self.assertEqual(self.requests, [])
+
     def setUp(self):
-        self.users = {name: SimpleNamespace(id=name, role="admin", business_role="employee", is_active=True, runtime_mode="dedicated") for name in ("alice", "bob")}
+        self.users = {name: SimpleNamespace(id=name, role="admin", business_role="employee", is_active=True, runtime_mode="dedicated", password_hash="unused") for name in ("alice", "bob")}
         self.containers = {name: SimpleNamespace(user_id=name, internal_host=name + ".test", internal_port=18080, container_token="test-only-container-" + name) for name in self.users}
         self.requests = []
         self.http_clients = []
@@ -86,7 +101,7 @@ class ProxyAuthTests(unittest.TestCase):
 
     @staticmethod
     def token(name):
-        return create_access_token(name, "admin")
+        return create_access_token(name, "admin", "unused")
 
     def test_http_and_abort_route_use_own_container_tokens(self):
         for name in self.users:
@@ -183,6 +198,152 @@ class ProxyAuthTests(unittest.TestCase):
         with patch.object(settings, "dev_openclaw_url", "http://dev.test:18080"), patch.object(settings, "dev_bridge_token", "explicit-test-dev-token"):
             self.assertEqual(asyncio.run(proxy._container_target(self.db, self.users["alice"])),
                 ("http://dev.test:18080", {"Authorization": "Bearer explicit-test-dev-token"}))
+
+
+class EstablishedWebSocketRevocationTests(unittest.IsolatedAsyncioTestCase):
+    """Real file SQLite plus live ASGI relay queues, without mocked identity reads."""
+
+    async def asyncSetUp(self):
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import Session
+        from app.db.models import Base, User
+        self.directory = tempfile.TemporaryDirectory()
+        self.engine = create_engine('sqlite:///'+str(Path(self.directory.name)/'identity.sqlite3'))
+        Base.metadata.create_all(self.engine)
+        with Session(self.engine) as db:
+            db.add(User(id='live-admin',username='live-admin',email='live@example.com',
+                        role='admin',password_hash='initial-credential'))
+            db.commit()
+        self.active_sessions=0
+        self.session_opens=0
+        self.identity_unavailable=False
+        self.patches=[patch.object(proxy,'async_session',self.real_session),
+                      patch.object(proxy,'WEBSOCKET_IDENTITY_INTERVAL_SECONDS',.02),
+                      patch.object(proxy,'WEBSOCKET_IDENTITY_TIMEOUT_SECONDS',.2),
+                      patch.object(proxy,'_container_target',AsyncMock(return_value=(
+                          'http://isolated-bridge:18080',{'Authorization':'Bearer synthetic-bridge'})))]
+        for item in self.patches:item.start()
+
+    async def asyncTearDown(self):
+        for item in reversed(self.patches):item.stop()
+        self.engine.dispose()
+        self.directory.cleanup()
+
+    @asynccontextmanager
+    async def real_session(self):
+        from sqlalchemy.orm import Session
+        if self.identity_unavailable:raise OSError('synthetic identity store outage')
+        class Adapter:
+            def __init__(self,session):self.session=session
+            async def execute(self,statement):return self.session.execute(statement)
+        with Session(self.engine) as session:
+            self.active_sessions+=1
+            self.session_opens+=1
+            try:yield Adapter(session)
+            finally:self.active_sessions-=1
+
+    def change_user(self,**values):
+        from sqlalchemy import update
+        from sqlalchemy.orm import Session
+        from app.db.models import User
+        with Session(self.engine) as db:
+            db.execute(update(User).where(User.id=='live-admin').values(**values))
+            db.commit()
+
+    async def scenario(self,endpoint,mutation,expected_code,send_after=False):
+        from starlette.websockets import WebSocket
+        self.identity_unavailable=False
+        self.change_user(password_hash='initial-credential',role='admin',is_active=True)
+        browser_in,browser_out=asyncio.Queue(),asyncio.Queue()
+        upstream_in=asyncio.Queue()
+        forwarded=[]
+        closed=asyncio.Event()
+        class EchoUpstream:
+            async def send(self,message):
+                forwarded.append(message)
+                await upstream_in.put(message)
+            async def close(self):closed.set()
+            async def messages(self):
+                while True:yield await upstream_in.get()
+            def __aiter__(self):return self.messages()
+        socket=WebSocket({'type':'websocket','path':'/api/openclaw/'+endpoint},
+                         browser_in.get,browser_out.put)
+        token=create_access_token('live-admin','admin','initial-credential')
+        route=proxy.proxy_websocket if endpoint=='ws' else proxy.proxy_terminal_websocket
+        await browser_in.put({'type':'websocket.connect'})
+        with patch('websockets.legacy.client.connect',AsyncMock(return_value=EchoUpstream())):
+            task=asyncio.create_task(route(socket,token))
+            try:
+                accepted=await asyncio.wait_for(browser_out.get(),1)
+                self.assertEqual(accepted['type'],'websocket.accept')
+                await browser_in.put({'type':'websocket.receive','text':'authorized-command'})
+                echoed=await asyncio.wait_for(browser_out.get(),1)
+                self.assertEqual(echoed,{'type':'websocket.send','text':'authorized-command'})
+                # A live idle connection releases every identity checkout.
+                await asyncio.sleep(.03)
+                self.assertEqual(self.active_sessions,0)
+                self.assertGreaterEqual(self.session_opens,3)
+                mutation()
+                if send_after:
+                    await browser_in.put({'type':'websocket.receive','text':'revoked-command'})
+                message=await asyncio.wait_for(browser_out.get(),1)
+                self.assertEqual(message['type'],'websocket.close')
+                self.assertEqual(message['code'],expected_code)
+                await asyncio.wait_for(task,1)
+                self.assertTrue(closed.is_set())
+                self.assertEqual(forwarded,['authorized-command'])
+                self.assertEqual(self.active_sessions,0)
+            finally:
+                if not task.done():
+                    task.cancel()
+                    await asyncio.gather(task,return_exceptions=True)
+
+    async def test_established_both_relays_close_after_password_reset(self):
+        for endpoint in ('ws','terminal/ws'):
+            await self.scenario(endpoint,lambda:self.change_user(password_hash='reset-credential'),4001)
+
+    async def test_established_both_relays_close_after_disable(self):
+        for endpoint in ('ws','terminal/ws'):
+            await self.scenario(endpoint,lambda:self.change_user(is_active=False),4001)
+
+    async def test_established_both_relays_close_after_admin_demotion(self):
+        for endpoint in ('ws','terminal/ws'):
+            await self.scenario(endpoint,lambda:self.change_user(role='user'),4003)
+
+    async def test_next_terminal_command_is_blocked_immediately_after_reset(self):
+        for endpoint in ('ws','terminal/ws'):
+            await self.scenario(endpoint,lambda:self.change_user(password_hash='reset-credential'),4001,send_after=True)
+
+    async def test_identity_store_outage_closes_established_both_relays(self):
+        for endpoint in ('ws','terminal/ws'):
+            await self.scenario(endpoint,lambda:setattr(self,'identity_unavailable',True),1013)
+
+    async def test_new_credential_connects_and_relays_after_previous_connection_revocation(self):
+        from starlette.websockets import WebSocket
+        for endpoint in ('ws','terminal/ws'):
+            await self.scenario(endpoint,lambda:self.change_user(password_hash='reset-credential'),4001)
+            incoming,outgoing=asyncio.Queue(),asyncio.Queue()
+            upstream_in=asyncio.Queue()
+            class FreshUpstream:
+                async def send(self,message):await upstream_in.put(message)
+                async def close(self):pass
+                async def messages(self):
+                    while True:yield await upstream_in.get()
+                def __aiter__(self):return self.messages()
+            socket=WebSocket({'type':'websocket','path':'/api/openclaw/'+endpoint},incoming.get,outgoing.put)
+            route=proxy.proxy_websocket if endpoint=='ws' else proxy.proxy_terminal_websocket
+            await incoming.put({'type':'websocket.connect'})
+            with patch('websockets.legacy.client.connect',AsyncMock(return_value=FreshUpstream())):
+                task=asyncio.create_task(route(socket,create_access_token('live-admin','admin','reset-credential')))
+                try:
+                    self.assertEqual((await asyncio.wait_for(outgoing.get(),1))['type'],'websocket.accept')
+                    await incoming.put({'type':'websocket.receive','text':'fresh-command'})
+                    self.assertEqual((await asyncio.wait_for(outgoing.get(),1))['text'],'fresh-command')
+                    await incoming.put({'type':'websocket.disconnect','code':1000})
+                    await asyncio.wait_for(task,1)
+                    self.assertEqual(self.active_sessions,0)
+                finally:
+                    if not task.done():task.cancel();await asyncio.gather(task,return_exceptions=True)
 
 
 if __name__ == "__main__":

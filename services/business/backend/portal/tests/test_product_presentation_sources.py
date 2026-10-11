@@ -13,7 +13,9 @@ SOURCE_MAX_BYTES = 16 * 1024 * 1024
 BLOCK_MAX_COUNT = 10000
 BACKEND = settings.BASE_DIR / "backend"
 SCRIPT = BACKEND / "portal/product_assets/simple_presentation.py"
-RUNTIME = settings.BASE_DIR / ".runtime/product-documents-python/Scripts/python.exe"
+RUNTIME = Path(settings.PRODUCT_DOCUMENT_PYTHON)
+if not RUNTIME.is_absolute():
+    RUNTIME = settings.BASE_DIR / RUNTIME
 
 
 def sources():

@@ -1,16 +1,7 @@
-import { createContext, useContext, useEffect, useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { getMe } from '../lib/api'
-import type { AuthUser } from '../lib/api'
-import type { EnterpriseAccess } from '../enterprise-navigation'
-
-type EnterpriseUser = AuthUser & EnterpriseAccess
-const EnterpriseContext = createContext<{
-  user: EnterpriseUser | null
-  loading: boolean
-  error: string
-  reload: () => void
-}>({ user: null, loading: true, error: '', reload: () => {} })
+import { EnterpriseContext, useEnterprise, type EnterpriseUser } from './enterprise-context'
 
 export function EnterpriseProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<EnterpriseUser | null>(null)
@@ -38,10 +29,6 @@ export function EnterpriseProvider({ children }: { children: ReactNode }) {
   }
 
   return <EnterpriseContext.Provider value={{ user, loading, error, reload }}>{children}</EnterpriseContext.Provider>
-}
-
-export function useEnterprise() {
-  return useContext(EnterpriseContext)
 }
 
 export function EnterpriseAccountStatus() {

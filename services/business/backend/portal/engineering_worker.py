@@ -131,6 +131,12 @@ def _invoke(config, command, paths, extra=(), webprice_key=""):
     environment = {key: os.environ[key] for key in SAFE_ENVIRONMENT if key in os.environ}
     environment.update({"DISABLE_WEB_LOOKUP": "1", "PYTHONIOENCODING": "utf-8",
                         "PYTHONDONTWRITEBYTECODE": "1"})
+    data_root = _configured("ENGINEERING_DATA_ROOT", "PORTAL_ENGINEERING_DATA_ROOT")
+    if data_root:
+        data_root = Path(data_root).expanduser()
+        if not data_root.is_absolute() or not data_root.is_dir():
+            raise WorkerUnavailable("Engineering data root must be an existing absolute directory")
+        environment["ENGINEERING_DATA_ROOT"] = str(data_root.resolve())
     if webprice_key:
         environment["DASHSCOPE_API_KEY"] = webprice_key
     arguments = [str(config["python"]), str(config["cli"]), command,

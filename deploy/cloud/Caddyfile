@@ -1,0 +1,39 @@
+{
+    email {$TLS_EMAIL}
+}
+
+{$APP_DOMAIN} {
+    encode gzip zstd
+    request_body {
+        max_size 200MB
+    }
+    reverse_proxy frontend:3000 {
+        flush_interval -1
+    }
+}
+
+{$ADMIN_DOMAIN} {
+    encode gzip zstd
+    reverse_proxy management:3000
+}
+
+{$PORTAL_DOMAIN} {
+    encode gzip zstd
+    request_body {
+        max_size 200MB
+    }
+    @access path /login /password
+    handle @access {
+        root * /srv
+        rewrite * /portal-access.html
+        header Cache-Control "no-store"
+        file_server
+    }
+    @backend path /admin /admin/* /api/* /static/* /health/
+    handle @backend {
+        reverse_proxy portal:8100
+    }
+    handle {
+        redir https://{$APP_DOMAIN} 302
+    }
+}

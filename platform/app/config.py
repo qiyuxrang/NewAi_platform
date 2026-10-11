@@ -82,6 +82,7 @@ class Settings(BaseSettings):
     # Platform gateway
     host: str = "0.0.0.0"
     port: int = 8080
+    cors_origins: str = "*"
 
     # Public-facing base URL (used to generate external access URLs in port mapping)
     public_base_url: str = "http://www.exmaple.com"

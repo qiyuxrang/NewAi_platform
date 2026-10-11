@@ -715,3 +715,42 @@ class WordFieldStagingTests(SimpleTestCase):
         self.assertEqual(result, {"status": "not_run", "reason": "office_render_disabled"})
         self.assertFalse((self.directory / "word-field-refresh").exists())
         self.assert_not_promoted()
+
+    def test_canonical_preview_binds_promoted_docx_pdf_and_png_hashes(self):
+        import fitz
+        def renderer(command, **kwargs):
+            source, output = Path(command[4]), Path(command[5])
+            self.stage = source.parent
+            output.mkdir()
+            reviewed = output / "reviewed.docx"
+            reviewed.write_bytes(b"PK-reviewed-document-with-cached-toc")
+            pdf = fitz.open()
+            pdf.new_page(width=100, height=100).insert_text((10, 40), "Reviewed document")
+            png = pdf[0].get_pixmap(matrix=fitz.Matrix(1.25, 1.25)).tobytes("png")
+            pdf.save(output / "document.pdf")
+            pdf.close()
+            (output / "page-001.png").write_bytes(png)
+            checksum = lambda path: hashlib.sha256(path.read_bytes()).hexdigest()
+            report = {"rendered": True, "structural_pass": True, "visually_reviewed": False,
+                      "toc_count": 1, "page_count": 1, "renderer": "Mock Word",
+                      "input_sha256": checksum(source), "rendered_docx_sha256": checksum(reviewed),
+                      "pdf_sha256": checksum(output / "document.pdf"), "image_sha256": [checksum(output / "page-001.png")],
+                      "pdf": str(output / "document.pdf"), "rendered_docx": str(reviewed),
+                      "images": [str(output / "page-001.png")]}
+            (output / "render.json").write_text(json.dumps(report))
+            return SimpleNamespace(returncode=0)
+        with override_settings(PRODUCT_STORAGE_ROOT=self.temporary.name):
+            result = self.refresh(renderer)
+        preview = result["preview"]
+        self.assertEqual(preview["docx_sha256"], hashlib.sha256(self.target.read_bytes()).hexdigest())
+        self.assertEqual(result["output_sha256"], preview["docx_sha256"])
+        self.assertNotEqual(result["input_sha256"], preview["docx_sha256"])
+        self.assertEqual(preview["page_count"], 1)
+        self.assertFalse(preview["verified"])
+        self.assertEqual(preview["visual_review"], "not_run")
+        for record in [preview["pdf"], *preview["pages"]]:
+            path = Path(self.temporary.name) / record["path"]
+            self.assertEqual(record["sha256"], hashlib.sha256(path.read_bytes()).hexdigest())
+            self.assertFalse(Path(record["path"]).is_absolute())
+        quality = json.loads(self.quality_path.read_text())
+        self.assertEqual(quality["word_field_cache"]["preview"], preview)

@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import MagicMock, patch
 
 from backend.portal.model_messages import TEXT_REQUEST_LIMIT
+from backend.portal.model_response_format import chapter_response_format
 from model_gateway import transport
 from model_gateway.errors import GatewayError
 
@@ -65,6 +66,152 @@ class TransportProtocolSimulationTests(unittest.TestCase):
             (action or self.call)()
         self.assertEqual(caught.exception.code, code)
         return caught.exception
+
+    def chapter_configuration(self):
+        return ({**self.provider, "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"},
+                {**self.model, "model_name": "qwen3.8-flash", "max_output_tokens": 4096, "timeout_seconds": 120},
+                chapter_response_format({"id": "c", "title": "approved", "source_ids": ["s"]}))
+
+    def test_bounded_profile_real_serialization_token_limits_and_none_compatibility(self):
+        provider, model, output_format = self.chapter_configuration()
+        for parameter in ("max_tokens", "max_completion_tokens"):
+            for tokens, expected in ((523, 513), (4096, 4086), (8192, 4086)):
+                configured = {**model, "token_parameter": parameter, "max_output_tokens": tokens}
+                body, timeout = transport._request(provider, configured, self.messages, None,
+                                                  response_format=output_format, generation_profile="bounded_chapter_v1")
+                request = json.loads(body)
+                self.assertEqual(request["max_completion_tokens"], expected)
+                self.assertNotIn("max_tokens", request)
+                self.assertNotIn("reasoning_effort", request)
+                self.assertNotIn("generation_profile", request)
+                self.assertIs(request["enable_thinking"], True)
+                self.assertEqual(request["thinking_budget"], 512)
+                self.assertEqual(request["response_format"], output_format)
+                self.assertEqual(timeout, 120)
+        body, _ = transport._request(provider, model, self.messages, 600,
+                                     response_format=output_format, generation_profile="bounded_chapter_v1")
+        self.assertEqual(json.loads(body)["max_completion_tokens"], 590)
+        original, _ = transport._request(provider, model, self.messages, None, response_format=output_format)
+        explicit_none, _ = transport._request(provider, model, self.messages, None,
+                                              response_format=output_format, generation_profile=None)
+        self.assertEqual(original, explicit_none)
+        self.assertIs(json.loads(original)["enable_thinking"], False)
+
+    def test_bounded_profile_rejects_before_provider_dispatch(self):
+        provider, model, output_format = self.chapter_configuration()
+        cases = [(provider, model, self.messages, {"generation_profile": "unknown"}),
+                 (provider, model, self.messages, {"generation_profile": True}),
+                 (provider, model, self.messages, {"response_format": None}),
+                 (self.provider, model, self.messages, {}), (provider, self.model, self.messages, {}),
+                 (provider, {**model, "timeout_seconds": 121}, self.messages, {}),
+                 (provider, {**model, "max_output_tokens": 522}, self.messages, {}),
+                 (provider, model, self.messages, {"stream": True}),
+                 (provider, model, self.messages, {"agent_tools": []}),
+                 (provider, model, self.messages, {"tool_choice": "none"}),
+                 (provider, model, [{"role": "user", "content": []}], {})]
+        with patch.object(transport, "_resolve") as resolve, patch.object(transport, "_PinnedHTTPSConnection") as connect:
+            for p, m, messages, overrides in cases:
+                options = {"response_format": output_format, "generation_profile": "bounded_chapter_v1", **overrides}
+                self.assert_code("invalid_request", lambda: transport._request(p, m, messages, None, **options))
+            self.assert_code("invalid_request", lambda: transport.chat_completion(provider, model, self.messages,
+                                                                                   response_format=output_format, generation_profile="unknown"))
+            resolve.assert_not_called()
+            connect.assert_not_called()
+
+    def test_bounded_profile_usage_parser_low_high_and_missing_details(self):
+        for usage, valid, expected in (({}, True, None), ({"completion_tokens": 0}, True, None),
+                ({"completion_tokens": 4096, "completion_tokens_details": {"reasoning_tokens": 4096}}, True, 4096),
+                ({"completion_tokens": 1000, "completion_tokens_details": {"reasoning_tokens": 512}}, True, 512),
+                ({"completion_tokens": 0, "completion_tokens_details": {"reasoning_tokens": 0}}, True, 0),
+                ({"completion_tokens": 4097}, False, None),
+                ({"completion_tokens": 1, "completion_tokens_details": {"reasoning_tokens": 2}}, False, None),
+                ({"completion_tokens": 1, "completion_tokens_details": {"reasoning_tokens": True}}, False, None),
+                ({"completion_tokens": 1, "completion_tokens_details": {"reasoning_tokens": -1}}, False, None),
+                ({"completion_tokens": 1, "completion_tokens_details": {"reasoning_tokens": 0.5}}, False, None),
+                ({"completion_tokens_details": {"reasoning_tokens": 0}}, False, None),
+                ({"completion_tokens": 1, "completion_tokens_details": []}, False, None),
+                ({"completion_tokens": 1, "completion_tokens_details": None}, True, None)):
+            body = json.dumps({"choices": [{"finish_reason": "stop", "message": {"content": "visible", "reasoning_content": "private-sentinel"}}], "usage": usage}).encode()
+            if valid:
+                parsed = transport._parse_response(body, generation_profile="bounded_chapter_v1", requested=4096)
+                self.assertNotIn("reasoning_content", parsed)
+                self.assertNotIn("private-sentinel", str(parsed))
+                self.assertEqual(parsed.get("reasoning_tokens"), expected)
+                if expected is None:
+                    self.assertNotIn("reasoning_tokens", parsed)
+            else:
+                self.assert_code("invalid_response", lambda: transport._parse_response(body, generation_profile="bounded_chapter_v1", requested=4096))
+        # Default parsing retains its original response shape, even if a vendor adds details.
+        legacy = transport._parse_response(json.dumps({"choices": [{"finish_reason": "stop", "message": {"content": "visible"}}],
+                                                       "usage": {"completion_tokens": 1, "completion_tokens_details": {"reasoning_tokens": "ignored"}}}).encode())
+        self.assertEqual(set(legacy), {"content", "prompt_tokens", "completion_tokens"})
+
+    def test_bounded_profile_single_exchange_budget_and_length_failure(self):
+        provider, model, output_format = self.chapter_configuration()
+        self.provider, self.model = provider, model
+        with patch.dict(transport.os.environ, {"MODEL_GATEWAY_ALLOWED_BASE_URLS": provider["base_url"]}):
+            connection = self.exchange(self.response({"choices": [{"finish_reason": "stop", "message": {"content": "visible", "reasoning_content": "private-sentinel"}}],
+                                                     "usage": {"completion_tokens": 1000, "completion_tokens_details": {"reasoning_tokens": 512}}}))
+            result = self.call(response_format=output_format, generation_profile="bounded_chapter_v1")
+            self.assertEqual(result["reasoning_tokens"], 512)
+            self.assertNotIn("private-sentinel", str(result))
+            connection.request.assert_called_once()
+            self.assertEqual(json.loads(connection.request.call_args.kwargs["body"])["max_completion_tokens"], 4086)
+            for reason, completion, code in (("length", 4000, "output_truncated"),
+                                              ("stop", 4097, "invalid_response")):
+                connection.reset_mock()
+                connection.getresponse.return_value = self.response({"choices": [{"finish_reason": reason, "message": {"content": "visible"}}],
+                                                                     "usage": {"completion_tokens": completion}})
+                self.assert_code(code, lambda: self.call(response_format=output_format, generation_profile="bounded_chapter_v1"))
+                connection.request.assert_called_once()
+
+    def test_chapter_schema_actual_provider_serialization_and_legacy_bytes(self):
+        provider, model, output_format = self.chapter_configuration()
+        payload, timeout = transport._request(provider, model, self.messages, None, response_format=output_format)
+        data = json.loads(payload)
+        self.assertEqual(data["response_format"], output_format)
+        self.assertEqual(data["max_tokens"], 4096)
+        self.assertEqual(timeout, 120)
+        self.assertIs(data["enable_thinking"], False)
+        self.assertIs(data["stream"], False)
+        legacy, _ = transport._request(provider, model, self.messages, None)
+        explicit_none, _ = transport._request(provider, model, self.messages, None, response_format=None)
+        expected = json.dumps({"model": "qwen3.8-flash", "messages": self.messages, "max_tokens": 4096,
+                               "stream": False, "enable_thinking": False},
+                              ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode("utf-8")
+        self.assertEqual(legacy, expected)
+        self.assertEqual(explicit_none, expected)
+
+    def test_chapter_schema_rejects_unverified_and_nontext_combinations_before_network(self):
+        provider, model, output_format = self.chapter_configuration()
+        cases = [(self.provider, model, self.messages, {}),
+                 ({**provider, "protocol": "other"}, model, self.messages, {}),
+                 (provider, self.model, self.messages, {}),
+                 (provider, model, self.messages, {"stream": True}),
+                 (provider, model, self.messages, {"agent_tools": []}),
+                 (provider, model, self.messages, {"tool_choice": "none"}),
+                 (provider, model, [{"role": "user", "content": [{"type": "text", "text": "vision"}]}], {})]
+        with patch.object(transport, "_resolve") as resolve, patch.object(transport, "_PinnedHTTPSConnection") as connect:
+            for p, m, messages, options in cases:
+                self.assert_code("invalid_request", lambda: transport._request(p, m, messages, None,
+                                                                                response_format=output_format, **options))
+            self.assert_code("invalid_request", lambda: transport.chat_completion(provider, model, self.messages,
+                                                                                   response_format={"type": "json_object"}))
+            resolve.assert_not_called()
+            connect.assert_not_called()
+
+    def test_chapter_schema_single_exchange_preserves_length_failure(self):
+        provider, model, output_format = self.chapter_configuration()
+        self.provider, self.model = provider, model
+        with patch.dict(transport.os.environ, {"MODEL_GATEWAY_ALLOWED_BASE_URLS": provider["base_url"]}):
+            connection = self.exchange(self.response())
+            self.assertEqual(self.call(response_format=output_format)["content"], "hello")
+            connection.request.assert_called_once()
+            self.assertEqual(json.loads(connection.request.call_args.kwargs["body"])["response_format"], output_format)
+            connection.reset_mock()
+            connection.getresponse.return_value = self.response({"choices": [{"finish_reason": "length", "message": {"content": "partial"}}]})
+            self.assert_code("output_truncated", lambda: self.call(response_format=output_format))
+            connection.request.assert_called_once()
 
     def test_dashscope_flash_direct_mode_is_scoped_and_applies_to_streaming(self):
         dashscope = "https://dashscope.aliyuncs.com/compatible-mode/v1"

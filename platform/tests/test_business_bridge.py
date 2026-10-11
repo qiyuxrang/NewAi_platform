@@ -122,7 +122,7 @@ class BridgeTests(unittest.TestCase):
     @staticmethod
     def headers(name="alice"):
         # A forged admin role in JWT must never grant original portal authority.
-        return {"Authorization": "Bearer " + create_access_token(name, "admin")}
+        return {"Authorization": "Bearer " + create_access_token(name, "admin", "unused")}
 
     def link(self, name="alice", password="correct"):
         return self.client.post("/api/enterprise/link", headers=self.headers(name), json={"username": "portal-alice", "password": password})

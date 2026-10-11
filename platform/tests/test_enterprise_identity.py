@@ -9,7 +9,7 @@ import sys
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -22,7 +22,7 @@ from sqlalchemy.pool import StaticPool
 
 from app.auth.service import create_access_token, hash_password
 from app.db.engine import get_db
-from app.db.models import AuditLog, Base, User
+from app.db.models import AuditLog, Base, Container, User
 from app.enterprise import enterprise_identity
 from app.routes import admin, auth
 
@@ -53,6 +53,99 @@ class AsyncSQLite:
 
 
 class EnterpriseIdentityTests(unittest.TestCase):
+    def test_reset_token_cannot_bypass_revocation_through_llm_proxy(self):
+        from app.auth.service import create_api_token
+        from app.llm_proxy.service import proxy_chat_completion
+        from app.config import settings
+        with Session(self.engine) as db:
+            user=db.get(User,'admin')
+            old=create_api_token(user.id,user.role,password_hash=user.password_hash)
+            user.password_hash=hash_password('changed-test-only-password')
+            db.commit()
+        with Session(self.engine) as db, patch.object(settings,'dev_openclaw_url',''):
+            with self.assertRaises(HTTPException) as caught:
+                asyncio.run(proxy_chat_completion(AsyncSQLite(db),old,{'model':'synthetic-no-call','messages':[]}))
+        self.assertEqual(caught.exception.status_code,401)
+
+    def test_admin_queries_bound_pagination_and_date_range(self):
+        for url in ('/api/admin/users?page=0', '/api/admin/users?page_size=0',
+                    '/api/admin/audit?page_size=10000', '/api/admin/usage/history?days=-1'):
+            self.assertEqual(self.client.get(url, headers=self.admin_headers).status_code, 422)
+
+    def test_container_summary_preserves_verified_zero_and_excludes_unrelated_docker(self):
+        with Session(self.engine) as db:
+            db.add(Container(user_id='employee', docker_id='tracked', container_token='synthetic-container', status='running'))
+            db.commit()
+        docker_client = SimpleNamespace(containers=SimpleNamespace(list=lambda **kwargs:[
+            SimpleNamespace(id='tracked',status='exited'), SimpleNamespace(id='unrelated',status='running')]))
+        with patch.object(admin.docker, 'from_env', return_value=docker_client):
+            response=self.client.get('/api/admin/usage/summary',headers=self.admin_headers)
+        self.assertEqual(response.status_code,200,response.text)
+        self.assertEqual(response.json()['active_containers'],0)
+        self.assertTrue(response.json()['container_status_verified'])
+        self.assertEqual(response.json()['recorded_active_containers'],1)
+        with patch.object(admin.docker,'from_env',side_effect=OSError('offline')):
+            summary=self.client.get('/api/admin/usage/summary',headers=self.admin_headers).json()
+        self.assertEqual(summary['active_containers'],1)
+        self.assertFalse(summary['container_status_verified'])
+
+    def test_password_reset_invalidates_access_refresh_api_and_portal_session(self):
+        login = self.client.post('/api/auth/login', json={
+            'username': 'admin-test', 'password': 'test-only-password'}).json()
+        old_headers = {'Authorization': 'Bearer ' + login['access_token']}
+        api_token = self.client.post('/api/auth/api-token', headers=old_headers).json()['api_token']
+        with Session(self.engine) as db:
+            db.get(User, 'admin').portal_session_enc = 'encrypted-private-session'
+            db.commit()
+        response = self.client.put('/api/admin/users/admin/password', headers=old_headers,
+                                   json={'new_password': 'changed-test-only-password'})
+        self.assertEqual(response.status_code, 200, response.text)
+        for headers in (old_headers, {'Authorization': 'Bearer '+api_token}):
+            self.assertEqual(self.client.get('/api/auth/me', headers=headers).status_code, 401)
+        self.assertEqual(self.client.post('/api/auth/refresh', json={
+            'refresh_token': login['refresh_token']}).status_code, 401)
+        self.assertEqual(self.client.post('/api/auth/login', json={
+            'username':'admin-test', 'password':'test-only-password'}).status_code, 401)
+        fresh = self.client.post('/api/auth/login', json={
+            'username':'admin-test', 'password':'changed-test-only-password'})
+        self.assertEqual(fresh.status_code, 200, fresh.text)
+        self.assertEqual(self.client.get('/api/auth/me', headers={
+            'Authorization':'Bearer '+fresh.json()['access_token']}).status_code, 200)
+        with Session(self.engine) as db:
+            self.assertIsNone(db.get(User, 'admin').portal_session_enc)
+            audit = db.scalars(select(AuditLog).where(AuditLog.action=='password_reset')).one()
+            self.assertNotIn('password', audit.detail)
+
+    def test_password_change_invalidates_prior_tokens_and_clears_portal_session(self):
+        login = self.client.post('/api/auth/login', json={
+            'username':'admin-test', 'password':'test-only-password'}).json()
+        headers = {'Authorization':'Bearer '+login['access_token']}
+        changed = self.client.put('/api/auth/change-password', headers=headers, json={
+            'old_password':'test-only-password', 'new_password':'changed-test-only-password'})
+        self.assertEqual(changed.status_code, 200, changed.text)
+        self.assertEqual(self.client.get('/api/auth/me', headers=headers).status_code, 401)
+        self.assertEqual(self.client.post('/api/auth/refresh', json={
+            'refresh_token':login['refresh_token']}).status_code, 401)
+
+    def test_password_utf8_limit_is_validation_error_without_server_crash(self):
+        for value in ('a'*73, '合'*25):
+            reset = self.client.put('/api/admin/users/employee/password', headers=self.admin_headers,
+                                   json={'new_password': value})
+            self.assertEqual(reset.status_code, 422, reset.text)
+            registration = self.client.post('/api/auth/register', json={
+                'username':'long-password', 'email':'long@example.com', 'password':value})
+            self.assertEqual(registration.status_code, 422, registration.text)
+
+    def test_unbound_legacy_token_is_rejected(self):
+        from app.auth.service import decode_token
+        from app.config import settings
+        from jose import jwt
+        payload = decode_token(self.admin_headers['Authorization'][7:])
+        payload.pop('credential')
+        legacy = jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
+        self.assertEqual(self.client.get('/api/auth/me', headers={
+            'Authorization':'Bearer '+legacy}).status_code, 401)
+
     def test_admin_creates_assigned_account_without_exposing_password(self):
         payload = {"username": "assigned-hr", "email": "assigned-hr@example.com", "password": "test-only-password", "business_role": "employee", "department_code": "hr", "portal_user_id": 84}
         url = "/api/admin/users"
@@ -104,9 +197,10 @@ class EnterpriseIdentityTests(unittest.TestCase):
         self.client.close()
         self.engine.dispose()
 
-    @staticmethod
-    def headers(user_id, claim_role="user"):
-        return {"Authorization": f"Bearer {create_access_token(user_id, claim_role)}"}
+    def headers(self, user_id, claim_role="user"):
+        with Session(self.engine) as db:
+            password_hash = db.get(User, user_id).password_hash
+        return {"Authorization": f"Bearer {create_access_token(user_id, claim_role, password_hash)}"}
 
     def update(self, payload, user_id="employee", headers=None):
         return self.client.put(

@@ -214,6 +214,7 @@ def run(boq_path, over=None, bg_text="", reference=None, out_name="1.成本测�
     from engine import pipeline as _pl
     cfg_json = _pl.json.load(open(os.path.join(ROOT, "config", "settings.json"),
                                   encoding="utf-8"))
+    cfg_json["project_region"] = p["地区"]
     _kept, _dropped, equip_items, labor_items = _pl.est.split_items(items)
     cost_rows_net = _pl.price_equipment(equip_items, cfg_json, pure_online=True,
                                         shared_web=shared_web)

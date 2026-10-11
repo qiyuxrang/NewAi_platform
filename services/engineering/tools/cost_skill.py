@@ -107,13 +107,14 @@ def inspect_xlsx(raw_path):
                 "检测到完整六件套输出文件，不能作为原始清单再次测算"))
             return result
         for sheet in workbook.worksheets:
-            if sheet.max_row > MAX_SCAN_ROWS:
+            rows = [list(row) for row in sheet.iter_rows(
+                max_row=MAX_SCAN_ROWS + 1, values_only=True)]
+            if (sheet.max_row is not None and sheet.max_row > MAX_SCAN_ROWS) or len(rows) > MAX_SCAN_ROWS:
                 result["issues"].append(_issue(
                     "ROW_LIMIT_EXCEEDED", "Sheet 行数超过预检上限",
-                    sheet=sheet.title, actual_rows=sheet.max_row,
+                    sheet=sheet.title, actual_rows=sheet.max_row or len(rows),
                     limit_rows=MAX_SCAN_ROWS))
-            rows = [list(row) for row in sheet.iter_rows(
-                max_row=MAX_SCAN_ROWS, values_only=True)]
+            rows = rows[:MAX_SCAN_ROWS]
             header_row, columns = boq.find_header(rows)
             if header_row is None:
                 continue

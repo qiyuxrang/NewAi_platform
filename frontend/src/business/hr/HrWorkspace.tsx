@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useLocation } from 'react-router-dom'
-import { useEnterprise } from '../../components/EnterpriseContext'
+import { useEnterprise } from '../../components/enterprise-context'
 import RecruitmentJobs from './RecruitmentJobs'
 import RecruitmentScreening from './RecruitmentScreening'
 import RecruitmentHistory from './RecruitmentHistory'

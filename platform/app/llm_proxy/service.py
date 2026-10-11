@@ -22,7 +22,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.audit import write_audit_log
-from app.auth.service import decode_token
+from app.auth.service import decode_token, token_matches_user
 from app.config import settings
 from app.db.models import Container, UsageRecord, User
 
@@ -334,6 +334,8 @@ async def proxy_chat_completion(
             if user_id:
                 user_result = await db.execute(select(User).where(User.id == user_id))
                 user = user_result.scalar_one_or_none()
+                if not token_matches_user(jwt_payload, user):
+                    user = None
 
         # Dedicated per-user container token
         if user is None:

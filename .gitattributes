@@ -1,0 +1,4 @@
+# Frozen assets are byte-addressed; checkout must not rewrite their line endings.
+services/business/backend/portal/product_assets/bj_docs/** -text
+services/business/backend/portal/product_assets/p1_rules.json -text
+deploy/cloud/*.sh text eol=lf

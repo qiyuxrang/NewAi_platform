@@ -35,7 +35,7 @@ class CenterPageAuthorizationTests(PortalTestCase):
                 self.assertRedirects(self.client.get(path), "/login", fetch_redirect_response=False)
 
     def test_each_role_only_accesses_its_center_pages(self):
-        for role, code, section in (("product", "product", "solution"), ("engineering", "cost", "quota"), ("hr", "hr", "resumes"), ("general_manager", "business", "ledgers")):
+        for role, code, section in (("product", "product", "solution"), ("engineering", "cost", "quota"), ("hr", "hr", "resumes")):
             with self.subTest(role=role):
                 client = PageClient()
                 user = self.create_user("center-" + role, role)
@@ -44,6 +44,20 @@ class CenterPageAuthorizationTests(PortalTestCase):
                 for other in {"product", "cost", "hr", "business"} - {code}:
                     self.assertEqual(client.get(f"/centers/{other}?role=general_manager").status_code, 404)
                 self.assertEqual(client.get("/preview/product").status_code, 403)
+
+    def test_general_manager_accesses_enabled_department_centers(self):
+        manager = self.create_user("center-general-manager", "general_manager")
+        self.login(self.client, manager)
+        for code in ("business", "product", "cost", "hr"):
+            with self.subTest(code=code):
+                self.assertEqual(self.client.get(f"/centers/{code}").status_code, 200)
+                module = Module.objects.get(code=code)
+                module.enabled = False
+                module.save(update_fields=["enabled"])
+                self.assertEqual(self.client.get(f"/centers/{code}").status_code, 404)
+                module.enabled = True
+                module.save(update_fields=["enabled"])
+        self.assertEqual(self.client.get("/preview/product").status_code, 403)
 
     def test_admin_preview_does_not_grant_business_access(self):
         admin = self.create_admin()

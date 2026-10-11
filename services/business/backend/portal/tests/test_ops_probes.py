@@ -1,5 +1,7 @@
 import json
 import time
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from datetime import timedelta
 from io import StringIO
 from threading import Event
@@ -422,7 +424,18 @@ class BackupScopeTests(PortalTestCase):
         admin = self.create_admin("ops-backup-admin")
         self.login(self.client, admin, ADMIN_PASSWORD)
 
-        response = self.client.get("/api/ops/maintenance/")
+        with TemporaryDirectory() as directory:
+            root = Path(directory)
+            report = root / 'docs/evidence/postgres-restore-final.json'
+            report.parent.mkdir(parents=True)
+            report.write_text(json.dumps({
+                'timestamp': '2026-01-01T00:00:00+00:00',
+                'source': 'synthetic_historical_database',
+                'all_tables_equal': True, 'source_unchanged': True,
+                'tables': {'portal_phase1': {'rows': 1, 'sha256': '0' * 64}},
+            }), encoding='utf-8')
+            with override_settings(BASE_DIR=root):
+                response = self.client.get("/api/ops/maintenance/")
 
         self.assertEqual(response.status_code, 200)
         backup = response.json()["backup"]

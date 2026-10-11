@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Field } from "../shared";
 import type { DocumentTask, TaskInput } from "./product-api";
-import { useUnsavedWarning } from "./workbench-shared";
+import { useUnsavedWarning } from "./workbench-state";
 
 export default function ProjectInputPanel({ task, disabled, onAction }: { task: DocumentTask; disabled: (action: string) => boolean; onAction: (endpoint: string, body: object) => Promise<unknown> }) {
   const [draft, setDraft] = useState<TaskInput | null>(null);

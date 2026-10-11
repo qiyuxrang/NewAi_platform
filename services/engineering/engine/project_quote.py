@@ -22,7 +22,7 @@ from engine import content as content_mod
 from engine import pipeline
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-OUT_ROOT = os.path.join(ROOT, "data", "output")
+OUT_ROOT = pipeline.data_path("output")
 
 # ── 默认项目参数（可由调用方覆盖）──
 # 清单首行可能是表头而不是项目名，这些词不能当项目名用
@@ -230,6 +230,7 @@ def run(boq_path, over=None, ctx=None, write_files=True):
 
     # ── 取价（不联网：库 → 历史 → 定额；联网留给上层工作流按需触发）──
     cfg = pipeline.json.load(open(os.path.join(ROOT, "config", "settings.json"), encoding="utf-8"))
+    cfg["project_region"] = p["地区"]
     cost_rows = pipeline.price_equipment(equip, cfg,
                                          shared_web=p.get("共享网价"))
     mult = float(p.get("工日系数") or 1.0)

@@ -9,12 +9,14 @@ from typing import Literal
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, StreamingResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from .errors import GatewayError
 from .agent_protocol import REQUEST_LIMIT as AGENT_REQUEST_LIMIT, validate_request, validate_result
 from .transport import chat_completion, list_models, stream_completion
 from backend.portal.model_messages import TEXT_REQUEST_LIMIT, VISION_REQUEST_LIMIT, validate_messages
+from backend.portal.model_response_format import (supports_chapter_response_format, validate_response_format,
+                                                 validate_generation_profile, validate_profile_usage)
 
 
 class ServiceBoundary:
@@ -98,6 +100,28 @@ class GenerateRequest(StrictModel):
     model: ModelConfig
     messages: list[Message] = Field(min_length=1, max_length=32)
     purpose: Literal["test", "business"]
+    response_format: dict | None = None
+    generation_profile: Literal["bounded_chapter_v1"] | None = None
+
+    @field_validator("response_format", mode="before")
+    @classmethod
+    def bounded_response_format(cls, value):
+        return validate_response_format(value)
+
+    @model_validator(mode="after")
+    def chapter_response_format_context(self):
+        if self.generation_profile is not None:
+            if isinstance(self, VisionRequest):
+                raise ValueError("invalid generation profile")
+            validate_generation_profile(self.generation_profile, provider=self.provider, model=self.model,
+                                        response_format=self.response_format, purpose=self.purpose,
+                                        messages=[message.model_dump() for message in self.messages])
+        if self.response_format is not None and (
+                self.purpose != "business" or isinstance(self, VisionRequest)
+                or not supports_chapter_response_format(self.provider, self.model)
+                or any(not isinstance(message.content, str) for message in self.messages)):
+            raise ValueError("invalid response format")
+        return self
 
 
 class VisionMessage(StrictModel):
@@ -124,6 +148,7 @@ class GenerateResponse(StrictModel):
     duration_ms: int
     prompt_tokens: int | None
     completion_tokens: int | None
+    reasoning_tokens: int | None = Field(default=None, ge=0)
 
 
 class AgentResponse(GenerateResponse):
@@ -177,7 +202,7 @@ def model_catalog(payload: CatalogRequest):
         slots.release()
 
 
-@app.post('/v1/generate-vision', response_model=GenerateResponse)
+@app.post('/v1/generate-vision', response_model=GenerateResponse, response_model_exclude_unset=True)
 def generate_vision(payload: VisionRequest):
     try:
         validate_messages([message.model_dump() for message in payload.messages], vision=True)
@@ -186,18 +211,30 @@ def generate_vision(payload: VisionRequest):
     return generate(payload)
 
 
-@app.post("/v1/generate", response_model=GenerateResponse)
+@app.post("/v1/generate", response_model=GenerateResponse, response_model_exclude_unset=True)
 def generate(payload: GenerateRequest):
     if not slots.acquire(blocking=False):
         raise GatewayError("busy", "模型网关繁忙，请稍后重试。", 429)
     started = monotonic()
     try:
         messages = [{"role": "user", "content": "Reply with OK."}] if payload.purpose == "test" else [message.model_dump() for message in payload.messages]
+        options = {"response_format": payload.response_format} if payload.response_format is not None else {}
+        if payload.generation_profile is not None:
+            options["generation_profile"] = payload.generation_profile
         result = chat_completion(payload.provider.model_dump(), payload.model.model_dump(), messages,
-                                 max_output_tokens=min(16, payload.model.max_output_tokens) if payload.purpose == "test" else None)
-        return {"content": None if payload.purpose == "test" else result["content"],
+                                 max_output_tokens=min(16, payload.model.max_output_tokens) if payload.purpose == "test" else None,
+                                 **options)
+        response = {"content": None if payload.purpose == "test" else result["content"],
                 "duration_ms": max(0, int((monotonic() - started) * 1000)),
                 "prompt_tokens": result["prompt_tokens"], "completion_tokens": result["completion_tokens"]}
+        if payload.generation_profile is not None:
+            try:
+                validate_profile_usage(result, payload.model.max_output_tokens)
+            except (ValueError, TypeError):
+                raise GatewayError("invalid_response", "模型服务返回格式无效。") from None
+            if "reasoning_tokens" in result:
+                response["reasoning_tokens"] = result["reasoning_tokens"]
+        return response
     except GatewayError:
         raise
     except Exception:
@@ -206,7 +243,7 @@ def generate(payload: GenerateRequest):
         slots.release()
 
 
-@app.post("/v1/generate-agent", response_model=AgentResponse)
+@app.post("/v1/generate-agent", response_model=AgentResponse, response_model_exclude_unset=True)
 def generate_agent(payload: AgentRequest):
     messages = payload.messages
     tools = payload.tools
@@ -245,6 +282,8 @@ def generate_agent(payload: AgentRequest):
 
 @app.post("/v1/generate-stream")
 def generate_stream(payload: GenerateRequest):
+    if payload.response_format is not None or payload.generation_profile is not None:
+        raise GatewayError("invalid_request", "模型调用参数格式不正确。", 400)
     if not slots.acquire(blocking=False):
         raise GatewayError("busy", "模型网关繁忙，请稍后重试。", 429)
 

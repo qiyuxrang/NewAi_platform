@@ -344,7 +344,7 @@ async def proxy_events_stream(
     token: str = "",
 ):
     """SSE proxy for chat events — auth via query param since EventSource can't set headers."""
-    from app.auth.service import decode_token, get_user_by_id
+    from app.auth.service import decode_token, get_user_by_id, token_matches_user
     from fastapi.responses import StreamingResponse
 
     # Authenticate via query param token
@@ -354,7 +354,7 @@ async def proxy_events_stream(
 
     async with async_session() as db:
         user = await get_user_by_id(db, payload["sub"])
-        if user is None or not user.is_active:
+        if not token_matches_user(payload, user):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User not found")
         base_url, bridge_headers = await _container_target(db, user)
 
@@ -404,7 +404,7 @@ async def proxy_events_stream(
 
 async def _proxy_file_request(request: Request, token: str, bridge_path: str):
     """Shared helper: authenticate via query-param or header, then proxy to bridge."""
-    from app.auth.service import decode_token, get_user_by_id
+    from app.auth.service import decode_token, get_user_by_id, token_matches_user
     from fastapi.responses import Response
 
     # Try query-param token first, fall back to Authorization header
@@ -422,7 +422,7 @@ async def _proxy_file_request(request: Request, token: str, bridge_path: str):
                 async with async_session() as db:
                     user = await get_user_by_id(db, payload["sub"])
 
-    if not user or not user.is_active:
+    if not user or not token_matches_user(payload, user):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token")
 
     async with async_session() as db:
@@ -550,13 +550,97 @@ async def proxy_http(
 # WebSocket reverse proxy
 # ---------------------------------------------------------------------------
 
+WEBSOCKET_IDENTITY_INTERVAL_SECONDS = 5
+WEBSOCKET_IDENTITY_TIMEOUT_SECONDS = 5
+
+
+async def _websocket_identity_code(token: str) -> int | None:
+    """Recheck current credentials and administrator role using a short session."""
+    import asyncio
+    from app.auth.service import decode_token, get_user_by_id, token_matches_user
+
+    payload = decode_token(token)
+    if payload is None or payload.get("type") != "access":
+        return 4001
+
+    async def lookup():
+        async with async_session() as db:
+            user = await get_user_by_id(db, payload["sub"])
+            if not token_matches_user(payload, user):
+                return 4001
+            if user.role != "admin":
+                return 4003
+        return None
+
+    try:
+        return await asyncio.wait_for(lookup(), timeout=WEBSOCKET_IDENTITY_TIMEOUT_SECONDS)
+    except Exception:
+        # Identity outages must not leave an authorized terminal open.
+        return 1013
+
+
+async def _relay_authenticated_websocket(websocket: WebSocket, upstream, token: str):
+    import asyncio
+    import websockets
+
+    revoked = asyncio.Event()
+
+    async def authorized():
+        if revoked.is_set():
+            return False
+        code = await _websocket_identity_code(token)
+        if code is not None:
+            revoked.set()
+            try:
+                await websocket.close(code=code, reason="Authorization changed or unavailable")
+            except (RuntimeError, WebSocketDisconnect):
+                pass
+            return False
+        return not revoked.is_set()
+
+    async def client_to_upstream():
+        try:
+            while True:
+                data = await websocket.receive_text()
+                if not await authorized():
+                    return
+                await upstream.send(data)
+        except (WebSocketDisconnect, websockets.ConnectionClosed):
+            pass
+
+    async def upstream_to_client():
+        try:
+            async for message in upstream:
+                if not await authorized():
+                    return
+                await websocket.send_text(message)
+        except (WebSocketDisconnect, websockets.ConnectionClosed, RuntimeError):
+            pass
+
+    async def identity_monitor():
+        while await authorized():
+            await asyncio.sleep(WEBSOCKET_IDENTITY_INTERVAL_SECONDS)
+
+    tasks = [asyncio.create_task(client_to_upstream()), asyncio.create_task(upstream_to_client()),
+             asyncio.create_task(identity_monitor())]
+    try:
+        await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        # Drain cancelled tasks before closing either side.
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await upstream.close()
+
+
 @router.websocket("/ws")
 async def proxy_websocket(
     websocket: WebSocket,
     token: str = "",  # passed as query param ?token=xxx
 ):
     """Forward WebSocket connections directly to OpenClaw Gateway."""
-    from app.auth.service import decode_token, get_user_by_id
+    from app.auth.service import decode_token, get_user_by_id, token_matches_user
 
     # Authenticate, then release DB session immediately
     async with async_session() as db:
@@ -566,7 +650,7 @@ async def proxy_websocket(
             return
 
         user = await get_user_by_id(db, payload["sub"])
-        if user is None or not user.is_active:
+        if not token_matches_user(payload, user):
             await websocket.close(code=4001, reason="User not found")
             return
 
@@ -590,6 +674,10 @@ async def proxy_websocket(
         # Retry connection — container gateway may still be starting
         upstream = None
         for _attempt in range(10):
+            code = await _websocket_identity_code(token)
+            if code is not None:
+                await websocket.close(code=code, reason="Authorization changed or unavailable")
+                return
             try:
                 upstream = await connect_ws(target_ws_url, origin="http://127.0.0.1:8080", extra_headers=bridge_headers)
                 break
@@ -600,31 +688,7 @@ async def proxy_websocket(
             await websocket.close(code=1013, reason="Container gateway not ready")
             return
 
-        async def client_to_upstream():
-            try:
-                while True:
-                    data = await websocket.receive_text()
-                    await upstream.send(data)
-            except (WebSocketDisconnect, Exception):
-                pass
-
-        async def upstream_to_client():
-            try:
-                async for message in upstream:
-                    try:
-                        await websocket.send_text(message)
-                    except RuntimeError:
-                        break
-            except websockets.ConnectionClosed:
-                pass
-
-        tasks = [asyncio.create_task(client_to_upstream()), asyncio.create_task(upstream_to_client())]
-        try:
-            done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-            for t in pending:
-                t.cancel()
-        finally:
-            await upstream.close()
+        await _relay_authenticated_websocket(websocket, upstream, token)
 
     except Exception as exc:
         logger.error("WebSocket 代理异常: %s", exc, exc_info=True)
@@ -641,7 +705,7 @@ async def proxy_terminal_websocket(
     token: str = "",
 ):
     """Forward WebSocket terminal stream to per-user bridge terminal endpoint."""
-    from app.auth.service import decode_token, get_user_by_id
+    from app.auth.service import decode_token, get_user_by_id, token_matches_user
 
     async with async_session() as db:
         payload = decode_token(token)
@@ -650,7 +714,7 @@ async def proxy_terminal_websocket(
             return
 
         user = await get_user_by_id(db, payload["sub"])
-        if user is None or not user.is_active:
+        if not token_matches_user(payload, user):
             await websocket.close(code=4001, reason="User not found")
             return
 
@@ -670,6 +734,10 @@ async def proxy_terminal_websocket(
     try:
         upstream = None
         for _attempt in range(10):
+            code = await _websocket_identity_code(token)
+            if code is not None:
+                await websocket.close(code=code, reason="Authorization changed or unavailable")
+                return
             try:
                 upstream = await connect_ws(target_ws_url, origin="http://127.0.0.1:8080", extra_headers=bridge_headers)
                 break
@@ -680,31 +748,8 @@ async def proxy_terminal_websocket(
             await websocket.close(code=1013, reason="Terminal service not ready")
             return
 
-        async def client_to_upstream():
-            try:
-                while True:
-                    data = await websocket.receive_text()
-                    await upstream.send(data)
-            except (WebSocketDisconnect, Exception):
-                pass
+        await _relay_authenticated_websocket(websocket, upstream, token)
 
-        async def upstream_to_client():
-            try:
-                async for message in upstream:
-                    try:
-                        await websocket.send_text(message)
-                    except RuntimeError:
-                        break
-            except websockets.ConnectionClosed:
-                pass
-
-        tasks = [asyncio.create_task(client_to_upstream()), asyncio.create_task(upstream_to_client())]
-        try:
-            _done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-            for t in pending:
-                t.cancel()
-        finally:
-            await upstream.close()
     except Exception as exc:
         logger.error("Terminal WebSocket 代理异常: %s", exc, exc_info=True)
     finally:

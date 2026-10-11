@@ -1,7 +1,8 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { CenterLink } from "../shared";
 import { getProductOutputHistory, type OutputFamily, type ProductOutputHistory } from "./product-api";
-import { DocumentSymbol, EmptyState, formatDate, goProduct, LoadState, outputNames, productError, ProductIcon } from "./workbench-shared";
+import { DocumentSymbol, EmptyState, LoadState, ProductIcon } from "./workbench-shared";
+import { formatDate, goProduct, outputNames, productError } from "./workbench-state";
 import "./project-workbench.css";
 import "./product-records.css";
 import "./product-clean-layout.css";
@@ -19,26 +20,30 @@ export default function ProductOutputs() {
   const family: "all" | OutputFamily = families.some(item => item.code === requestedFamily) ? requestedFamily as "all" | OutputFamily : "all";
   const query = params.get("q") || "";
   const page = Math.max(1, Number(params.get("page")) || 1);
+  return <OutputHistory key={`${family}\n${query}\n${page}`} family={family} query={query} page={page}/>;
+}
+
+function OutputHistory({ family, query, page }: { family: "all" | OutputFamily; query: string; page: number }) {
   const [search, setSearch] = useState(query);
-  const [data, setData] = useState<ProductOutputHistory | null>(null);
-  const [error, setError] = useState("");
   const [refresh, setRefresh] = useState(0);
   const requestQuery = new URLSearchParams({ q: query, family, page: String(page), page_size: "12" }).toString();
+  const requestKey = useMemo(() => ({ requestQuery, refresh }), [requestQuery, refresh]);
+  const [response, setResponse] = useState<{ key: typeof requestKey; data: ProductOutputHistory | null; error: string } | null>(null);
+  const current = response?.key === requestKey ? response : null;
+  const data = current?.data ?? null;
+  const error = current?.error ?? "";
   const link = (nextFamily = family, nextPage = 1, nextQuery = query) => `/centers/product/outputs?${new URLSearchParams({ q: nextQuery, family: nextFamily, page: String(nextPage) })}`;
-  useEffect(() => setSearch(query), [query]);
 
   useEffect(() => {
     const controller = new AbortController();
-    setData(null);
-    setError("");
-    void getProductOutputHistory(requestQuery, controller.signal).then(value => {
+    void getProductOutputHistory(requestKey.requestQuery, controller.signal).then(value => {
       if (!value || !Array.isArray(value.outputs) || !value.pagination) throw new Error("服务端成果数据不完整，请重新加载。");
-      if (!controller.signal.aborted) setData(value);
+      if (!controller.signal.aborted) setResponse({ key: requestKey, data: value, error: "" });
     }).catch(reason => {
-      if (!controller.signal.aborted) setError(productError(reason));
+      if (!controller.signal.aborted) setResponse({ key: requestKey, data: null, error: productError(reason) });
     });
     return () => controller.abort();
-  }, [requestQuery, refresh]);
+  }, [requestKey]);
 
   return <div className="pd-workspace pd-project-list pd-clean-layout pr-output-history">
     <header className="pd-page-title pd-project-list-header">

@@ -48,7 +48,7 @@ def _style(ws, widths, header_row=3, dyn_from=4, wrap=None, ncol=None):
             if v is None or (wrap and i not in wrap):
                 continue
             lines = max(lines, math.ceil(len(str(v)) / max(6, widths[i - 1] / 2.1)))
-        ws.row_dimensions[r].height = lines * 14 + 8
+        ws.row_dimensions[r].height = max(ws.row_dimensions[r].height or 0, lines * 14 + 8)
     for rng in list(ws.merged_cells.ranges):
         for r in range(rng.min_row, rng.max_row + 1):
             for cidx in range(rng.min_col, rng.max_col + 1):
@@ -308,7 +308,7 @@ def _write_rows(ws, rows, hr, owner_names=None, mark=True):
         if total is None:
             total = round(price * (qty or 0), 2)
         note = str(row[9] or "")
-        if not (price or total):
+        if not (price or total) and not str(row[5] or "").startswith(("甲方供料", "不计入")):
             note = (note + "；⚠ 未取到价，本行按 0 列入，须询价后回填").strip("；")
         ws.cell(row=r, column=1, value=idx)
         ws.cell(row=r, column=2, value=name)
@@ -336,7 +336,8 @@ def _notes_block(ws, r, notes, ncol, mark=True):
         ws.merge_cells(start_row=r, start_column=1, end_row=r, end_column=ncol)
         ws.cell(row=r, column=1).font = Font(name=F, size=10)
         ws.cell(row=r, column=1).alignment = Alignment(vertical="center", wrap_text=True)
-        ws.row_dimensions[r].height = max(16, (len(t) // 62 + 1) * 15 + 4)
+        note_lines = sum(max(1, math.ceil(len(line) / 62)) for line in str(t).split("\n"))
+        ws.row_dimensions[r].height = max(16, note_lines * 15 + 4)
         r += 1
     return r
 
@@ -504,12 +505,11 @@ def build(project, tagged, cost_a, cost_b, labor_a, labor_b, summary, out_path,
     """
     wb = Workbook()
     wb.remove(wb.active)
-    # 清单性质：整张清单没有任何一项标"甲供"，说明这是一份纯采购清单，
-    # 就不该出现甲供/劳务分包那套口径
-    nature = "采购清单" if not owner_names else "工程量清单"
+    # 甲供与是否包含劳务是独立事实，劳务清单不能因没有甲供被标为采购。
+    supply_only = bool(summary.get("纯采购清单"))
+    nature = "采购清单" if supply_only and not owner_names else "工程量清单"
     chain_a = summary.get("劳务报价库网") or summary.get("甲供C30版", {}) or {}
     chain_b = summary.get("劳务报价纯网") or chain_a
-    supply_only = bool(summary.get("纯采购清单"))
     if not labor_a:      # 纯设备采购清单：劳务表给一句说明，不留空表
         labor_a = [["", "（本清单无劳务子目）",
                     "整张清单都是设备材料采购项，不含施工内容", "", "项", 1,

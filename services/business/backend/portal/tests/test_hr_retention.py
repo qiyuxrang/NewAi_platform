@@ -162,9 +162,10 @@ class HrRetentionTests(PortalTestCase):
         self.assertEqual(self.client.get(self.root + f'requests/{self.req.pk}/').status_code, 200)
         self.assertEqual(self.client.get(self.root + f'requests/{draft.pk}/').status_code, 404)
         self.assertEqual(self.client.patch(self.root + f'requests/{self.req.pk}/',
-                                          data='{}', content_type='application/json').status_code, 403)
-        self.assertEqual(self.client.get(self.root + f'requests/{self.req.pk}/history/').status_code, 403)
-        self.assertEqual(self.client.get(self.root + f'resumes/{self.item.pk}/download/').status_code, 403)
+                                          data='{}', content_type='application/json').status_code, 404)
+        # Managers can enter HR, but private owner-scoped operations hide objects.
+        self.assertEqual(self.client.get(self.root + f'requests/{self.req.pk}/history/').status_code, 404)
+        self.assertEqual(self.client.get(self.root + f'resumes/{self.item.pk}/download/').status_code, 404)
         Module.objects.filter(code='business').update(enabled=False)
         self.assertEqual(self.client.get(self.root + 'requests/').status_code, 403)
 

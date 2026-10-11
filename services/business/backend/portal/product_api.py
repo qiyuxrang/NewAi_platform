@@ -270,6 +270,35 @@ def _task_blockers(actions, input_revision=None):
     return blockers
 
 
+def _content_failure(task):
+    """Expose only current, bounded authored-content diagnostics to authorized readers."""
+    failure = task.checkpoint.get("last_failure", {})
+    if (task.state not in {"FAILED", "WAITING_INPUT"} or not task.error_code
+            or not isinstance(failure, dict) or failure.get("code") != task.error_code):
+        return None
+    issues = []
+    values = failure.get("quality_issues", [])
+    for issue in values[:10] if isinstance(values, list) else []:
+        if not isinstance(issue, dict) or not isinstance(issue.get("code"), str):
+            continue
+        value = {"code": issue["code"][:64]}
+        for key, limit in (("chapter_id", 100), ("figure_id", 100), ("field", 40),
+                           ("parameter", 100), ("claim", 250), ("context", 250), ("correction", 350)):
+            if isinstance(issue.get(key), str):
+                value[key] = issue[key][:limit]
+        if type(issue.get("paragraph_index")) is int and issue["paragraph_index"] >= 0:
+            value["paragraph_index"] = issue["paragraph_index"]
+        if "context" in value:
+            if len(issue["context"]) > 250:
+                value["context_truncated"] = True
+            elif type(issue.get("context_truncated")) is bool:
+                value["context_truncated"] = issue["context_truncated"]
+        issues.append(value)
+    count = failure.get("quality_issue_count")
+    return {"code": task.error_code, "quality_issues": issues,
+            "quality_issue_count": max(len(issues), count) if type(count) is int else len(issues)}
+
+
 def _task_detail(task, user):
     input_revision = _input_revision(task)
     if input_revision and not input_authorized(task, input_revision):
@@ -349,6 +378,7 @@ def _task_detail(task, user):
         "blueprint": _revision_data(blueprint), "chapters": chapters, "reports": reports, "artifacts": artifacts,
         "sources": sources, "approvals": approvals, "issues": issues,
         "error_code": task.error_code,
+        "content_failure": _content_failure(task),
         "actions": actions, "blockers": _task_blockers(actions, input_revision),
         "blueprint_review": {
             "revision_count": revision_count,

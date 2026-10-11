@@ -21,6 +21,7 @@ from engine.library import PriceLibrary
 from engine.matcher import Matcher
 from engine.pricing import pick_price
 from engine.quota import QuotaLibrary
+from engine.paths import data_path
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -147,13 +148,13 @@ _HIST_CACHE = {}
 def load_history():
     if "hist" in _HIST_CACHE:
         return _HIST_CACHE["hist"]
-    p = os.path.join(ROOT, "data", "library", "历史价格库.json")
+    p = data_path("library", "历史价格库.json")
     data = json.load(open(p, encoding="utf-8")) if os.path.exists(p) else []
     # 把历次联网查到、已自动入库的价并进来——下次先命中历史价，不用再联网
     data = list(data) + webprice.load_memo()
     # ⚠ 以前入库通道写的 入库数据.sqlite 根本没被取价用上（写进去等于白写）。
     # 这里把它并进历史价，入库的价才能被 match_history 命中。
-    db = os.path.join(ROOT, "data", "library", "入库数据.sqlite")
+    db = data_path("library", "入库数据.sqlite")
     if os.path.exists(db):
         try:
             import sqlite3
@@ -181,7 +182,7 @@ def load_history():
 def load_quota():
     """定额库只加载一次；优先读 SQLite 知识库（省内存），没有则回落 JSON。"""
     if "quota" not in _QUOTA_CACHE:
-        db = os.path.join(ROOT, "data", "library", "成本测算知识库.sqlite")
+        db = data_path("library", "成本测算知识库.sqlite")
         if os.path.exists(db):
             try:
                 _QUOTA_CACHE["quota"] = QuotaLibrary.from_db(db)
@@ -189,8 +190,8 @@ def load_quota():
             except Exception:  # noqa: BLE001
                 pass
         _QUOTA_CACHE["quota"] = QuotaLibrary(
-            os.path.join(ROOT, "data", "library", "定额基价库.json"),
-            os.path.join(ROOT, "data", "library", "定额含量库.json"))
+            data_path("library", "定额基价库.json"),
+            data_path("library", "定额含量库.json"))
     return _QUOTA_CACHE["quota"]
 
 
@@ -278,6 +279,9 @@ def resolve_path(p):
     """配置里的路径支持相对写法（相对项目根目录），方便搬到容器/服务器。"""
     if not p:
         return p
+    normalized = p.replace("\\", "/")
+    if normalized.startswith("data/"):
+        return data_path(*normalized.split("/")[1:])
     if os.path.isabs(p) and os.path.exists(p):
         return p
     cand = os.path.join(ROOT, p.replace("/", os.sep))

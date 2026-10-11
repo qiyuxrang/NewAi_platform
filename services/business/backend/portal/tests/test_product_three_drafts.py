@@ -1,4 +1,5 @@
 import json
+import hashlib
 import tempfile
 import uuid
 from pathlib import Path
@@ -8,11 +9,12 @@ from urllib.parse import unquote
 from zipfile import ZipFile
 
 from django.test import override_settings
+from django.conf import settings
 
 from portal.product_models import DocumentApproval, DocumentArtifact, DocumentTask
 from portal.product_presentation import render_presentation_draft
 from portal.product_worker import _review_payload, run_once
-from .test_product_pair import PairDraftTests
+from .test_product_pair import PairDraftTests, report_diagram_evidence
 from .base import PortalTestCase, json_body
 
 
@@ -24,8 +26,84 @@ class ThreeDraftFlowTests(PortalTestCase):
     save_blueprint = PairDraftTests.save_blueprint
     approve_blueprint = PairDraftTests.approve_blueprint
 
+    def mocked_full_report_model(self, model):
+        # Distinct synthetic count data verifies coverage/length, not real authorship.
+        symbols = "甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳"
+        def reply(*args):
+            request = json.loads(args[2][1]["content"])
+            if request["action"] == "independent_review":
+                value = {"passed": True, "issues": []}
+            else:
+                self.assertEqual(request["action"], "chapter")
+                family = request["family"]
+                paragraphs = []
+                for index in range(5 if family == "technical-solution" else 7):
+                    values = "".join(hashlib.sha256(f"{family}:{index}:{part}".encode()).hexdigest()
+                                     for part in range(157))
+                    paragraphs.append("".join(symbols[int(value, 16)] for value in values)[:10000])
+                value = {"chapter_id": "overview", "title": "项目概述",
+                         "paragraphs": paragraphs, "source_ids": ["1"]}
+            return {"content": json.dumps(value), "prompt_tokens": 10, "completion_tokens": 20}
+        model.side_effect = reply
+
+    def assert_full_batched_reviews(self, record, model):
+        reviews = list(record.revisions.filter(kind="review"))
+        self.assertEqual(len(reviews), 2)
+        for review in reviews:
+            actual = review.payload["model_review"]
+            self.assertEqual(actual["scope"], "full_batched")
+            self.assertTrue(actual["coverage"]["complete"])
+            self.assertTrue(actual["coverage"]["all_batches_passed"])
+            self.assertGreater(actual["coverage"]["batch_count"], 1)
+            self.assertTrue(actual["full_document_human_review_required"])
+            self.assertFalse(review.payload["passed"])
+        self.assertEqual(model.call_count, 2 + sum(review.payload["model_review"]["coverage"]["batch_count"]
+                                                for review in reviews))
+
+    @override_settings(PRODUCT_MODEL_CALLS_ALLOWED=True)
+    @patch("portal.product_three_drafts.render_report_draft")
+    @patch("portal.product_worker.generate_for_use")
+    def test_legacy_three_drafts_reviews_saved_body_and_blocks_real_tail_findings(self, model, render):
+        from portal.product_service import append_revision
+        created = self.approve_blueprint(self.save_blueprint(self.create_task(reviewer=False)))["task"]
+        record = DocumentTask.objects.get(pk=created["id"])
+        record.pending_action = "three_drafts"
+        record.checkpoint = {**record.checkpoint, "output_families": ["technical-solution"]}
+        record.save(update_fields=["pending_action", "checkpoint"])
+        current = record.revisions.get(kind="input", version=record.input_version)
+        blueprint = record.revisions.get(kind="blueprint", version=record.blueprint_version)
+        symbols = "甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳"
+        values = "".join(hashlib.sha256(str(part).encode()).hexdigest() for part in range(782))
+        text = "".join(symbols[int(value, 16)] for value in values)[:50000] + "正文末尾需核对来源归属。"
+        chapter = append_revision(record, "chapter", {"chapter_id": "overview", "title": "项目概述",
+            "paragraphs": [text], "source_ids": ["1"]}, input_hash=current.sha256,
+            blueprint_hash=blueprint.sha256, family="technical-solution")
+        def review(*args):
+            request = json.loads(args[2][1]["content"])
+            self.assertEqual(request["action"], "independent_review")
+            found = any("正文末尾需核对来源归属" in value for fragment in request["chapters"]
+                        for value in fragment["paragraphs"])
+            return {"content": json.dumps({"passed": not found,
+                "issues": ["正文末尾的来源归属需纠正"] if found else []})}
+        model.side_effect = review
+        self.assertTrue(run_once())
+        record.refresh_from_db()
+        self.assertEqual(record.error_code, "content_review_required")
+        self.assertEqual(record.state, "WAITING_INPUT")
+        render.assert_not_called()
+        self.assertFalse(record.artifacts.exists())
+        actual = record.revisions.get(kind="review").payload["model_review"]
+        self.assertEqual(actual["scope"], "full_batched")
+        self.assertTrue(actual["coverage"]["complete"])
+        self.assertEqual(actual["coverage"]["chapter_hashes"], {"overview": chapter.sha256})
+        self.assertEqual(actual["issues"], ["正文末尾的来源归属需纠正"])
+        self.assertEqual(model.call_count, actual["coverage"]["batch_count"])
+        self.assertGreater(model.call_count, 1)
+
     def test_business_technology_presentation_runtime_is_editable_and_source_bound(self):
-        runtime = Path(__file__).resolve().parents[3] / ".runtime" / "product-documents-python" / "Scripts" / "python.exe"
+        runtime = Path(settings.PRODUCT_DOCUMENT_PYTHON)
+        if not runtime.is_absolute():
+            runtime = settings.BASE_DIR / runtime
         if not runtime.is_file():
             self.skipTest("isolated document runtime is not installed")
         pair = {
@@ -49,6 +127,8 @@ class ThreeDraftFlowTests(PortalTestCase):
                 rendered = render_presentation_draft(SimpleNamespace(pk=uuid.uuid4(), title="合成园区安全项目"), pair)
             target = Path(storage) / rendered["path"]
             evidence = rendered["render_evidence"]
+            from portal.product_assets.bj_docs.scripts.ooxml import audit_package, load_package
+            audit_package(load_package(target), "presentation")
             self.assertEqual(evidence["engine"], "business-tech-pptx")
             self.assertEqual(evidence["engine_version"], "v4")
             self.assertEqual(evidence["quality_gate"]["status"], "pass")
@@ -97,16 +177,8 @@ class ThreeDraftFlowTests(PortalTestCase):
     @patch("portal.product_three_drafts.render_report_draft")
     @patch("portal.product_worker.generate_for_use")
     def test_report_pair_generation_skips_ppt_and_preserves_full_review(self, model, render_report, render_presentation):
-        responses = []
-        for family in ("technical-solution", "feasibility"):
-            responses.extend([
-                json.dumps({"chapter_id": "overview", "title": "项目概述",
-                            "paragraphs": [f"合成段{'甲乙丙丁戊己庚'[index]}" + "正文" * 5000
-                                           for index in range(5 if family == "technical-solution" else 7)],
-                            "source_ids": ["1"]}),
-                json.dumps({"passed": True, "issues": []}),
-            ])
-        model.side_effect = [{"content": value, "prompt_tokens": 10, "completion_tokens": 20} for value in responses]
+        self.mocked_full_report_model(model)
+
         def report_result(task, input_revision, blueprint, chapters, family, **diagram_options):
             path = Path(self.storage.name) / str(task.pk) / f"{family}.docx"
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -114,7 +186,8 @@ class ThreeDraftFlowTests(PortalTestCase):
             import hashlib
             return {"path": path.relative_to(self.storage.name).as_posix(),
                     "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-                    "template_hash": "b" * 64, "render_evidence": {"status": "draft_unverified"}}
+                    "template_hash": "b" * 64, "render_evidence": {"status": "draft_unverified",
+                        "diagram_generation": report_diagram_evidence(diagram_options["document"], path)}}
         render_report.side_effect = report_result
         created = self.create_task(reviewer=False)
         record = DocumentTask.objects.get(pk=created["id"])
@@ -133,6 +206,7 @@ class ThreeDraftFlowTests(PortalTestCase):
                          {"technical-solution", "feasibility"})
         render_presentation.assert_not_called()
         self.assertEqual(render_report.call_count, 2)
+        self.assert_full_batched_reviews(record, model)
         self.assertFalse(DocumentApproval.objects.filter(task=record, revision__kind="report").exists())
 
     @override_settings(PRODUCT_MODEL_CALLS_ALLOWED=True)
@@ -140,14 +214,7 @@ class ThreeDraftFlowTests(PortalTestCase):
     @patch("portal.product_three_drafts.render_report_draft")
     @patch("portal.product_worker.generate_for_use")
     def test_owner_blueprint_confirmation_generates_three_outputs_without_report_approval(self, model, render_report, render_presentation):
-        responses = []
-        for family in ("technical-solution", "feasibility"):
-            responses.extend([
-                json.dumps({"chapter_id": "overview", "title": "项目概述",
-                            "paragraphs": [f"合成段{'甲乙丙丁戊己庚'[index]}" + "正文" * 5000 for index in range(5 if family == "technical-solution" else 7)], "source_ids": ["1"]}),
-                json.dumps({"passed": True, "issues": []}),
-            ])
-        model.side_effect = [{"content": value, "prompt_tokens": 10, "completion_tokens": 20} for value in responses]
+        self.mocked_full_report_model(model)
 
         def report_result(task, input_revision, blueprint, chapters, family, **diagram_options):
             path = Path(self.storage.name) / str(task.pk) / f"{family}.docx"
@@ -157,7 +224,8 @@ class ThreeDraftFlowTests(PortalTestCase):
             import hashlib
             return {"path": path.relative_to(self.storage.name).as_posix(),
                     "sha256": hashlib.sha256(content).hexdigest(),
-                    "template_hash": "b" * 64, "render_evidence": {"status": "draft_unverified"}}
+                    "template_hash": "b" * 64, "render_evidence": {"status": "draft_unverified",
+                        "diagram_generation": report_diagram_evidence(diagram_options["document"], path)}}
 
         def presentation_result(task, pair):
             path = Path(self.storage.name) / str(task.pk) / "presentation.pptx"
@@ -193,6 +261,7 @@ class ThreeDraftFlowTests(PortalTestCase):
         record = DocumentTask.objects.get(pk=task_id)
         self.assertEqual(record.state, "WAITING_REVIEW", record.error_code)
         self.assertEqual(record.pending_action, "")
+        self.assert_full_batched_reviews(record, model)
         self.assertEqual({item["family"] for item in outputs}, {"technical-solution", "feasibility", "presentation"})
         self.assertTrue(all(item["current"] and item["draft"] for item in outputs))
         self.assertTrue(all(item["content_approved"] is False for item in outputs if item["family"] != "presentation"))

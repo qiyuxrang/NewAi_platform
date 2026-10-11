@@ -201,7 +201,7 @@ def auto_note(category, note, owner):
 
 def parse_sheet(ws, max_scan=2000):
     """解析单个 sheet，返回明细行列表。支持合并单元格向下填充、多子项。"""
-    rows = [list(r) for r in ws.iter_rows(values_only=True)][:max_scan]
+    rows = [list(r) for r in ws.iter_rows(max_row=max_scan, values_only=True)]
     hdr, col = find_header(rows)
     if hdr is None:
         return []

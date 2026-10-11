@@ -83,11 +83,14 @@ def _feature_checks(configured, environment):
         checks.append(_item("product_formal_office_enabled", "passed" if office_render else "blocked",
                             "正式发布必须显式启用真实 Office 渲染；结构生成结果不能替代正式三件套验收。"))
     if formal_release or office_render:
-        # The frozen PACK runs local Word/PowerPoint COM through the document
-        # interpreter. A remote Windows worker is not evidence of local support.
-        # Do not import COM or execute the configured interpreter in this probe.
-        checks.append(_item("product_office_platform", "passed" if platform.system() == "Windows" else "blocked",
-                            "当前冻结 Office renderer 仅使用 Windows Word/PowerPoint COM；非 Windows 本地执行环境不支持。"))
+        # File existence is configuration evidence only, never render acceptance.
+        renderer = getattr(configured, "PRODUCT_OFFICE_RENDERER", "word")
+        available = (platform.system() == "Windows" if renderer == "word" else
+                     renderer == "libreoffice" and platform.system() == "Linux"
+                     and all(_local_path(getattr(configured, name, None)) for name in
+                         ("PRODUCT_LIBREOFFICE_EXECUTABLE", "PRODUCT_UNO_PYTHON")))
+        checks.append(_item("product_office_platform", "passed" if available else "blocked",
+                            "文档渲染需部署所选 Word 或 LibreOffice 运行时；文件存在仍需真实排版验收。"))
         checks.append(_item("product_office_acceptance", "external_gate",
                             "须独立验证目标执行者的 Word/PPT 实际渲染、许可、受支持运行方式、任务路由及私有文件；Windows 路径存在不证明可用。"))
     if environment.get("PORTAL_ENGINEERING_ENABLED") == "1":

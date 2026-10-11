@@ -14,8 +14,8 @@ class EngineeringQuotaTests(SimpleTestCase):
         self.user = SimpleNamespace(is_active=True, is_authenticated=True, must_change_password=False)
         self.user.roles = MagicMock()
         self.user.roles.filter.return_value.exists.return_value = True
-        self.modules = self.enterContext(patch.object(api, "authorized_modules"))
-        self.modules.return_value.filter.return_value.exists.return_value = True
+        self.department = self.enterContext(patch.object(api, "can_use_department", return_value=True))
+        self.enterContext(patch.object(api, "is_business_manager", return_value=False))
         self.jobs = self.enterContext(patch.object(api.EngineeringJob.objects, "filter"))
         self.jobs.return_value.exists.return_value = True
         self.audit = self.enterContext(patch.object(api, "audit"))

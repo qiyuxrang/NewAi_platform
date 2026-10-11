@@ -1,5 +1,6 @@
 """Persisted report content and its exact two-family provenance."""
 
+import hashlib
 from pathlib import Path
 
 from .product_models import DocumentRevision
@@ -51,15 +52,56 @@ def _chapter_hashes(task, family, current_input, blueprint):
 
 def _report_generation_hash(task, family, current_input, blueprint):
     from .product_diagrams import diagram_contract_hash
+    from .product_content_quality import content_quality_policy_hash
+    from .product_worker import _content_review_current, current_chapters
     chapters = _chapter_hashes(task, family, current_input, blueprint)
     if chapters is None:
         return None
+    found = current_chapters(task, current_input.sha256, blueprint.sha256, family)
+    ordered = [found[chapter["id"]] for chapter in blueprint.payload["chapters"]]
+    review = task.revisions.filter(kind=DocumentRevision.Kind.REVIEW, family=family).order_by("-version").first()
+    validated_review = ({"id": str(review.pk), "sha256": review.sha256}
+                        if _content_review_current(task, review, current_input, blueprint, ordered) else None)
     return digest({"family": family, "input": current_input.sha256, "blueprint": blueprint.sha256,
-                   "chapters": list(chapters.values()), "title": task.title, "diagrams": diagram_contract_hash()})
+                   "chapters": list(chapters.values()), "title": task.title, "diagrams": diagram_contract_hash(),
+                   "quality_policy_sha256": content_quality_policy_hash(), "validated_review": validated_review})
+
+
+def _report_images_current(report, artifact):
+    """Keep derived presentations bound to the report's rendered image bytes."""
+    figures = [block for block in report.payload.get("blocks", []) if block.get("type") == "figure"]
+    if not figures:
+        return True
+    diagram = artifact.render_evidence.get("diagram_generation", {})
+    if not isinstance(diagram, dict):
+        return False
+    evidence = diagram.get("figures", [])
+    if (not isinstance(evidence, list) or any(not isinstance(item, dict)
+            or not isinstance(item.get("id"), str) or not isinstance(item.get("image_sha256"), str)
+            for item in evidence)
+            or len({item.get("id") for item in evidence}) != len(evidence)):
+        return False
+    expected = {item.get("id"): item.get("image_sha256") for item in evidence}
+    if set(expected) != {block["id"] for block in figures}:
+        return False
+    storage = private_root().resolve()
+    asset_root = (storage / Path(artifact.path).parent).resolve()
+    if not asset_root.is_relative_to(storage):
+        return False
+    try:
+        for block in figures:
+            candidate = (asset_root / block.get("path", "")).resolve()
+            if (not candidate.is_relative_to(asset_root) or not candidate.is_file()
+                    or hashlib.sha256(candidate.read_bytes()).hexdigest() != expected[block["id"]]):
+                return False
+    except (OSError, TypeError, ValueError):
+        return False
+    return True
 
 
 def report_current(task, report):
     from .product_agent import requirement_current
+    from .product_worker import _content_review_current, current_chapters
     if not requirement_current(task):
         return False
     current_input = current_revision(task, DocumentRevision.Kind.INPUT)
@@ -68,9 +110,23 @@ def report_current(task, report):
     if (not current_input or not blueprint or not input_authorized(task, current_input) or not latest or latest.pk != report.pk
             or report.input_hash != current_input.sha256 or report.blueprint_hash != blueprint.sha256):
         return False
+    try:
+        if digest(report.payload) != report.sha256:
+            return False
+    except ProductError:
+        return False
     artifact = next((item for item in task.artifacts.filter(family=report.family)
                      if item.render_evidence.get("report_id") == str(report.pk)), None)
     if artifact is None:
+        return False
+    if not _report_images_current(report, artifact):
+        return False
+    found = current_chapters(task, current_input.sha256, blueprint.sha256, report.family)
+    ordered = [found.get(chapter["id"]) for chapter in blueprint.payload["chapters"]]
+    if any(chapter is None for chapter in ordered) or not _content_review_current(task, artifact.review, current_input, blueprint, ordered):
+        return False
+    model = artifact.review.payload.get("model_review", {})
+    if model.get("status") != "passed" or model.get("issues") or model.get("coverage", {}).get("all_batches_passed") is not True:
         return False
     expected = _report_generation_hash(task, report.family, current_input, blueprint)
     return bool(expected and artifact and artifact.generation_hash == expected)
@@ -78,6 +134,7 @@ def report_current(task, report):
 
 def output_current(task, artifact):
     from .product_agent import requirement_current
+    from .product_worker import _content_review_current, current_chapters
     if not requirement_current(task):
         return False
     current_input = current_revision(task, DocumentRevision.Kind.INPUT)
@@ -98,7 +155,13 @@ def output_current(task, artifact):
         report = task.revisions.filter(pk=report_id, kind=DocumentRevision.Kind.REPORT).first()
         return bool(report and report_current(task, report))
     chapters = _chapter_hashes(task, artifact.family, current_input, blueprint)
-    return bool(chapters and artifact.review and artifact.review.payload.get("chapter_hashes") == chapters
+    found = current_chapters(task, current_input.sha256, blueprint.sha256, artifact.family)
+    ordered = [found.get(chapter["id"]) for chapter in blueprint.payload["chapters"]]
+    if not chapters or any(chapter is None for chapter in ordered) or not _content_review_current(task, artifact.review, current_input, blueprint, ordered):
+        return False
+    model = artifact.review.payload.get("model_review", {})
+    return bool(model.get("status") == "passed" and not model.get("issues")
+                and model.get("coverage", {}).get("all_batches_passed") is True
                 and artifact.render_evidence.get("document_title", task.title) == task.title)
 
 

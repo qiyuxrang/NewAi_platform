@@ -12,6 +12,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+from PIL import Image
 from pptx import Presentation
 from pptx.chart.data import ChartData
 from pptx.dml.color import RGBColor
@@ -193,6 +194,21 @@ def text_box(slide, x, y, w, h, text, size=18, color=COLORS["ink"], **kwargs):
     return set_text(box, text, size, color, **kwargs)
 
 
+def contained_picture(slide, image_path, x, y, width, height):
+    """Keep every source pixel inside its reserved box without distortion."""
+    left, top, box_width, box_height = map(Inches, (x, y, width, height))
+    if box_width <= 0 or box_height <= 0:
+        raise ValueError("image container must have positive dimensions")
+    with Image.open(image_path) as image:
+        pixel_width, pixel_height = image.size
+    scale = min(box_width / pixel_width, box_height / pixel_height)
+    picture_width = max(1, round(pixel_width * scale))
+    picture_height = max(1, round(pixel_height * scale))
+    return slide.shapes.add_picture(str(image_path),
+        left + (box_width - picture_width) // 2, top + (box_height - picture_height) // 2,
+        width=picture_width, height=picture_height)
+
+
 def rect(slide, x, y, w, h, fill, *, line=None, radius=False):
     geometry = MSO_SHAPE.ROUNDED_RECTANGLE if radius else MSO_SHAPE.RECTANGLE
     shape = slide.shapes.add_shape(geometry, Inches(x), Inches(y), Inches(w), Inches(h))
@@ -238,7 +254,7 @@ def cover(prs, data, hero=None):
     if hero and Path(hero["asset_path"]).is_file():
         panel=rect(slide,8.55,1.25,4.25,4.85,"FFFFFF",line=COLORS["cyan"],radius=True)
         panel.fill.transparency=4
-        slide.shapes.add_picture(str(hero["asset_path"]), Inches(8.75), Inches(1.72), width=Inches(3.85), height=Inches(3.95))
+        contained_picture(slide, hero["asset_path"], 8.75, 1.72, 3.85, 3.95)
         text_box(slide,8.77,5.74,3.75,0.32,excerpt(block_text(hero), 24),11,COLORS["navy"],bold=True,align=PP_ALIGN.CENTER)
     else:
         for index,(size,color) in enumerate(((3.8,COLORS["panel_2"]),(2.75,COLORS["blue"]),(1.65,COLORS["cyan"]))):
@@ -302,8 +318,7 @@ def figure_assets(blocks, family):
 def add_visual_panel(slide, block, x, y, w, h, title=None):
     panel = rect(slide, x, y, w, h, "FFFFFF", line=COLORS["panel_2"], radius=True)
     panel.fill.transparency = 2
-    slide.shapes.add_picture(str(block["asset_path"]), Inches(x + 0.18), Inches(y + 0.42),
-                             width=Inches(w - 0.36), height=Inches(h - 0.72))
+    contained_picture(slide, block["asset_path"], x + 0.18, y + 0.42, w - 0.36, h - 0.72)
     text_box(slide, x + 0.22, y + 0.08, w - 0.44, 0.28,
              title or block.get("caption") or "方案图示", 10.5, COLORS["navy"],
              bold=True, align=PP_ALIGN.CENTER)

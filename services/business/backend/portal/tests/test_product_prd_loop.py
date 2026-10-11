@@ -91,7 +91,7 @@ class ProductPrdLoopTests(PortalTestCase):
     def test_actual_phases_and_feedback_are_used_in_next_blueprint_version(self, model):
         task = self.prepared()
         observed = []
-        def generate(task_id, fence, attempt, route, payload):
+        def generate(task_id, fence, attempt, route, payload, **kwargs):
             current = DocumentTask.objects.get(pk=task_id)
             observed.append(copy.deepcopy(current.checkpoint['analysis_progress']))
             return copy.deepcopy(self.blueprint)
@@ -168,7 +168,7 @@ class ProductPrdLoopTests(PortalTestCase):
 
     @patch('portal.product_worker._model')
     def test_blueprint_revision_is_limited_to_three_rounds_and_approval_remains_available(self, model):
-        model.side_effect = lambda *args: copy.deepcopy(self.blueprint)
+        model.side_effect = lambda *args, **kwargs: copy.deepcopy(self.blueprint)
         task = self.prepared()
         self.assertEqual(self.action(task, 'queue', action='blueprint').status_code, 200)
         self.assertTrue(run_once())

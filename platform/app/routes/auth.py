@@ -1,6 +1,6 @@
 """Authentication API routes."""
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -17,6 +17,7 @@ from app.auth.service import (
     get_user_by_username,
     hash_password,
     verify_password,
+    token_matches_user,
 )
 from app.audit import write_audit_log
 from app.auth.dependencies import get_current_user
@@ -32,18 +33,27 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 # Request / Response schemas
 # ---------------------------------------------------------------------------
 
-class RegisterRequest(BaseModel):
+class PasswordRequest(BaseModel):
+    @field_validator("password", "new_password", check_fields=False)
+    @classmethod
+    def password_bytes(cls, value):
+        if len(value.encode()) > 72:
+            raise ValueError("Password must be at most 72 UTF-8 bytes")
+        return value
+
+
+class RegisterRequest(PasswordRequest):
     model_config = ConfigDict(extra="forbid")
 
     username: str
     email: str
-    password: str
+    password: str = Field(min_length=8, max_length=72)
     runtime_mode: str | None = None
 
 
-class LoginRequest(BaseModel):
+class LoginRequest(PasswordRequest):
     username: str  # accepts username or email
-    password: str
+    password: str = Field(max_length=72)
 
 
 class TokenResponse(BaseModel):
@@ -92,8 +102,8 @@ async def register(req: RegisterRequest, db: AsyncSession = Depends(get_db)):
 
     user = await create_user(db, req.username, req.email, req.password, runtime_mode=runtime_mode)
     return TokenResponse(
-        access_token=create_access_token(user.id, user.role),
-        refresh_token=create_refresh_token(user.id),
+        access_token=create_access_token(user.id, user.role, user.password_hash),
+        refresh_token=create_refresh_token(user.id, user.password_hash),
         user_id=user.id,
         username=user.username,
         role=user.role,
@@ -128,8 +138,8 @@ async def login(req: LoginRequest, db: AsyncSession = Depends(get_db)):
         commit=True,
     )
     return TokenResponse(
-        access_token=create_access_token(user.id, user.role),
-        refresh_token=create_refresh_token(user.id),
+        access_token=create_access_token(user.id, user.role, user.password_hash),
+        refresh_token=create_refresh_token(user.id, user.password_hash),
         user_id=user.id,
         username=user.username,
         role=user.role,
@@ -142,11 +152,11 @@ async def refresh(req: RefreshRequest, db: AsyncSession = Depends(get_db)):
     if payload is None or payload.get("type") != "refresh":
         raise HTTPException(status_code=401, detail="Invalid refresh token")
     user = await get_user_by_id(db, payload["sub"])
-    if user is None or not user.is_active:
+    if not token_matches_user(payload, user):
         raise HTTPException(status_code=401, detail="User not found or disabled")
     return TokenResponse(
-        access_token=create_access_token(user.id, user.role),
-        refresh_token=create_refresh_token(user.id),
+        access_token=create_access_token(user.id, user.role, user.password_hash),
+        refresh_token=create_refresh_token(user.id, user.password_hash),
         user_id=user.id,
         username=user.username,
         role=user.role,
@@ -175,13 +185,21 @@ class ApiTokenResponse(BaseModel):
 @router.post("/api-token", response_model=ApiTokenResponse)
 async def generate_api_token(user: User = Depends(get_current_user)):
     """Generate a long-lived API token for programmatic access."""
-    token = create_api_token(user.id, user.role)
+    token = create_api_token(user.id, user.role, password_hash=user.password_hash)
     return ApiTokenResponse(api_token=token)
 
 
-class ChangePasswordRequest(BaseModel):
+class ChangePasswordRequest(PasswordRequest):
+    model_config = ConfigDict(extra="forbid")
     old_password: str
-    new_password: str
+    new_password: str = Field(min_length=8, max_length=72)
+
+    @field_validator("old_password")
+    @classmethod
+    def old_password_bytes(cls, value):
+        if len(value.encode()) > 72:
+            raise ValueError("Password must be at most 72 UTF-8 bytes")
+        return value
 
 
 @router.put("/change-password")
@@ -195,5 +213,7 @@ async def change_password(
     if len(req.new_password) < 6:
         raise HTTPException(status_code=400, detail="新密码至少需要6个字符")
     user.password_hash = hash_password(req.new_password)
+    user.portal_session_enc = None
+    await write_audit_log(db, action="password_change", user_id=user.id, resource=user.id)
     await db.commit()
     return {"message": "密码修改成功"}

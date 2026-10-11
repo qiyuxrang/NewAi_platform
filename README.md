@@ -6,6 +6,8 @@
 - 业务源码：`services/business`；原工程报价逻辑：`services/engineering`；原生 Agent 与企业 Bridge：`openclaw`。
 - 本机统一入口：`启动项目.cmd` / `停止项目.cmd`。说明见 [启动说明](启动说明.md)，当前验证范围见 [迁移验收记录](doc/enterprise-migration-execution.md)。
 - RAGFlow 保留为外部服务，通过受控 MCP 与现有业务权限接入。
+- Linux Docker 部署候选包与操作步骤见 [云部署说明](deploy/cloud/README.md)，三件套范围及验收要求见 [交付标准](doc/cloud-product-delivery-standard.md)，本次本地验证见 [部署包验证记录](doc/cloud-package-verification.md)。
+- 三件套实际文件、Office 页面、下载与预览测试见 [三件套测试记录](doc/three-piece-test-report-20261011.md)。
 
 仓库包含源码、依赖清单、配置模板与测试。实际 `.env`、密码、API 密钥、业务数据库和资料、Python/Node 运行时、依赖安装目录及 Docker 数据卷不上传。首次在另一台电脑部署需配置本机环境和私有配置；当前验收不代表克隆后免安装启动。原有许可证与上游说明保留。
 

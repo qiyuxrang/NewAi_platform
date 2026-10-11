@@ -6,6 +6,7 @@ import type { BlueprintPayload, DocumentTask, DraftOutput, ReportRevision, Revie
 import "./product-workspace.css";
 import ProjectStages from "./ProjectStages";
 import { SOURCE_ACCEPT, updateSource } from "./product-api";
+import { useUnsavedWarning } from "./workbench-state";
 
 const pretty = (value: unknown) => JSON.stringify(value, null, 2);
 const emptyInput = (): TaskInput => ({ project: "", requirements: "", items: [], background: "", conditions: [] });
@@ -200,6 +201,7 @@ export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, busines
   const [conversationFiles, setConversationFiles] = useState<File[]>([]);
   const [conversationAccepted, setConversationAccepted] = useState(false);
   const [conversationError, setConversationError] = useState("");
+  useUnsavedWarning(business && Boolean(conversationMessage || conversationFiles.length));
   const locked = useRef(false);
   const initial = useRef(false);
   const mounted = useRef(false);
@@ -247,7 +249,10 @@ export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, busines
       if (controller.signal.aborted) return;
       receive(result);
     })
-      .catch(reason => { if (!controller.signal.aborted) deepLinked ? onFatal("指定产品任务或成果不存在，或当前账号无权访问。") : setError(errorMessage(reason)); });
+      .catch(reason => { if (!controller.signal.aborted) {
+        if (deepLinked) onFatal("指定产品任务或成果不存在，或当前账号无权访问。");
+        else setError(errorMessage(reason));
+      } });
     return () => controller.abort();
   }, [id, requestedArtifact, deepLinked, onFatal]);
   useEffect(() => {
@@ -340,25 +345,31 @@ export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, busines
       reason: issueResolutions[issue.issue_hash].reason.trim(), source_ids: issueResolutions[issue.issue_hash].source_ids })) });
   }
   async function continueTask() {
-    if (locked.current || !task || (!conversationMessage.trim() && conversationFiles.length === 0)) return;
+    if (locked.current || !task || conflict || disabled("add_source") || (!conversationMessage.trim() && conversationFiles.length === 0)) return;
     locked.current = true; setBusy(true); setConversationError(""); reading.current?.abort();
     const controller = new AbortController(); mutation.current = controller;
     try {
       let nextTask = task;
       if (conversationMessage.trim() && !conversationAccepted) {
         const result = await continueConversation(id, { expected_version: nextTask.version, message: conversationMessage.trim() }, controller.signal);
-        nextTask = result.task; setTask(nextTask); setConversationAccepted(true);
+        if (controller.signal.aborted) return;
+        nextTask = result.task; receive(nextTask); setConversationAccepted(true);
       }
       let remaining = [...conversationFiles];
       while (remaining.length) {
-        nextTask = await uploadSource(id, remaining[0], nextTask.version, controller.signal);
-        remaining = remaining.slice(1); setConversationFiles(remaining); setTask(nextTask);
+        nextTask = await uploadSource(id, remaining[0], nextTask.version, controller.signal, business && task.intake_mode === 'equipment_background' ? 'background' : undefined);
+        if (controller.signal.aborted) return;
+        remaining = remaining.slice(1); setConversationFiles(remaining); receive(nextTask);
       }
       receive(nextTask);
       setConversationMessage(""); setConversationAccepted(false);
       setNotice("补充要求和资料已保存；确认蓝图后系统会生成三件套草稿。");
     } catch (reason) {
-      if (!controller.signal.aborted && mounted.current) setConversationError(errorMessage(reason));
+      if (!controller.signal.aborted && mounted.current) {
+        setConversationError(errorMessage(reason));
+        if (reason instanceof ApiError && reason.status === 409) setConflict(true);
+        if (business && reason instanceof ApiError && [401, 403, 404].includes(reason.status)) { setTask(null); onFatal("项目访问权限已变化，当前资料已隐藏。"); }
+      }
     } finally { locked.current = false; if (mounted.current) setBusy(false); }
   }
   function decision(target: "blueprint" | "report" | "artifact", choice: "approve" | "revise", record?: ReportRevision) {
@@ -367,7 +378,13 @@ export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, busines
   }
   if (business) return <>
     {error && <div className="pd-feedback" role="alert">{error}</div>}{notice && <p className="pd-inline-notice" role="status">{notice}</p>}
-    <ProjectStages task={task} outputs={outputs} history={history} outputsError={outputsError} historyError={historyError} busy={busy} conflict={conflict} disabled={disabled} onAction={send} onReload={() => void perform(async () => {}, true)} onUpload={(file, purpose) => perform(signal => uploadSource(id, file, task.version, signal, purpose))} onSourceAction={(sourceId, endpoint, body) => perform(signal => updateSource(sourceId, endpoint, body, signal))}/>
+    <ProjectStages task={task} outputs={outputs} history={history} outputsError={outputsError} historyError={historyError} busy={busy} conflict={conflict} disabled={disabled} onAction={send} onReload={() => void perform(async () => {}, true)} onUpload={(file, purpose) => perform(signal => uploadSource(id, file, task.version, signal, purpose))} onSourceAction={(sourceId, endpoint, body) => perform(signal => updateSource(sourceId, endpoint, body, signal))} composer={<form className="product-composer wb-followup" onSubmit={event => { event.preventDefault(); void continueTask(); }}>
+      {conversationError && <p role="alert">{conversationError}</p>}
+      {conversationAccepted && conversationFiles.length > 0 && <p role="note">补充要求已保存，继续上传剩余 {conversationFiles.length} 份资料。</p>}
+      <label className="sr-only" htmlFor={`wb-message-${id}`}>补充项目要求或资料路径</label><textarea id={`wb-message-${id}`} rows={2} maxLength={10000} placeholder={disabled('add_source') ? '当前阶段暂不可补充资料，请查看处理进度或审核提示。' : '继续补充项目要求、资料路径或上传附件…'} value={conversationMessage} disabled={disabled('add_source') || conversationAccepted} onChange={event => setConversationMessage(event.target.value)}/>
+      {!!conversationFiles.length && <ul className="product-file-chips">{conversationFiles.map((file, index) => <li key={`${file.name}-${index}`}>{file.name}{!conversationAccepted && <button type="button" aria-label={`移除 ${file.name}`} onClick={() => setConversationFiles(files => files.filter((_, i) => i !== index))}>×</button>}</li>)}</ul>}
+      <div className="product-composer-actions"><button className="button secondary" type="button" disabled={disabled('add_source') || conversationAccepted} onClick={() => document.getElementById(`wb-files-${id}`)?.click()}>＋ 添加背景资料</button><input className="sr-only" id={`wb-files-${id}`} type="file" multiple accept={SOURCE_ACCEPT} disabled={disabled('add_source') || conversationAccepted} onChange={event => { setConversationFiles(files => [...files, ...Array.from(event.target.files || [])]); event.target.value = ''; }}/><small>对话补充会保存新的项目版本</small><button className="button primary" disabled={disabled('add_source') || (!conversationMessage.trim() && !conversationFiles.length)}>{busy ? '正在保存…' : conversationAccepted ? '继续上传' : '发送 ↑'}</button></div>
+    </form>}/>
   </>;
   const progress = task.artifacts.length ? 4 : task.blueprint ? 3 : task.sources.length ? 2 : 1;
   return <>

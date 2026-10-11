@@ -4,7 +4,7 @@ import { fileURLToPath } from 'node:url'
 import Module, { createRequire } from 'node:module'
 import ts from 'typescript'
 
-const sourceFile = fileURLToPath(new URL('../src/business/shared.tsx', import.meta.url))
+const sourceFile = fileURLToPath(new URL('../src/business/workspace-navigation.ts', import.meta.url))
 const compiled = ts.transpileModule(readFileSync(sourceFile, 'utf8'), { compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText
 const checkedModule = new Module(sourceFile)
 checkedModule.filename = sourceFile

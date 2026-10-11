@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { CenterLink } from "../shared";
 import { TaskEditor } from "./DocumentWorkspace";
-import { projectListUrl } from './workbench-shared';
+import { projectListUrl } from './workbench-state';
 import "./project-workbench.css";
 
 export default function ProductProjectDetail({ id, artifact = "" }: { id: string; artifact?: string }) {

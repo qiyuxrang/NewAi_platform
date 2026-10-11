@@ -1,24 +1,33 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { isLoggedIn } from "@/lib/auth";
 import { Sidebar } from "@/components/sidebar";
 import { Header } from "@/components/header";
 
+function subscribeToAuthentication(onChange: () => void) {
+  window.addEventListener("storage", onChange);
+  window.addEventListener("focus", onChange);
+  return () => {
+    window.removeEventListener("storage", onChange);
+    window.removeEventListener("focus", onChange);
+  };
+}
+
+const serverAuthentication = (): boolean | null => null;
+
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
-  const [checked, setChecked] = useState(false);
+  const authenticated = useSyncExternalStore(subscribeToAuthentication, isLoggedIn, serverAuthentication);
 
   useEffect(() => {
-    if (!isLoggedIn()) {
+    if (authenticated === false) {
       router.replace("/login");
-    } else {
-      setChecked(true);
     }
-  }, [router]);
+  }, [authenticated, router]);
 
-  if (!checked) {
+  if (authenticated !== true) {
     return (
       <div className="min-h-screen flex items-center justify-center">
         <p className="text-gray-500">加载中...</p>

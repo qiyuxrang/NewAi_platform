@@ -37,8 +37,8 @@ export default function DepartmentWorkspace() {
 
   if (!department || (featureCode && !feature)) return <p className="text-dark-text-secondary">该工作页面不存在。</p>
 
-  return <div className="mx-auto max-w-6xl space-y-6">
-    <div>
+  return <div className={departmentCode === 'product' ? 'wb-department' : 'mx-auto max-w-6xl space-y-6'}>
+    <div hidden={departmentCode === 'product' && connection?.available}>
       {feature && <Link to={departmentPath(department.code)} className="text-sm text-accent-blue">返回{department.label}</Link>}
       <h1 className="mt-2 text-2xl font-bold text-dark-text">{feature?.label ?? `${department.label}工作台`}</h1>
       <p className="mt-2 text-sm text-dark-text-secondary">{feature?.description ?? department.description}</p>
@@ -56,10 +56,10 @@ export default function DepartmentWorkspace() {
     </section>}
     <WorkspaceBoundary resetKey={`${departmentCode}/${featureCode}`}>
       {connection?.available && hrFeature && <HrWorkspace feature={featureCode!} />}
-      {connection?.available && departmentCode === 'product' && featureCode && <ProductWorkspace feature={featureCode} />}
+      {connection?.available && departmentCode === 'product' && <ProductWorkspace feature={featureCode || 'documents'} />}
       {connection?.available && departmentCode === 'engineering' && featureCode && <BusinessSurface><EngineeringWorkspace section="estimate" /></BusinessSurface>}
     </WorkspaceBoundary>
-    {!feature && <div className="grid grid-cols-2 gap-4">
+    {!feature && departmentCode !== 'product' && <div className="grid grid-cols-2 gap-4">
       {department.functions.map(item => <Link key={item.code} to={departmentPath(department.code, item.code)} className="rounded-xl border border-dark-border bg-dark-card p-5 hover:border-accent-blue">
         <div className="flex items-center justify-between font-semibold text-dark-text">{item.label}<ArrowRight size={16} /></div>
         <p className="mt-2 text-sm text-dark-text-secondary">{item.description}</p>

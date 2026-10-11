@@ -140,3 +140,58 @@ class ProductRenderingTests(SimpleTestCase):
         with self.assertRaises(DocumentError) as error:
             render_office(self.relative.as_posix(), self.sha256)
         self.assertEqual(error.exception.code, "artifact_mutated")
+
+    @patch("portal.product_rendering.subprocess.run")
+    def test_incorrect_hash_missing_page_or_claimed_visual_review_never_passes(self, run):
+        for failure in ("pdf_hash", "docx_hash", "input_hash", "page_missing", "extra_page", "visual_claim"):
+            with self.subTest(failure=failure):
+                def invalid(command, **kwargs):
+                    result = self._successful_process(command, **kwargs)
+                    output = Path(command[5])
+                    report_path = output / "render.json"
+                    report = json.loads(report_path.read_text())
+                    if failure in {"pdf_hash", "docx_hash", "input_hash"}:
+                        key = {"pdf_hash": "pdf_sha256", "docx_hash": "rendered_docx_sha256", "input_hash": "input_sha256"}[failure]
+                        report[key] = "0" * 64
+                    elif failure == "page_missing":
+                        (output / "page-001.png").unlink()
+                    elif failure == "extra_page":
+                        (output / "page-002.png").write_bytes(b"extra")
+                    else:
+                        report["visually_reviewed"] = True
+                    report_path.write_text(json.dumps(report))
+                    return result
+                run.side_effect = invalid
+                with self.assertRaises(DocumentError):
+                    render_office(self.relative.as_posix(), self.sha256)
+
+    @override_settings(PRODUCT_OFFICE_RENDERER="libreoffice")
+    @patch("portal.product_rendering.run_office")
+    @patch("portal.product_rendering._office_command")
+    def test_linux_presentation_preview_keeps_source_hash_and_business_boundary(self, command, run):
+        relative = self.relative.with_suffix(".pptx")
+        source = self.root / relative
+        source.write_bytes(b"PK\x03\x04synthetic-pptx")
+        digest = hashlib.sha256(source.read_bytes()).hexdigest()
+        command.side_effect = lambda runtime, source, output, timeout, **kwargs: [str(output)]
+        def success(args, **kwargs):
+            output = Path(args[0])
+            output.mkdir()
+            pdf, page = output / "slides.pdf", output / "page-001.png"
+            pdf.write_bytes(b"%PDF-1.7\nsynthetic")
+            page.write_bytes(b"\x89PNG\r\n\x1a\nsynthetic")
+            (output / "render.json").write_text(json.dumps({
+                "rendered": True, "structural_pass": True, "visually_reviewed": False,
+                "input_sha256": digest, "page_count": 1,
+                "pdf_sha256": hashlib.sha256(pdf.read_bytes()).hexdigest(),
+                "image_sha256": [hashlib.sha256(page.read_bytes()).hexdigest()],
+            }))
+            return SimpleNamespace(returncode=0)
+        run.side_effect = success
+        evidence = render_office(relative.as_posix(), digest)
+        self.assertEqual(evidence["pptx_sha256"], digest)
+        self.assertEqual(evidence["generation_sha256"], digest)
+        self.assertFalse(evidence["verified"])
+        self.assertEqual(evidence["visual_review"], "not_run")
+        self.assertEqual(command.call_args.kwargs["kind"], "powerpoint")
+        self.assertEqual(hashlib.sha256(source.read_bytes()).hexdigest(), digest)

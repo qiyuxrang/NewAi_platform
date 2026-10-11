@@ -15,6 +15,8 @@ from urllib.parse import urlsplit
 from model_gateway.errors import GatewayError
 from model_gateway import agent_protocol
 from backend.portal.model_messages import TEXT_REQUEST_LIMIT, VISION_REQUEST_LIMIT, validate_messages
+from backend.portal.model_response_format import (supports_chapter_response_format, validate_response_format,
+                                                 validate_generation_profile, validate_profile_usage)
 
 
 REQUEST_LIMIT = TEXT_REQUEST_LIMIT + 65536
@@ -203,7 +205,18 @@ def _positive_integer(value):
     return type(value) is int and value > 0
 
 
-def _request(provider, model, messages, max_output_tokens, stream=False, agent_tools=None, tool_choice=None):
+def _request(provider, model, messages, max_output_tokens, stream=False, agent_tools=None, tool_choice=None,
+             *, response_format=None, generation_profile=None):
+    if generation_profile is not None:
+        try:
+            validate_generation_profile(generation_profile, provider=provider, model=model,
+                                        response_format=response_format, messages=messages,
+                                        stream=stream, agent_tools=agent_tools, tool_choice=tool_choice,
+                                        requested=max_output_tokens)
+        except (ValueError, TypeError, RecursionError):
+            raise _error("invalid_request", 400) from None
+    if response_format is not None and not supports_chapter_response_format(provider, model):
+        raise _error("invalid_request", 400)
     if provider.get("protocol") != "openai_chat":
         raise _error("unsupported_protocol")
     if model.get("enabled", True) is not True or model.get("supports_text", True) is not True:
@@ -222,6 +235,15 @@ def _request(provider, model, messages, max_output_tokens, stream=False, agent_t
     if not isinstance(messages, list) or not messages:
         raise _error("invalid_request")
     vision = any(isinstance(message, dict) and isinstance(message.get('content'), list) for message in messages)
+    output_format = None
+    if response_format is not None:
+        try:
+            output_format = validate_response_format(response_format)
+            if (not supports_chapter_response_format(provider, model) or vision or stream is not False
+                    or agent_tools is not None or tool_choice is not None):
+                raise ValueError
+        except (ValueError, TypeError, RecursionError):
+            raise _error("invalid_request", 400) from None
     try:
         if agent_tools is None:
             validate_messages(messages, vision=vision)
@@ -232,8 +254,15 @@ def _request(provider, model, messages, max_output_tokens, stream=False, agent_t
     try:
         request = {"model": model["model_name"], "messages": messages,
                    token_parameter: requested, "stream": stream}
+        if generation_profile is not None:
+            del request[token_parameter]
+            request["max_completion_tokens"] = min(requested, 4096) - 10
+            request["enable_thinking"] = True
+            request["thinking_budget"] = 512
+        if output_format is not None:
+            request["response_format"] = output_format
         # Flash defaults to deep thinking, which can exceed the bounded document-step timeout.
-        if (model["model_name"] == "qwen3.8-flash"
+        if (generation_profile is None and model["model_name"] == "qwen3.8-flash"
                 and provider.get("base_url") == "https://dashscope.aliyuncs.com/compatible-mode/v1"):
             request["enable_thinking"] = False
         if agent_tools is not None:
@@ -262,7 +291,7 @@ def _invalid_constant(value):
     raise ValueError
 
 
-def _parse_response(body):
+def _parse_response(body, *, generation_profile=None, requested=None):
     try:
         data = json.loads(body.decode("utf-8"), object_pairs_hook=_unique_object,
                           parse_constant=_invalid_constant)
@@ -286,8 +315,17 @@ def _parse_response(body):
         for name in ("prompt_tokens", "completion_tokens", "total_tokens"):
             if name in usage and (type(usage[name]) is not int or usage[name] < 0):
                 raise ValueError
-        return {"content": message["content"], "prompt_tokens": usage.get("prompt_tokens"),
-                "completion_tokens": usage.get("completion_tokens")}
+        result = {"content": message["content"], "prompt_tokens": usage.get("prompt_tokens"),
+                  "completion_tokens": usage.get("completion_tokens")}
+        if generation_profile is not None:
+            details = usage.get("completion_tokens_details")
+            if details is not None:
+                if type(details) is not dict:
+                    raise ValueError
+                if "reasoning_tokens" in details:
+                    result["reasoning_tokens"] = details["reasoning_tokens"]
+            validate_profile_usage(result, requested)
+        return result
     except (ValueError, UnicodeError, RecursionError):
         raise _error("invalid_response") from None
 
@@ -360,11 +398,15 @@ def list_models(provider):
             connection.close()
 
 
-def chat_completion(provider, model, messages, max_output_tokens=None, *, agent_tools=None, tool_choice=None):
+def chat_completion(provider, model, messages, max_output_tokens=None, *, agent_tools=None, tool_choice=None,
+                    response_format=None, generation_profile=None):
     connection = response = watchdog = deadline = None
     try:
+        options = {"response_format": response_format} if response_format is not None else {}
+        if generation_profile is not None:
+            options["generation_profile"] = generation_profile
         payload, timeout = _request(provider, model, messages, max_output_tokens,
-                                    agent_tools=agent_tools, tool_choice=tool_choice)
+                                    agent_tools=agent_tools, tool_choice=tool_choice, **options)
         deadline = time.monotonic() + timeout
         allowed = tuple(part.strip() for part in os.environ.get("MODEL_GATEWAY_ALLOWED_BASE_URLS", "").split(",") if part.strip())
         base_url = validate_base_url(provider.get("base_url"), allowed)
@@ -417,7 +459,10 @@ def chat_completion(provider, model, messages, max_output_tokens=None, *, agent_
         if length is not None and len(body) != int(length):
             raise _error("invalid_response")
         if agent_tools is None:
-            result = _parse_response(body)
+            parse_options = ({"generation_profile": generation_profile,
+                              "requested": model["max_output_tokens"] if max_output_tokens is None else max_output_tokens}
+                             if generation_profile is not None else {})
+            result = _parse_response(body, **parse_options)
         else:
             try:
                 result = agent_protocol.parse_response(body, agent_protocol.validate_tools(agent_tools, tool_choice))

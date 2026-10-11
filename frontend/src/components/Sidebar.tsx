@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { NavLink, useLocation } from 'react-router-dom'
 import { changePassword, logout } from '../lib/api'
-import { useEnterprise } from './EnterpriseContext'
+import { useEnterprise } from './enterprise-context'
 import { availableDepartments, departmentPath } from '../enterprise-navigation'
 import Brand from './Brand'
 import {

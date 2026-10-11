@@ -9,8 +9,8 @@ import httpx
 from django.test import SimpleTestCase
 
 
-ROOT = Path(__file__).resolve().parents[3]
-spec = importlib.util.spec_from_file_location("deployment_contract", ROOT / "deploy/validate_contract.py")
+ROOT = Path(__file__).resolve().parent / "fixtures/legacy_deployment"
+spec = importlib.util.spec_from_file_location("deployment_contract", ROOT / "validate_contract.py")
 contract = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(contract)
 

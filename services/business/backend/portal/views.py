@@ -216,7 +216,8 @@ def frontend(request, path=""):
         finance_allowed = True
         if code == "finance":
             from .business_models import BusinessLedgerGrant
-            finance_allowed = ((request.user.department_code == "finance" or is_business_manager(request.user))
+            finance_allowed = (request.user.department_code == "finance"
+                and not request.user.roles.filter(code="general_manager").exists()
                 and BusinessLedgerGrant.objects.filter(user=request.user, department="finance").exists())
             code = "business"
         if (code == "hr" and modules.filter(code="hr").exists()

@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import { ArrowRight } from 'lucide-react'
-import { EnterpriseAccountStatus, useEnterprise } from '../components/EnterpriseContext'
+import { EnterpriseAccountStatus } from '../components/EnterpriseContext'
+import { useEnterprise } from '../components/enterprise-context'
 import { canAccessSetting, settingEntries } from '../enterprise-navigation'
 
 export default function SettingsHome() {
@@ -19,7 +20,7 @@ export default function SettingsHome() {
         </>
         const className = 'rounded-xl border border-dark-border bg-dark-card p-5 hover:border-accent-blue'
         return 'external' in entry
-          ? <a key={entry.to} href={entry.to} target="_blank" rel="noopener noreferrer" className={className}>{content}</a>
+          ? <a key={entry.to} href={import.meta.env.VITE_ADMIN_URL || entry.to} target="_blank" rel="noopener noreferrer" className={className}>{content}</a>
           : <Link key={entry.to} to={entry.to} className={className}>{content}</Link>
       })}
     </div>

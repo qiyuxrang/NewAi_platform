@@ -3,7 +3,7 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 # 改成淘宝的镜像源（新域名）
 RUN npm config set registry https://registry.npmmirror.com
-RUN npm install
+RUN npm ci
 COPY . .
 RUN npm run build
 

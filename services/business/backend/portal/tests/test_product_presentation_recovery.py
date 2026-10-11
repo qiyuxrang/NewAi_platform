@@ -14,11 +14,12 @@ from django.test import SimpleTestCase, override_settings
 from portal.product_documents import DocumentError
 from portal.product_presentation import _valid_manifest, render_presentation_draft
 from portal.product_worker import _failure_diagnostic
-from portal.product_models import DocumentArtifact, DocumentTask
-from portal.product_worker import run_once
+from portal.product_models import DocumentApproval, DocumentArtifact, DocumentTask
+from portal.product_worker import content_checks, run_once
 
 from .base import PortalTestCase, json_body
 from . import test_product_api as product_api_tests
+from .test_product_pair import report_diagram_evidence
 
 
 def source_pair(paragraph_count=1):
@@ -125,7 +126,9 @@ class PresentationDiagnosticTests(SimpleTestCase):
 
 class PresentationRuntimeRecoveryTests(SimpleTestCase):
     def setUp(self):
-        self.runtime = settings.BASE_DIR / ".runtime/product-documents-python/Scripts/python.exe"
+        self.runtime = Path(settings.PRODUCT_DOCUMENT_PYTHON)
+        if not self.runtime.is_absolute():
+            self.runtime = settings.BASE_DIR / self.runtime
         if not self.runtime.is_file():
             self.skipTest("isolated document runtime is not installed")
         self.storage = tempfile.TemporaryDirectory()
@@ -177,22 +180,39 @@ class PresentationRetryTests(PortalTestCase):
     @patch("portal.product_three_drafts.render_report_draft")
     @patch("portal.product_worker.generate_for_use")
     def test_ppt_failure_retry_preserves_and_reuses_both_word_artifacts(self, model, render_report, render_presentation):
-        responses = []
-        for count in (5, 7):
-            responses.extend([{"chapter_id": "overview", "title": "项目概述", "source_ids": ["1"],
-                               "paragraphs": [f"第{index}段" + "合成正文" * 2500 for index in range(count)]},
-                              {"passed": True, "issues": []}])
-        responses.extend([{"passed": True, "issues": []}] * 2)
-        model.side_effect = [{"content": json.dumps(value), "prompt_tokens": 10, "completion_tokens": 20}
-                             for value in responses]
+        chapter_replies = {}
+        # Only the mocked retry/length boundary is under test. These distinct
+        # count strings are not authored reports or real LLM/content acceptance.
+        # Chinese symbols also avoid inventing numeric claims outside the input.
+        symbols = "甲乙丙丁戊己庚辛壬癸子丑寅卯辰巳"
+        for family, count in (("technical-solution", 5), ("feasibility", 7)):
+            paragraphs = []
+            for index in range(count):
+                prefix = "合成计数数据，仅测试重试与篇幅，不代表真实报告。"
+                values = "".join(hashlib.sha256(f"{family}:{index}:{part}".encode()).hexdigest()
+                                 for part in range(157))
+                text = "".join(symbols[int(value, 16)] for value in values)
+                paragraphs.append(prefix + text[:10000 - len(prefix)])
+            chapter = {"chapter_id": "overview", "title": "项目概述", "source_ids": ["1"], "paragraphs": paragraphs}
+            checks = content_checks(self.input_payload(), self.blueprint_payload(), [SimpleNamespace(payload=chapter)])
+            self.assertEqual(checks["issues"], [])
+            self.assertEqual(sum(map(len, paragraphs)), count * 10000)
+            chapter_replies[family] = chapter
+        def model_reply(*args):
+            request = json.loads(args[2][1]["content"])
+            value = (chapter_replies[request["family"]] if request["action"] == "chapter"
+                     else {"passed": True, "issues": []})
+            return {"content": json.dumps(value), "prompt_tokens": 10, "completion_tokens": 20}
+        model.side_effect = model_reply
 
-        def report(task, input_revision, blueprint, chapters, family):
+        def report(task, input_revision, blueprint, chapters, family, **diagram_options):
             target = Path(self.storage.name) / str(task.pk) / f"{family}.docx"
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_bytes(b"synthetic-report-" + family.encode())
             return {"path": target.relative_to(self.storage.name).as_posix(),
                     "sha256": hashlib.sha256(target.read_bytes()).hexdigest(), "template_hash": "a" * 64,
-                    "render_evidence": {"status": "draft_unverified"}}
+                    "render_evidence": {"status": "draft_unverified",
+                        "diagram_generation": report_diagram_evidence(diagram_options["document"], target)}}
 
         def presentation(task, pair):
             if render_presentation.call_count == 1:
@@ -215,14 +235,30 @@ class PresentationRetryTests(PortalTestCase):
         self.assertEqual(len(saved), 2)
         outputs = self.owner_client.get(f"/api/product/tasks/{record.pk}/outputs/").json()["outputs"]
         self.assertTrue(all(item["current"] for item in outputs))
+        calls_before_retry = model.call_count
+        review_calls_before_retry = {tuple(batch[key] for key in ("model_call_attempt_id", "model_call", "model_call_input_sha256"))
+                                    for review in record.revisions.filter(kind="review")
+                                    for batch in review.payload["model_review"]["coverage"]["batches"]}
         response = self.owner_client.post(f"/api/product/tasks/{record.pk}/retry/",
                                           json_body(expected_version=record.version), content_type="application/json")
         self.assertEqual(response.status_code, 200, response.content)
         self.assertTrue(run_once())
         record.refresh_from_db()
-        self.assertEqual(record.state, "COMPLETED", record.error_code)
+        self.assertEqual(record.state, "WAITING_REVIEW", record.error_code)
+        self.assertTrue(record.checkpoint["analysis_progress"]["outputs"]["full_document_human_review_required"])
+        reviews = record.revisions.filter(kind="review")
+        self.assertTrue(all(review.payload["model_review"]["scope"] == "full_batched" for review in reviews))
+        self.assertTrue(all(review.payload["human_review"] == "required" and not review.payload["passed"] for review in reviews))
+        self.assertFalse(DocumentApproval.objects.filter(task=record, revision__kind="report").exists())
+        self.assertFalse(DocumentApproval.objects.filter(task=record, artifact__isnull=False).exists())
         self.assertEqual(render_report.call_count, 2)
-        self.assertEqual(model.call_count, 6)
+        self.assertTrue(all(review.payload["model_review"]["coverage"]["complete"] for review in reviews))
+        self.assertTrue(all(review.payload["model_review"]["coverage"]["all_batches_passed"] for review in reviews))
+        actual_review_calls = {tuple(batch[key] for key in ("model_call_attempt_id", "model_call", "model_call_input_sha256"))
+                               for review in reviews for batch in review.payload["model_review"]["coverage"]["batches"]}
+        self.assertEqual(actual_review_calls, review_calls_before_retry)
+        self.assertEqual(model.call_count, calls_before_retry)
+        self.assertEqual(model.call_count, 2 + len(actual_review_calls))
         self.assertEqual(DocumentArtifact.objects.filter(task=record).count(), 3)
         self.assertEqual(set(DocumentArtifact.objects.filter(pk__in=[identifier for identifier, _ in saved])
                              .values_list("pk", "sha256")), set(saved))
