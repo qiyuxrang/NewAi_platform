@@ -13,6 +13,9 @@ from .base import PortalTestCase, json_body
 @override_settings(PRODUCT_P1_ENABLED=True, PRODUCT_MODEL_CALLS_ALLOWED=True)
 class ProductPrdLoopTests(PortalTestCase):
     def setUp(self):
+        preflight = patch("portal.product_documents.preflight_document_rendering", return_value={})
+        preflight.start()
+        self.addCleanup(preflight.stop)
         storage = TemporaryDirectory()
         self.addCleanup(storage.cleanup)
         config = override_settings(PRODUCT_STORAGE_ROOT=Path(storage.name))

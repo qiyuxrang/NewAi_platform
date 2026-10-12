@@ -48,7 +48,7 @@ class ProductQualityIssueContextTests(SimpleTestCase):
 
 class ProductDiagramEvidenceAliasTests(SimpleTestCase):
     def test_short_model_ids_restore_exact_body_references_and_reject_unknown_ids(self):
-        from portal.product_worker import _generate_diagrams
+        from portal.product_worker import _generate_diagrams_uncached as _generate_diagrams
         paragraph = {"id": "C123456789012345678901234P1", "type": "paragraph", "text": "权限控制和审计流程需验证。", "source_ids": ["SINPUT"]}
         document = {"family": "technical-solution", "metadata": {"title": "测试"}, "blocks": [
             {"id": "H1", "type": "heading", "level": 1, "text": "测试"}, paragraph,
@@ -234,8 +234,9 @@ class ProductWorkerTests(PortalTestCase):
         model.side_effect = GatewayError("busy")
         run_once()
         self.task.refresh_from_db()
-        self.assertEqual(self.task.error_code, "busy")
-        self.assertEqual(self.task.checkpoint["last_failure"]["exception_type"], "GatewayError")
+        self.assertEqual((self.task.state, self.task.error_code), ("QUEUED", "step_retry_pending"))
+        self.assertEqual(self.task.checkpoint["last_failure"]["cause_code"], "busy")
+        self.assertIsNotNone(self.task.retry_after)
 
     @patch("portal.product_worker.generate_for_use")
     def test_blueprint_prompt_lists_only_current_authorized_source_ids(self, model):
@@ -445,6 +446,8 @@ class ProductWorkerTests(PortalTestCase):
         self.assertNotIn("budget", self.task.checkpoint)
 
     def setUp(self):
+        # Worker unit tests replace document renderers; real preflight is covered by the short-chain smoke.
+        self.enterContext(patch("portal.product_documents.preflight_document_rendering", return_value={}))
         self.owner = self.create_user("writer", "product")
         self.reviewer = self.create_user("reviewer", "product")
         self.input_payload = {"project": "隔离合成方案", "requirements": "不新增清单外设备", "background": "仅用于测试",
@@ -782,6 +785,8 @@ class ProductWorkerTests(PortalTestCase):
             with self.subTest(field=field, value=invalid_value):
                 # Exercise the actual model boundary without starting other chapters.
                 from portal.product_worker import _generate_family
+                # Each subcase intentionally exercises a new model contract, not a cached batch.
+                self.task.steps.all().delete()
                 task_id, fence, attempt_id = claim_task()
                 invalid = json.loads(self.reply("chapter-1")["content"])
                 invalid[field] = invalid_value
@@ -1705,12 +1710,16 @@ class ProductWorkerTests(PortalTestCase):
         model.side_effect = [self.reply("chapter-1"), self.reply("chapter-2"), GatewayError("output_truncated")]
         run_once()
         self.task.refresh_from_db()
-        self.assertEqual(self.task.state, "FAILED")
-        self.assertEqual(self.task.error_code, "output_truncated")
+        self.assertEqual(self.task.state, "QUEUED")
+        self.assertEqual(self.task.error_code, "step_retry_pending")
+        self.assertEqual(self.task.checkpoint["last_failure"]["cause_code"], "output_truncated")
         self.assertEqual(len(current_chapters(self.task, self.input_revision.sha256, self.blueprint.sha256)), 2)
         self.assertEqual(DocumentArtifact.objects.count(), 0)
         self.task.state = "QUEUED"
+        self.task.retry_after = timezone.now() - timedelta(seconds=1)
         self.task.save()
+        from portal.product_models import DocumentStep
+        DocumentStep.objects.filter(task=self.task).update(retry_after=timezone.now() - timedelta(seconds=1))
         model.reset_mock()
         model.side_effect = [self.reply("chapter-3"), {"content": '{"passed":true,"issues":[]}'}]
         render.return_value = self.rendered()

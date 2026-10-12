@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 from django.test import override_settings
 
-from portal.product_worker import ExecutionError, _failure_diagnostic, _generate_diagrams
+from portal.product_worker import ExecutionError, _failure_diagnostic, _generate_diagrams_uncached as _generate_diagrams
 from portal.product_diagrams import validate_diagram_batch
 from portal.product_service import digest
 from .base import PortalTestCase

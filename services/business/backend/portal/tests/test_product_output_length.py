@@ -132,13 +132,18 @@ class ProductOutputLengthTests(PortalTestCase):
 
     @patch("portal.product_worker._model")
     def test_interrupted_generation_resumes_saved_parts(self, model):
+        from datetime import timedelta
+        from django.utils import timezone
+        from portal.product_models import DocumentStep
+        from portal.product_steps import StepRetryPending
         model.side_effect = [self.chapter("已保存正文"), ExecutionError("timeout")]
-        with self.assertRaises(ExecutionError):
+        with self.assertRaises(StepRetryPending):
             self.generate()
         latest = self.task.revisions.filter(kind="chapter").latest("version")
         self.assertEqual(latest.payload["paragraphs"], ["已保存正文"])
         model.side_effect = ExecutionError("timeout")
-        with self.assertRaises(ExecutionError):
+        DocumentStep.objects.filter(task=self.task).update(retry_after=timezone.now() - timedelta(seconds=1))
+        with self.assertRaises(StepRetryPending):
             self.generate()
         self.assertTrue(model.call_args.args[-1]["continuation"]["append_only"])
         self.assertEqual(model.call_args.args[-1]["continuation"]["saved_characters"], 5)

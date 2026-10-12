@@ -89,7 +89,8 @@ class DraftReviewTests(PortalTestCase):
 
             self.assertTrue(run_once())
             record.refresh_from_db()
-            self.assertEqual((record.state, record.error_code), ("FAILED", "timeout"))
+            self.assertEqual((record.state, record.error_code), ("QUEUED", "step_retry_pending"))
+            self.assertEqual(record.checkpoint["last_failure"]["cause_code"], "timeout")
             self.assertEqual(model.call_count, 3)
             self.assertTrue(observed["technical_was_downloadable"])
             renderer.assert_called_once()

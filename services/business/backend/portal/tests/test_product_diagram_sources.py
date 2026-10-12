@@ -10,7 +10,7 @@ from django.test import SimpleTestCase, override_settings
 
 from portal.product_diagrams import diagram_batches, diagram_contract_hash, validate_diagram_batch, validate_document_requirements
 from portal.product_documents import DocumentError, _diagram_sources, content_document, render_report_draft
-from portal.product_worker import ExecutionError, _generate_diagrams
+from portal.product_worker import ExecutionError, _generate_diagrams_uncached as _generate_diagrams
 
 
 @override_settings(PRODUCT_BLUEPRINT_KNOWLEDGE_MODE="source_only_preview", PRODUCT_OFFICE_RENDER_ENABLED=False)
@@ -101,6 +101,7 @@ class DiagramSourceTests(SimpleTestCase):
             self.assertNotIn("flowchart LR", Path(command[-2]).read_text(encoding="utf-8"))
             return SimpleNamespace(returncode=2, stdout=b"", stderr=b"parser source details must not be persisted")
         with tempfile.TemporaryDirectory() as storage, override_settings(PRODUCT_STORAGE_ROOT=storage), \
+                patch("portal.product_documents.preflight_document_rendering", return_value={}), \
                 patch("portal.product_documents._document_runtime", return_value=Path("unused-python")), \
                 patch("portal.product_documents._mermaid_runtime", return_value=Path("unused-node")), \
                 patch("portal.product_documents._mermaid_chromium", return_value=Path("unused-browser")), \
@@ -109,7 +110,7 @@ class DiagramSourceTests(SimpleTestCase):
                 render_report_draft(self.task, self.input, self.blueprint, [self.chapter], "technical-solution",
                     diagram_generator=generator, diagram_progress=lambda status, **details: phases.append(status))
             self.assertEqual(error.exception.code, "diagram_render_failed")
-            self.assertEqual(error.exception.diagnostic, {})
+            self.assertEqual(error.exception.diagnostic, {"stage": "diagram_render", "reason": "diagram_renderer_failed", "returncode": 2})
             self.assertEqual(process.call_count, 1)
             self.assertTrue(all(not source.exists() for source in source_paths))
             self.assertFalse(list(Path(storage).rglob("mermaid-*")))

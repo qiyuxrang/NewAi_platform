@@ -300,6 +300,7 @@ def _content_failure(task):
 
 
 def _task_detail(task, user):
+    from .product_steps import public_steps
     input_revision = _input_revision(task)
     if input_revision and not input_authorized(task, input_revision):
         raise ProductError("source_permission_changed", "资料授权已变化，当前内容不可读取。", 404)
@@ -393,6 +394,8 @@ def _task_detail(task, user):
             "feasibility": int(getattr(settings, "PRODUCT_FEASIBILITY_TARGET_CHARACTERS", 70000)),
         },
         "output_generation": task.checkpoint.get("output_generation", {}),
+        "generation_steps": public_steps(task),
+        "retry_after": task.retry_after.isoformat() if task.retry_after else None,
         "activity": task.checkpoint.get('analysis_events', []),
         "orchestration": {
             "engine": "langgraph",

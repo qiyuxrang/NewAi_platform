@@ -19,7 +19,11 @@ from .base import PortalTestCase, json_body
 
 
 class ThreeDraftFlowTests(PortalTestCase):
-    setUp = PairDraftTests.setUp
+    def setUp(self):
+        PairDraftTests.setUp(self)
+        preflight = patch("portal.product_documents.preflight_document_rendering", return_value={})
+        preflight.start()
+        self.addCleanup(preflight.stop)
     input_payload = PairDraftTests.input_payload
     create_task = PairDraftTests.create_task
     blueprint_payload = PairDraftTests.blueprint_payload

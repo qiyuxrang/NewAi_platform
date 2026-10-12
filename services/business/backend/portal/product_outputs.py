@@ -2,9 +2,11 @@
 
 import re
 import hashlib
+from io import BytesIO
 
 from django.db import transaction
 from django.http import FileResponse
+from django.utils import timezone
 from django.urls import path
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -46,6 +48,78 @@ def outputs(request, task_id):
                        **public_draft_preview(artifact, current=current),
                        "source_versions": artifact.render_evidence.get("source_versions", [])})
     return Response({"task_version": task.version, "outputs": result})
+
+
+@api_view(["GET"])
+@product_endpoint
+def saved_draft_download(request, task_id):
+    """Export only saved text bound to the currently authorized approved plan."""
+    task = task_for(request.user, task_id)
+    family = request.query_params.get("family")
+    if family not in FAMILIES:
+        raise ProductError("invalid_family", "请选择技术方案或可研报告正文。")
+    current = task.revisions.filter(kind=DocumentRevision.Kind.INPUT, version=task.input_version).first()
+    if not input_authorized(task, current):
+        raise ProductError("source_permission_changed", "来源授权已变化。", 404)
+    blueprint = approved_blueprint(task)
+    if blueprint is None:
+        raise ProductError("blueprint_approval_required", "当前蓝图尚未批准，不能导出正文。", 409)
+    for key, actual in (("input_version", task.input_version), ("blueprint_version", task.blueprint_version)):
+        expected = request.query_params.get(key)
+        if expected is not None:
+            if not expected.isascii() or not expected.isdigit() or len(expected) > 10:
+                raise ProductError("invalid_version", "正文版本参数无效。")
+            if int(expected) != actual:
+                raise ProductError("stale_draft", "输入或蓝图版本已变化，请刷新后重新下载。", 409)
+    latest = {}
+    for chapter in task.revisions.filter(kind=DocumentRevision.Kind.CHAPTER, family=family,
+                                         input_hash=current.sha256, blueprint_hash=blueprint.sha256).order_by("version"):
+        latest[chapter.payload.get("chapter_id")] = chapter
+    saved, missing = [], []
+    for spec in blueprint.payload.get("chapters", []):
+        chapter = latest.get(spec["id"])
+        if chapter is not None:
+            try:
+                payload = validate_chapter(chapter.payload)
+            except ProductError:
+                payload = None
+            if (payload and payload["title"] == spec["title"]
+                    and source_ids_belong(task, payload["source_ids"])
+                    and set(payload["source_ids"]) <= set(spec["source_ids"])):
+                saved.append(chapter)
+                continue
+        missing.append(spec["title"])
+    if not saved:
+        raise ProductError("saved_draft_unavailable", "当前输入与已批准蓝图尚无可下载的已保存章节。", 409)
+    name = "技术方案" if family == "technical-solution" else "可行性研究报告"
+    characters = sum(len(re.sub(r"\s", "", paragraph)) for chapter in saved for paragraph in chapter.payload["paragraphs"])
+    lines = [f"{task.title} · {name} · 已保存正文草稿", "【草稿：生成未完成 / 待配图 / 待排版 / 未审批】",
+             "本文件仅为已保存正文快照，不是正式成果或审批通过的文件。",
+             f"输入版本：{task.input_version}；已批准蓝图版本：{task.blueprint_version}",
+             f"导出时间：{timezone.localtime().isoformat()}",
+             f"已保存章节：{len(saved)} / {len(blueprint.payload.get('chapters', []))}；非空白字数：{characters}",
+             "未完成章节：" + ("；".join(missing) if missing else "无缺章；整体生成与篇幅要求仍以后台记录为准"),
+             "配图、文档排版与正式审批：本 TXT 草稿均未包含，需在成果工作区核对。", ""]
+    for chapter in saved:
+        lines.extend([chapter.payload["title"], "", *chapter.payload["paragraphs"], ""])
+    # Check again before releasing bytes: a permission or plan change cannot
+    # turn a historical chapter into an export of the current plan.
+    checked = task_for(request.user, task_id)
+    checked_input = checked.revisions.filter(kind=DocumentRevision.Kind.INPUT, version=checked.input_version).first()
+    checked_blueprint = approved_blueprint(checked)
+    if not input_authorized(checked, checked_input):
+        raise ProductError("source_permission_changed", "来源授权已变化。", 404)
+    if (not checked_blueprint or checked_input.sha256 != current.sha256
+            or checked_blueprint.sha256 != blueprint.sha256
+            or checked.input_version != task.input_version or checked.blueprint_version != task.blueprint_version):
+        raise ProductError("stale_draft", "输入或蓝图版本已变化，请刷新后重新下载。", 409)
+    title = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", task.title).strip(" .") or "报告"
+    response = FileResponse(BytesIO("\n".join(lines).encode("utf-8-sig")), as_attachment=True,
+                            filename=f"已保存正文草稿-未审批-{title}-{name}.txt", content_type="text/plain; charset=utf-8")
+    response["Cache-Control"] = "private, no-store"
+    response["X-Content-Type-Options"] = "nosniff"
+    audit(request.user, "product_saved_draft_download", f"{task.pk}:v{task.version}:{family}:{len(saved)}")
+    return response
 
 
 @api_view(["GET"])
@@ -181,6 +255,7 @@ def report_chapter(request, task_id):
 
 
 urlpatterns = [path("tasks/<uuid:task_id>/outputs/", outputs),
+               path("tasks/<uuid:task_id>/saved-draft/download/", saved_draft_download),
                path("tasks/<uuid:task_id>/report-chapters/", report_chapter),
                path("outputs/<uuid:artifact_id>/download/", draft_download),
                path("outputs/<uuid:artifact_id>/preview/", draft_preview)]

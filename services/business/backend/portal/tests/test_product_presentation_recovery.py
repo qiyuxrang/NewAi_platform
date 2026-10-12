@@ -168,7 +168,11 @@ class PresentationRuntimeRecoveryTests(SimpleTestCase):
 
 
 class PresentationRetryTests(PortalTestCase):
-    setUp = product_api_tests.ProductApiTests.setUp
+    def setUp(self):
+        product_api_tests.ProductApiTests.setUp(self)
+        preflight = patch("portal.product_documents.preflight_document_rendering", return_value={})
+        preflight.start()
+        self.addCleanup(preflight.stop)
     input_payload = product_api_tests.ProductApiTests.input_payload
     create_task = product_api_tests.ProductApiTests.create_task
     blueprint_payload = product_api_tests.ProductApiTests.blueprint_payload

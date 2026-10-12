@@ -6,15 +6,29 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { readVerifiedBundle } from "./bundle-contract.mjs";
 import { controlledContext } from "./browser-policy.mjs";
+import { bitmapBinding, confined, loadBitmap, saveBitmap, sha256 } from "./bitmap-cache.mjs";
 
 const runtimeDirectory = path.dirname(fileURLToPath(import.meta.url));
+let failureReason = "runtime_manifest_invalid";
 async function main() {
+  const {manifest,manifestSha256,bundle} = await readVerifiedBundle(path.join(runtimeDirectory,"dist"));
+  const rendererSha256=sha256(Buffer.concat(await Promise.all(
+    ["render.mjs","bitmap-cache.mjs","browser-policy.mjs","bundle-contract.mjs"].map((name)=>fs.readFile(path.join(runtimeDirectory,name))))));
+  failureReason="chromium_unavailable";
+  const chromiumPath=process.env.PORTAL_CHROMIUM_PATH;
+  if (!chromiumPath || !(await fs.stat(chromiumPath)).isFile()) throw new Error("missing Chromium");
+  const runtimeBinding={bundleSha256:manifest.bundleSha256,manifestSha256,rendererSha256,
+    nodeSha256:sha256(await fs.readFile(process.execPath)),chromiumSha256:sha256(await fs.readFile(chromiumPath))};
+  if (process.argv.length===3 && process.argv[2]==="--preflight") {
+    process.stdout.write(JSON.stringify({...runtimeBinding,runtimeVersions:manifest.versions})); return;
+  }
+  failureReason="diagram_input_invalid";
   if (process.argv.length !== 4) throw new Error("usage: render.mjs content.json private-diagrams.json");
   const contentPath = path.resolve(process.argv[2]);
   const root = path.dirname(contentPath);
   const content = JSON.parse(await fs.readFile(contentPath, "utf8"));
   const figures = content.blocks.filter((block) => block.type === "figure");
-  const sourcePath = path.resolve(process.argv[3]);
+  const sourcePath = await confined(root,path.relative(root,path.resolve(process.argv[3])));
   if (!sourcePath.startsWith(root+path.sep) || sourcePath===contentPath) throw new Error("unsafe private diagram input");
   const input = JSON.parse(await fs.readFile(sourcePath,"utf8"));
   await fs.unlink(sourcePath);
@@ -33,16 +47,18 @@ async function main() {
   if (new Set(figures.map((figure)=>figure.id)).size!==figures.length
       || figures.some((figure)=>!sources.has(figure.id))) throw new Error("diagram source binding mismatch");
   const evidence=[];
-  const {manifest,manifestSha256,bundle} = await readVerifiedBundle(path.join(runtimeDirectory,"dist"));
-  const browser = await chromium.launch({headless:true, executablePath:process.env.PORTAL_CHROMIUM_PATH || undefined,
-    args:["--no-sandbox","--disable-dev-shm-usage"]});
+  let browser;
   let rendered = 0;
-  let networkPolicy;
-  let runtimeVersions;
-  try {
+  let networkPolicy={blockedRequests:0};
+  let runtimeVersions=Object.fromEntries(["mermaid","katex","lodash-es"].map((name)=>[name,manifest.versions[name]]));
+  let page;
+  async function preparePage() {
+    failureReason="chromium_launch_failed";
+    browser = await chromium.launch({headless:true, executablePath:chromiumPath,
+      args:["--no-sandbox","--disable-dev-shm-usage"]});
     const {context,policy} = await controlledContext(browser,{viewport:{width:1600,height:900},deviceScaleFactor:1.5});
     networkPolicy = policy;
-    const page = await context.newPage();
+    page = await context.newPage();
     await page.setContent('<style>html,body{margin:0;background:#F8FBFF}#canvas{box-sizing:border-box;width:1600px;height:900px;padding:34px 50px 40px;overflow:hidden}#canvas .mermaid{display:flex;align-items:center;justify-content:center;width:1500px;height:760px}#canvas svg{width:1460px!important;height:700px!important;max-width:none!important}</style><main id="canvas"></main>', {waitUntil:"domcontentloaded"});
     // Load exactly the verified bytes; never use Mermaid's legacy prebundled UMD.
     await page.addScriptTag({content:bundle.toString("utf8")});
@@ -50,13 +66,26 @@ async function main() {
     for (const name of ["mermaid","katex","lodash-es"]) {
       if (runtimeVersions[name] !== manifest.versions[name]) throw new Error("loaded runtime version mismatch");
     }
+  }
+  try {
     for (let index=0; index<figures.length; index+=1) {
       const figure=figures[index];
-      const destination=path.resolve(root,figure.path);
+      failureReason="diagram_path_invalid";
+      const destination=await confined(root,figure.path);
       if (!destination.startsWith(root+path.sep) || path.extname(destination).toLowerCase()!==".png") throw new Error("unsafe diagram path");
       await fs.mkdir(path.dirname(destination),{recursive:true});
       const inputDiagram=sources.get(figure.id);
       const diagram=inputDiagram.source;
+      const binding=bitmapBinding(figure,inputDiagram,runtimeBinding);
+      failureReason="diagram_cache_invalid";
+      const cachedHash=await loadBitmap(root,binding,destination);
+      if (cachedHash) {
+        rendered+=1;
+        evidence.push({figure_id:figure.id,sourceSha256:binding.sourceSha256,imageSha256:cachedHash});
+        continue;
+      }
+      if (!page) await preparePage();
+      failureReason="diagram_parse_or_anchor_failed";
       await page.evaluate(async ({diagram,title,anchor})=>{
         const host=document.querySelector("#canvas"); host.replaceChildren();
         const heading=document.createElement("h1"); heading.textContent=title;
@@ -71,13 +100,17 @@ async function main() {
         if (anchor && !svg.textContent.includes(anchor)) throw new Error("report evidence anchor is not visible in diagram");
         svg.style.cssText+="background:#F8FBFF;border:1px solid #D7E3F2;border-radius:14px;padding:22px;box-sizing:border-box";
       },{diagram,title:figure.caption,anchor:inputDiagram.anchor_text});
-      await page.locator("#canvas").screenshot({path:destination,type:"png"}); rendered+=1;
+      failureReason="diagram_bitmap_failed";
+      await page.locator("#canvas").screenshot({path:destination,type:"png"});
+      if (networkPolicy.blockedRequests) { failureReason="diagram_network_blocked"; throw new Error("network policy violated"); }
+      const imageSha256=await saveBitmap(root,binding,destination);
+      rendered+=1;
       evidence.push({figure_id:figure.id,sourceSha256:createHash("sha256").update(diagram).digest("hex"),
-        imageSha256:createHash("sha256").update(await fs.readFile(destination)).digest("hex")});
+        imageSha256});
     }
-  } finally { await browser.close(); }
+  } finally { if (browser) await browser.close(); }
   if (networkPolicy.blockedRequests) throw new Error("diagram attempted an external network request");
   process.stdout.write(JSON.stringify({rendered,sourcePersisted:false,engine:`mermaid-js-${runtimeVersions.mermaid}`,
     bundleSha256:manifest.bundleSha256,manifestSha256,runtimeVersions,figures:evidence,securityLevel:"strict",blockedNetworkRequests:networkPolicy.blockedRequests}));
 }
-main().catch(()=>{process.stderr.write("Mermaid rendering failed.\n");process.exit(2);});
+main().catch(()=>{process.stderr.write(JSON.stringify({stage:"diagram_render",reason:failureReason})+"\n");process.exit(2);});

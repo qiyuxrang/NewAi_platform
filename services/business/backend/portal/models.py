@@ -207,7 +207,7 @@ class IntegrationTicket(models.Model):
 
 
 from .model_config import GatewayModel, ModelCallLog, ModelRoute, ModelRouteOption, Provider
-from .product_models import (DocumentApproval, DocumentArtifact, DocumentAttempt,
+from .product_models import (DocumentApproval, DocumentArtifact, DocumentAttempt, DocumentStep,
                              DocumentRevision, DocumentSource, DocumentTask, DocumentReviewPolicy)
 from .hr_models import HrJobRevision, HrJobTask, ProbationCase, ProbationTransition
 from .hr_recruitment_models import JDVersion, RecruitmentRequest

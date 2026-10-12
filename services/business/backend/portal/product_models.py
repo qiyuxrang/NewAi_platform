@@ -38,6 +38,7 @@ class DocumentTask(models.Model):
     payload_hash = models.CharField(max_length=64)
     fence = models.PositiveIntegerField(default=0)
     lease_until = models.DateTimeField(null=True, blank=True)
+    retry_after = models.DateTimeField(null=True, blank=True)
     attempt_count = models.PositiveIntegerField(default=0)
     pending_action = models.CharField(max_length=32, default="", blank=True)
     error_code = models.CharField(max_length=64, default="", blank=True)
@@ -160,6 +161,26 @@ class DocumentArtifact(models.Model):
             models.UniqueConstraint(fields=["task", "generation_hash"], condition=~Q(generation_hash=""), name="product_artifact_generation_uq"),
             models.CheckConstraint(condition=Q(version__gt=0), name="product_artifact_ver_gt0_ck"),
         ]
+
+
+class DocumentStep(models.Model):
+    """Accepted results and bounded recovery for one version-bound operation."""
+
+    task = models.ForeignKey(DocumentTask, on_delete=models.CASCADE, related_name="steps")
+    key = models.CharField(max_length=160)
+    input_hash = models.CharField(max_length=64)
+    status = models.CharField(max_length=16, default="pending")
+    fence = models.PositiveIntegerField(default=0)
+    attempts = models.PositiveIntegerField(default=0)
+    retry_count = models.PositiveIntegerField(default=0)
+    output = models.JSONField(default=dict)
+    output_hash = models.CharField(max_length=64, blank=True, default="")
+    error_code = models.CharField(max_length=64, blank=True, default="")
+    retry_after = models.DateTimeField(null=True, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["task", "key", "input_hash"], name="product_step_input_uq")]
 
 
 class DocumentApproval(models.Model):

@@ -10,10 +10,24 @@ from unittest.mock import patch
 from django.test import SimpleTestCase, override_settings
 
 from portal.product_documents import DocumentError
-from portal.product_rendering import render_office
+from portal.product_rendering import render_office, _validated_outputs
 
 
 class ProductRenderingTests(SimpleTestCase):
+    def test_legacy_powerpoint_hash_is_computed_but_wrong_declared_hash_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            pdf = directory / "slides.pdf"
+            pdf.write_bytes(b"%PDF-1.7\nlegacy-presentation")
+            (directory / "page-001.png").write_bytes(b"\x89PNG\r\n\x1a\npage")
+            report = {"rendered": True, "structural_pass": True, "visually_reviewed": False,
+                      "input_sha256": "a" * 64, "page_count": 1}
+            result = _validated_outputs(directory, report, "a" * 64, "powerpoint")
+            self.assertEqual(result[1], hashlib.sha256(pdf.read_bytes()).hexdigest())
+            report["pdf_sha256"] = "b" * 64
+            with self.assertRaises(DocumentError):
+                _validated_outputs(directory, report, "a" * 64, "powerpoint")
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)

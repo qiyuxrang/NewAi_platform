@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import tempfile
 import uuid
+from copy import deepcopy
 from pathlib import Path
 
 from django.conf import settings
@@ -15,6 +16,7 @@ from .product_storage import private_root
 from .product_office_runtime import run_office
 from .product_docx_layout import normalize_docx_layout
 from .product_formal import has_repeated_filler, unsupported_financial_conclusion
+from .product_render_cache import StageCache, atomic_write, canonical_hash, confined, file_hash
 from .product_diagrams import (
     SUBSECTION_TITLES,
     add_structural_blocks,
@@ -204,6 +206,74 @@ def _safe_environment():
     return environment
 
 
+def preflight_document_rendering():
+    """Check executable dependencies before generating paid content or files.
+
+    Child stderr is never propagated: it may contain paths, authored source or
+    credentials. Diagnostics use only these fixed stage/reason identifiers.
+    """
+    stage = "document_preflight"
+    reason = "document_python_unavailable"
+    try:
+        runtime = _document_runtime()
+        reason = "document_python_dependencies_unavailable"
+        imports = "import lxml.etree, docx, pptx, fitz, PIL"
+        if (getattr(settings, "PRODUCT_OFFICE_RENDER_ENABLED", False)
+                and getattr(settings, "PRODUCT_OFFICE_RENDERER", "word") == "word"):
+            imports += "; import win32com.client"
+        result = subprocess.run([str(runtime), "-B", "-c", imports], env=_safe_environment(),
+                                capture_output=True, timeout=30,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if result.returncode:
+            raise ValueError
+        reason = "node_unavailable"
+        node = _mermaid_runtime()
+        reason = "chromium_unavailable"
+        chromium = _mermaid_chromium()
+        reason = "mermaid_runtime_invalid"
+        environment = _safe_environment()
+        environment["PORTAL_CHROMIUM_PATH"] = str(chromium)
+        result = subprocess.run([str(node), str(PACK.parent / "mermaid-runtime" / "render.mjs"), "--preflight"],
+                                env=environment, capture_output=True, timeout=30,
+                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if result.returncode:
+            raise ValueError
+        mermaid = json.loads(result.stdout)
+        if any(not isinstance(mermaid.get(name), str) or not re.fullmatch(r"[a-f0-9]{64}", mermaid[name])
+               for name in ("bundleSha256", "manifestSha256", "rendererSha256", "nodeSha256", "chromiumSha256")):
+            raise ValueError
+        reason = "office_renderer_unavailable"
+        office_script = None
+        if getattr(settings, "PRODUCT_OFFICE_RENDER_ENABLED", False):
+            command = _office_command(runtime, Path("input.docx"), Path("render"), 300)
+            office_script = file_hash(Path(command[2]))
+        renderer_files = [Path(__file__), Path(__file__).with_name("product_render_cache.py"),
+                          Path(__file__).with_name("product_docx_layout.py"),
+                          Path(__file__).with_name("product_office_runtime.py")]
+        renderer_files.extend(sorted((PACK / "scripts").glob("*.py")))
+        return {"document_python_sha256": file_hash(runtime), "mermaid": mermaid,
+                "renderer_sha256": canonical_hash({path.name: file_hash(path) for path in renderer_files}),
+                "office_enabled": bool(getattr(settings, "PRODUCT_OFFICE_RENDER_ENABLED", False)),
+                "office_renderer": getattr(settings, "PRODUCT_OFFICE_RENDERER", "word"),
+                "office_script_sha256": office_script}
+    except (DocumentError, OSError, ValueError, TypeError, subprocess.TimeoutExpired):
+        raise DocumentError("template_unavailable", diagnostic={"stage": stage, "reason": reason}) from None
+
+
+def _diagram_failure_diagnostic(result):
+    allowed = {"runtime_manifest_invalid", "chromium_unavailable", "chromium_launch_failed", "diagram_input_invalid",
+               "diagram_path_invalid", "diagram_cache_invalid", "diagram_parse_or_anchor_failed",
+               "diagram_bitmap_failed", "diagram_network_blocked"}
+    reason = "diagram_renderer_failed"
+    try:
+        value = json.loads(result.stderr)
+        if value.get("reason") in allowed:
+            reason = value["reason"]
+    except (ValueError, TypeError, AttributeError):
+        pass
+    return {"stage": "diagram_render", "reason": reason, "returncode": result.returncode}
+
+
 def _office_command(runtime, source, output, timeout, *, kind="word"):
     """Select an explicit renderer; never fall back after a failed render."""
     renderer = getattr(settings, "PRODUCT_OFFICE_RENDERER", "word")
@@ -251,18 +321,18 @@ def _diagram_evidence(output, figure_count):
         raise DocumentError("document_validation_failed") from None
 
 
-def _refresh_word_field_cache(target, runtime, directory):
+def _refresh_word_field_cache(target, runtime, directory, *, retained_name="word-field-refresh"):
     """Refresh Word fields in an owned short path before promoting the DOCX."""
     if not getattr(settings, "PRODUCT_OFFICE_RENDER_ENABLED", False):
         return {"status": "not_run", "reason": "office_render_disabled"}
     timeout = int(getattr(settings, "PRODUCT_OFFICE_RENDER_TIMEOUT_SECONDS", 300))
-    retained = directory / "word-field-refresh"
+    retained = confined(directory, retained_name)
     diagnostic = {"status": "failed", "reason": "staging_failed"}
     try:
         # Never replace evidence from an earlier attempt in this artifact.
         retained.mkdir(exist_ok=False)
     except OSError:
-        raise DocumentError("document_render_failed") from None
+        raise DocumentError("document_render_failed", diagnostic={"stage": "office_render", "reason": "staging_failed"}) from None
     try:
         original = target.read_bytes()
         quality_path = target.with_suffix(".quality.json")
@@ -380,7 +450,7 @@ def _refresh_word_field_cache(target, runtime, directory):
             (retained / "refresh.json").write_text(json.dumps(diagnostic), encoding="utf-8")
         except OSError:
             pass  # Existing renderer output still remains available for review.
-        raise DocumentError("document_render_failed") from None
+        raise DocumentError("document_render_failed", diagnostic={"stage": "office_render", **diagnostic}) from None
     return {**cache, "cached_result": True}
 
 
@@ -435,16 +505,73 @@ def _diagram_sources(document, generator, *, draft=False, quality_issues=None):
         raise DocumentError("diagram_generation_invalid") from None
 
 
+def _publish_render_snapshot(root, directory, task, filename, document, evidence):
+    """Publish all referenced assets together; cache paths remain private."""
+    try:
+        published = confined(root, f"{task.pk}/artifacts/{uuid.uuid4().hex}")
+        published.mkdir(parents=True, exist_ok=False)
+        promoted = confined(published, filename)
+        source = confined(directory, filename)
+        atomic_write(promoted, source.read_bytes())
+        content_bytes = confined(directory, "content.json").read_bytes()
+        if json.loads(content_bytes) != document:
+            raise ValueError
+        atomic_write(confined(published, "content.json"), content_bytes)
+        expected = {item["id"]: item["image_sha256"] for item in evidence["diagram_generation"]["figures"]}
+        for figure in (block for block in document["blocks"] if block["type"] == "figure"):
+            image = confined(directory, figure["path"]).read_bytes()
+            if hashlib.sha256(image).hexdigest() != expected[figure["id"]]:
+                raise ValueError
+            destination = confined(published, figure["path"])
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write(destination, image)
+        field_refresh = deepcopy(evidence["word_field_cache"])
+        preview = field_refresh.get("preview")
+        if preview:
+            for number, item in enumerate([preview["pdf"], *preview["pages"]]):
+                original = confined(root, item["path"]).read_bytes()
+                if hashlib.sha256(original).hexdigest() != item["sha256"]:
+                    raise ValueError
+                name = "document.pdf" if number == 0 else f"page-{number:03d}.png"
+                destination = confined(published, f"office-preview/{name}")
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                atomic_write(destination, original)
+                item["path"] = destination.relative_to(root).as_posix()
+        quality = json.loads(source.with_suffix(".quality.json").read_bytes())
+        if "word_field_cache" in quality:
+            quality["word_field_cache"] = field_refresh
+        atomic_write(promoted.with_suffix(".quality.json"), json.dumps(
+            quality, ensure_ascii=False, allow_nan=False, separators=(",", ":")).encode())
+        evidence["word_field_cache"] = field_refresh
+        return promoted
+    except (OSError, ValueError, KeyError, TypeError):
+        raise DocumentError("document_render_failed", diagnostic={"stage": "artifact_publish", "reason": "snapshot_verification_failed"}) from None
+
+
 def _render_document(task, chapters, manifest, runtime, document, filename, status, business_approval, extra_evidence=None,
-                     *, draft=False, diagram_generator=None, diagram_progress=None):
+                     *, draft=False, diagram_generator=None, diagram_progress=None, workspace_key=None):
+    preflight = preflight_document_rendering()
+    document = deepcopy(document)
     root = private_root().resolve()
-    directory = (root / str(task.pk) / "artifacts" / uuid.uuid4().hex).resolve()
+    # A caller key identifies the job, while a second hash binds all inputs and
+    # implementations. Different revisions never share mutable render output.
+    binding = canonical_hash({"document": document, "draft": draft, "runtime": preflight,
+                              "manifest": manifest, "filename": filename, "contract": diagram_contract_hash()})
+    if workspace_key is not None:
+        if not isinstance(workspace_key, str) or not workspace_key or len(workspace_key) > 500:
+            raise DocumentError("document_render_failed", diagnostic={"stage": "document_render", "reason": "workspace_key_invalid"})
+        workspace_id = canonical_hash({"key": workspace_key, "binding": binding})
+        directory = confined(root, f"{task.pk}/render-workspaces/{workspace_id}")
+    else:
+        directory = confined(root, f"{task.pk}/artifacts/{uuid.uuid4().hex}")
     if not directory.is_relative_to(root):
         raise DocumentError("template_unavailable")
-    directory.mkdir(parents=True, exist_ok=False)
-    content_path = directory / "content.json"
-    target = directory / filename
+    directory.mkdir(parents=True, exist_ok=workspace_key is not None)
+    content_path = confined(directory, "content.json")
+    target = confined(directory, filename)
+    confined(directory, target.with_suffix(".quality.json").name)
     structural = validate_document_requirements(document)
+    render_stage = "diagram_render"
     try:
         if diagram_progress:
             diagram_progress("running", figure_count=structural["figure_count"])
@@ -464,7 +591,7 @@ def _render_document(task, chapters, manifest, runtime, document, filename, stat
                                          timeout=int(getattr(settings, "PRODUCT_DOCUMENT_RENDER_TIMEOUT_SECONDS", 300)),
                                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
             if diagrams.returncode != 0:
-                raise DocumentError("diagram_render_failed")
+                raise DocumentError("diagram_render_failed", diagnostic=_diagram_failure_diagnostic(diagrams))
             diagram_evidence = _diagram_evidence(diagrams.stdout, structural["figure_count"])
             rendered = {item["figure_id"]: item for item in diagram_evidence["figures"]}
             planned = {block["id"]: block for block in document["blocks"] if block["type"] == "figure"}
@@ -493,17 +620,53 @@ def _render_document(task, chapters, manifest, runtime, document, filename, stat
             if diagram_progress:
                 diagram_progress("failed", figure_count=structural["figure_count"])
             raise
-        result = subprocess.run([str(runtime), "-B", str(PACK / "scripts" / "artifacts.py"), "docx", str(content_path), str(target)],
-                                cwd=directory, env=_safe_environment(), capture_output=True,
-                                timeout=int(getattr(settings, "PRODUCT_DOCUMENT_RENDER_TIMEOUT_SECONDS", 300)),
-                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        if result.returncode != 0 or not target.is_file():
-            raise DocumentError("document_validation_failed")
-        layout = _normalize_word_layout(target, document)
-        field_refresh = _refresh_word_field_cache(target, runtime, directory)
+        stage_binding = canonical_hash({"workspace": binding, "content": document, "diagrams": diagram_evidence})
+        render_stage = "docx_assembly"
+        cache = StageCache(directory, stage_binding)
+        stage_files = [filename, target.with_suffix(".quality.json").name]
+        office = cache.load("office", stage_files)
+        if office:
+            layout = office["layout"]
+            field_refresh = office["field_refresh"]
+            # Preview files are evidence, too. Missing or changed evidence
+            # reruns Office using the still cached normalized input.
+            preview = field_refresh.get("preview")
+            if preview:
+                try:
+                    for item in [preview["pdf"], *preview["pages"]]:
+                        if file_hash(confined(root, item["path"])) != item["sha256"]:
+                            raise ValueError
+                except (OSError, ValueError, KeyError, TypeError):
+                    office = None
+        if not office:
+            normalized = cache.load("normalized", stage_files)
+            if normalized:
+                layout = normalized["layout"]
+            else:
+                assembled = cache.load("assembled", stage_files)
+                if assembled is None:
+                    # A stale or corrupted checkpoint is a miss. The frozen
+                    # assembler requires new output files, so remove only the
+                    # owned staging outputs before rebuilding them.
+                    for name in stage_files:
+                        confined(directory, name).unlink(missing_ok=True)
+                    result = subprocess.run([str(runtime), "-B", str(PACK / "scripts" / "artifacts.py"), "docx", str(content_path), str(target)],
+                                            cwd=directory, env=_safe_environment(), capture_output=True,
+                                            timeout=int(getattr(settings, "PRODUCT_DOCUMENT_RENDER_TIMEOUT_SECONDS", 300)),
+                                            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+                    if result.returncode != 0 or not target.is_file():
+                        raise DocumentError("document_validation_failed", diagnostic={"stage": "docx_assembly", "reason": "assembly_failed", "returncode": result.returncode})
+                    cache.save("assembled", stage_files, {})
+                layout = _normalize_word_layout(target, document)
+                cache.save("normalized", stage_files, {"layout": layout})
+            retained_name = "word-field-refresh" if workspace_key is None else "word-field-refresh-" + uuid.uuid4().hex
+            render_stage = "office_render"
+            field_refresh = _refresh_word_field_cache(target, runtime, directory, retained_name=retained_name)
+            cache.save("office", stage_files, {"layout": layout, "field_refresh": field_refresh})
         structural = inspect_docx_requirements(target, structural)
-    except (OSError, subprocess.TimeoutExpired):
-        raise DocumentError("document_render_failed") from None
+    except (OSError, subprocess.TimeoutExpired) as error:
+        reason = "process_timeout" if isinstance(error, subprocess.TimeoutExpired) else "runtime_io_failed"
+        raise DocumentError("document_render_failed", diagnostic={"stage": render_stage, "reason": reason}) from None
     template = next(entry for entry in manifest["files"] if entry["path"] == f"assets/{document['family']}/template.docx")
     evidence = {"status": status, "verified": False,
                 "structural_generation": "completed", "office_render": field_refresh["status"],
@@ -514,11 +677,18 @@ def _render_document(task, chapters, manifest, runtime, document, filename, stat
                 "document_structure": structural,
                 "diagram_generation": diagram_evidence}
     evidence.update(extra_evidence or {})
+    evidence["render_checkpoint"] = {"binding_sha256": binding, "stage_binding_sha256": stage_binding,
+                                     "office_reused": bool(office)}
+    if workspace_key is not None:
+        # Published files are immutable snapshots of the resumable workspace.
+        target = _publish_render_snapshot(root, directory, task, filename, document, evidence)
+    final_content = confined(target.parent, "content.json")
     return {"path": target.relative_to(root).as_posix(), "sha256": hashlib.sha256(target.read_bytes()).hexdigest(),
+            "content_path": final_content.relative_to(root).as_posix(), "content_sha256": file_hash(final_content),
             "template_hash": template["sha256"], "render_evidence": evidence}
 
 
-def render_report_draft(task, input_revision, blueprint, chapters, family, *, draft=False, document=None, diagram_generator=None, diagram_progress=None):
+def render_report_draft(task, input_revision, blueprint, chapters, family, *, draft=False, document=None, diagram_generator=None, diagram_progress=None, workspace_key=None):
     from .product_blueprint_knowledge import blueprint_knowledge_status
     paragraphs = [paragraph for chapter in chapters for paragraph in chapter.payload.get("paragraphs", [])]
     if has_repeated_filler(paragraphs):
@@ -530,7 +700,7 @@ def render_report_draft(task, input_revision, blueprint, chapters, family, *, dr
     document = document if document is not None else content_document(task, input_revision, blueprint, chapters, family, draft=draft)
     return _render_document(task, chapters, manifest, runtime, document, "draft.docx", "draft_unverified", "blocked",
                             {"knowledge": blueprint_knowledge_status(input_revision.payload)},
-                            draft=draft, diagram_generator=diagram_generator, diagram_progress=diagram_progress)
+                            draft=draft, diagram_generator=diagram_generator, diagram_progress=diagram_progress, workspace_key=workspace_key)
 
 
 def render_draft(task, input_revision, blueprint, chapters, **diagram_options):

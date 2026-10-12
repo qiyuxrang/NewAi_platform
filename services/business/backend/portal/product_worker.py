@@ -92,9 +92,15 @@ def _failure_diagnostic(error):
         cause = cause.__cause__
     details = getattr(error, "diagnostic", {})
     if isinstance(details, dict):
-        if isinstance(details.get("stage"), str) and details["stage"] in {"presentation_source", "presentation_runtime", "presentation_render", "presentation_manifest", "presentation_quality"}:
+        if isinstance(details.get("stage"), str) and details["stage"] in {"presentation_source", "presentation_runtime", "presentation_render", "presentation_manifest", "presentation_quality",
+            "presentation_office_render", "document_preflight", "document_render", "diagram_render", "docx_assembly", "office_render", "artifact_publish"}:
             diagnostic["stage"] = details["stage"]
-        if isinstance(details.get("reason"), str) and details["reason"] in {"invalid_source", "source_limit", "runtime_missing", "timeout", "launch_failed", "process_failed", "missing_output", "invalid_manifest", "quality_failed"}:
+        if isinstance(details.get("reason"), str) and details["reason"] in {"invalid_source", "source_limit", "runtime_missing", "timeout", "launch_failed", "process_failed", "missing_output", "invalid_manifest", "quality_failed",
+            "process_timeout", "runtime_io_failed", "workspace_key_invalid", "assembly_failed", "staging_failed", "renderer_failed", "staging_cleanup_failed", "promotion_failed", "office_path_too_long",
+            "document_python_unavailable", "document_python_dependencies_unavailable", "node_unavailable", "chromium_unavailable", "mermaid_runtime_invalid", "office_renderer_unavailable",
+            "diagram_renderer_failed", "runtime_manifest_invalid", "chromium_launch_failed", "diagram_input_invalid",
+            "diagram_path_invalid", "diagram_cache_invalid", "diagram_parse_or_anchor_failed", "diagram_bitmap_failed", "diagram_network_blocked",
+            "snapshot_verification_failed", "office_render_timeout", "office_render_failed", "office_render_unavailable", "office_render_invalid_output"}:
             diagnostic["reason"] = details["reason"]
         if type(details.get("returncode")) is int:
             diagnostic["returncode"] = details["returncode"]
@@ -173,7 +179,10 @@ def claim_task():
         return None
     from .agent_runtime import AgentDenied
     from .product_agent import runtime_guard_for_task
-    candidates = DocumentTask.objects.filter(Q(state="QUEUED") | Q(state="RUNNING", lease_until__lte=timezone.now())).order_by("created_at")
+    now = timezone.now()
+    candidates = DocumentTask.objects.filter(
+        (Q(state="QUEUED") & (Q(retry_after__isnull=True) | Q(retry_after__lte=now)))
+        | Q(state="RUNNING", lease_until__lte=now)).order_by("created_at")
     for task_id in candidates.values_list("pk", flat=True)[:32]:
         task = DocumentTask.objects.get(pk=task_id)
         if not (task.state == "QUEUED" or task.state == "RUNNING" and task.lease_until <= timezone.now()):
@@ -240,7 +249,10 @@ def _claim_candidate(task_id, agent_action_key):
         DocumentAttempt.objects.filter(task=task, status="running").update(
             status="cancelled", error_code="agent_binding_stale", finished_at=timezone.now())
         return None
-    if task.attempt_count >= settings.PRODUCT_MAX_ATTEMPTS:
+    recovering = task.checkpoint.get("automatic_recovery") is True
+    if task.state == "QUEUED" and task.retry_after and task.retry_after > timezone.now():
+        return None
+    if not recovering and task.attempt_count >= settings.PRODUCT_MAX_ATTEMPTS:
         task.state, task.error_code = "WAITING_INPUT", "attempt_limit"
         task.fence += 1
         task.version += 1
@@ -257,12 +269,15 @@ def _claim_candidate(task_id, agent_action_key):
         return None
     task.fence = previous_fence + 1
     task.state = "RUNNING"
-    task.attempt_count += 1
+    if not recovering:
+        task.attempt_count += 1
     task.version += 1
     task.error_code = ""
     task.lease_until = now + timedelta(seconds=settings.PRODUCT_LEASE_SECONDS)
     owner = User.objects.get(pk=task.owner_id)
-    task.checkpoint = {**task.checkpoint, "grant_version": owner.grant_version}
+    task.checkpoint = {**task.checkpoint, "grant_version": owner.grant_version,
+                       "automatic_recovery": False, "recovery_mode": recovering}
+    task.retry_after = None
     task.save()
     attempt = DocumentAttempt.objects.create(task=task, fence=task.fence, action=task.pending_action,
                                              status="running", start_at=now, agent_action_key=agent_action_key)
@@ -722,7 +737,7 @@ def _store(task_id, fence, kind, payload, input_hash, blueprint_hash="", family=
 
 
 @transaction.atomic
-def _finish(task_id, fence, attempt_id, state, stage, error_code="", failure=None):
+def _finish(task_id, fence, attempt_id, state, stage, error_code="", failure=None, recovery=None):
     _reserve_sqlite_write(task_id)
     from .product_agent import check_task_scope, lock_task_scope
     try:
@@ -756,6 +771,8 @@ def _finish(task_id, fence, attempt_id, state, stage, error_code="", failure=Non
     delivering_outputs = bool(task.agent_root_id and task.pending_action == "generate_outputs"
                               and state == "COMPLETED" and scope)
     task.state, task.stage, task.error_code = state, stage, error_code
+    task.retry_after = recovery.retry_after if recovery else None
+    task.checkpoint = {**task.checkpoint, "automatic_recovery": recovery is not None}
     if error_code:
         if failure:
             task.checkpoint = {**task.checkpoint, "last_failure": {**failure, "code": error_code, "attempt_id": str(attempt_id)}}
@@ -763,8 +780,12 @@ def _finish(task_id, fence, attempt_id, state, stage, error_code="", failure=Non
         progress = dict(task.checkpoint.get('analysis_progress', {}))
         for phase, record in progress.items():
             if record.get('status') == 'running':
-                progress[phase] = {**record, 'status': 'failed', 'updated_at': timezone.now().isoformat()}
-        event = {'phase': task.pending_action, 'status': 'failed', 'detail': f'执行中断：{error_code}。已保存的资料和成果仍保留。', 'updated_at': timezone.now().isoformat()}
+                progress[phase] = {**record, 'status': 'waiting' if recovery else 'failed',
+                                   'detail': '临时故障，稍后自动从已保存步骤恢复' if recovery else record.get('detail', ''),
+                                   'updated_at': timezone.now().isoformat()}
+        event = {'phase': task.pending_action, 'status': 'waiting' if recovery else 'failed',
+                 'detail': f'临时故障：{recovery.cause_code}，正在等待自动恢复。' if recovery else f'执行中断：{error_code}。已保存的资料和成果仍保留。',
+                 'updated_at': timezone.now().isoformat()}
         task.checkpoint = {**task.checkpoint, 'analysis_progress': progress,
                            'analysis_events': [*task.checkpoint.get('analysis_events', []), event][-200:]}
     task.lease_until = None
@@ -968,6 +989,34 @@ def _reuse_source_expansion_chapters(task, fence, input_revision, blueprint, fam
     return chapters
 
 
+def _writing_model(task_id, fence, attempt_id, route, payload, *, output_validator):
+    from .product_steps import run_step
+    from .product_models import DocumentStep
+
+    binding_payload = deepcopy(payload)
+    # A loop counter restarts after process recovery; saved content identifies the batch.
+    binding_payload.get("continuation", {}).pop("part", None)
+    task = DocumentTask.objects.get(pk=task_id)
+    current_input = current_revision(task, "input")
+    current_blueprint = current_revision(task, "blueprint")
+    binding = {"payload": binding_payload, "route": _review_route_hash(route), "rules": rules_hash(),
+               "input_hash": current_input.sha256 if current_input else None,
+               "blueprint_hash": current_blueprint.sha256 if current_blueprint else None,
+               "draft": task.pending_action in {"generate_outputs", "three_drafts"}}
+    key = "writing:" + payload["family"] + ":" + digest(payload["chapter"])[:16]
+    def operation():
+        request = deepcopy(payload)
+        step = DocumentStep.objects.get(task_id=task_id, key=key, input_hash=digest(binding))
+        target = request.get("length_target", {}).get("this_response_characters")
+        if step.error_code == "output_truncated" and type(target) is int:
+            # Keep the final chapter/report minimum; only shrink this request's payload.
+            request["length_target"]["this_response_characters"] = max(600, target // 2 ** step.retry_count)
+        return _model(task_id, fence, attempt_id, route, request, output_validator=output_validator)
+    return run_step(task_id, fence, key, binding,
+                    operation,
+                    validate=lambda result: bool(output_validator(result)))
+
+
 def _generate_family(task_id, fence, attempt_id, task, input_revision, blueprint, family):
     from .product_service import validate_chapter
     from .product_content_quality import (inspect_chapter_contract, inspect_content_quality,
@@ -1032,7 +1081,7 @@ def _generate_family(task_id, fence, attempt_id, task, input_revision, blueprint
             _analysis_progress(task_id, fence, phase, 'running',
                                detail=f'正在编写{label}第 {chapter_index}/{chapter_total} 章：{chapter["title"]}（已保存 {actual} / 至少 {chapter_minimum} 字）',
                                completed_count=chapter_index - 1, total_count=chapter_total)
-            payload = _model(task_id, fence, attempt_id, settings.PRODUCT_WRITING_ROUTE, {
+            payload = _writing_model(task_id, fence, attempt_id, settings.PRODUCT_WRITING_ROUTE, {
                 "action": "chapter", "family": family,
                 "deliverable": label,
                 "approved_blueprint": {"purpose": blueprint.payload["purpose"], "audience": blueprint.payload["audience"],
@@ -1802,6 +1851,31 @@ def _diagram_contract_hash():
 
 
 def _generate_diagrams(task_id, fence, attempt_id, document, *, draft=False):
+    from .product_diagrams import diagram_batches, validate_diagram_batch
+    from .product_steps import run_step
+
+    task = DocumentTask.objects.get(pk=task_id)
+    input_revision = current_revision(task, "input")
+    blueprint = current_revision(task, "blueprint")
+    output = []
+    for figures, paragraphs in diagram_batches(document):
+        for figure in figures:
+            subset = {"family": document["family"], "metadata": document["metadata"],
+                      "blocks": [{**paragraph, "type": "paragraph"} for paragraph in paragraphs] + [figure]}
+            binding = {"document": subset, "draft": draft, "contract": _diagram_contract_hash(),
+                       "input_hash": input_revision.sha256 if input_revision else None,
+                       "blueprint_hash": blueprint.sha256 if blueprint else None,
+                       "route": _review_route_hash(settings.PRODUCT_WRITING_ROUTE), "rules": rules_hash()}
+            def validate(result):
+                return bool(validate_diagram_batch({"diagrams": result}, [figure], paragraphs, draft=draft))
+            result = run_step(task_id, fence, f'diagram:{document["family"]}:{figure["id"]}', binding,
+                              lambda: _generate_diagrams_uncached(task_id, fence, attempt_id, subset, draft=draft),
+                              validate=validate)
+            output.extend(result)
+    return output
+
+
+def _generate_diagrams_uncached(task_id, fence, attempt_id, document, *, draft=False):
     from .product_diagrams import DIAGRAM_INSTRUCTION, DIAGRAM_PROMPT_VERSION, diagram_batches, excerpt_diagrams, validate_diagram_batch
 
     diagrams = []
@@ -2001,12 +2075,15 @@ def _execute_claim_action(task_id, fence, attempt_id):
             raise ExecutionError("blueprint_approval_required")
         if task.pending_action == "generate_outputs":
             from .product_three_drafts import generate_presentation_artifact, generate_report_drafts
+            from .product_documents import preflight_document_rendering
+            from .product_steps import StepRetryPending
 
             families = task.checkpoint.get("output_families", ["technical-solution", "feasibility", "presentation"])
             if (not isinstance(families, list) or not families or any(family not in {"technical-solution", "feasibility", "presentation"} for family in families)
                     or len(set(families)) != len(families)
                     or ("presentation" in families and not {"technical-solution", "feasibility"} <= set(families))):
                 raise ExecutionError("invalid_request")
+            preflight_document_rendering()
             from .product_blueprint_knowledge import PREVIEW, blueprint_knowledge_status
             preview_pending = (blueprint_knowledge_status(input_revision.payload)["mode"] == PREVIEW
                                and bool(blueprint.payload.get("missing"))
@@ -2015,18 +2092,33 @@ def _execute_claim_action(task_id, fence, attempt_id):
             sampled = False
             batched = False
             reports = []
+            failures = []
             for family in (value for value in families if value != "presentation"):
-                chapters = _generate_family(task_id, fence, attempt_id, task, input_revision, blueprint, family)
-                review = _ensure_content_review(task, fence, attempt_id, input_revision, blueprint, chapters, family)
-                checked = review.payload
-                sampled = sampled or checked["model_review"]["scope"] == "sampled"
-                batched = batched or checked["model_review"]["scope"] == "full_batched"
-                human_review_required = (human_review_required
-                                         or checked.get("full_document_human_review_required", False)
-                                         or checked["model_review"]["full_document_human_review_required"])
-                _analysis_progress(task_id, fence, 'outputs', 'running', detail='正文已保存，正在制作可下载文件')
-                reports.extend(generate_report_drafts(task, fence, attempt_id, input_revision, blueprint,
-                                                     families=[family]))
+                try:
+                    chapters = _generate_family(task_id, fence, attempt_id, task, input_revision, blueprint, family)
+                    review = _ensure_content_review(task, fence, attempt_id, input_revision, blueprint, chapters, family)
+                    checked = review.payload
+                    sampled = sampled or checked["model_review"]["scope"] == "sampled"
+                    batched = batched or checked["model_review"]["scope"] == "full_batched"
+                    human_review_required = (human_review_required
+                                             or checked.get("full_document_human_review_required", False)
+                                             or checked["model_review"]["full_document_human_review_required"])
+                    _analysis_progress(task_id, fence, 'outputs', 'running', detail='正文已保存，正在制作可下载文件')
+                    reports.extend(generate_report_drafts(task, fence, attempt_id, input_revision, blueprint,
+                                                         families=[family]))
+                except Exception as error:
+                    code = getattr(error, "code", "execution_failed")
+                    if code in {"lease_lost", "permission_changed", "model_call_limit", "agent_root_limit",
+                                "model_authorization_required", "retrieval_authorization_required",
+                                "source_snapshot_changed", "blueprint_approval_required", "agent_binding_stale"}:
+                        raise
+                    failures.append(error)
+                    _analysis_progress(task_id, fence, 'outputs', 'running',
+                                       detail=f'{family}暂未完成，已保存进度，继续处理其他报告')
+            if failures:
+                if "presentation" in families:
+                    _analysis_progress(task_id, fence, 'presentation', 'waiting', detail='等待两份报告文件完成后制作PPT')
+                raise next((error for error in failures if isinstance(error, StepRetryPending)), failures[0])
             human_review_required = human_review_required or any(
                 report.render_evidence.get("diagram_generation", {}).get("quality_issue_count", 0) for report in reports)
             if "presentation" in families:
@@ -2069,6 +2161,10 @@ def _execute_claim_action(task_id, fence, attempt_id):
             _store(task_id, fence, "review", checked, input_revision.sha256, blueprint.sha256)
         _render(task, fence, attempt_id, input_revision, blueprint, ordered)
     except Exception as error:
+        from .product_steps import StepRetryPending
+        if isinstance(error, StepRetryPending):
+            return _finish(task_id, fence, attempt_id, "QUEUED", task.stage,
+                           error.code, failure={"cause_code": error.cause_code}, recovery=error)
         code = "product_rules_unavailable" if isinstance(error, ProductRulesError) else getattr(error, "code", "execution_failed")
         allowed = {"equipment_analysis_required", "source_analysis_required", "source_snapshot_changed", "equipment_source_required", "background_source_required", "model_authorization_required", "input_required", "blueprint_approval_required", "chapters_incomplete", "template_unavailable",
                    "product_rules_unavailable", "template_approval_required", "candidate_content_unresolved", "content_review_required", "office_render_disabled", "office_render_timeout", "office_render_unavailable",
@@ -2087,6 +2183,12 @@ def _execute_claim_action(task_id, fence, attempt_id):
 
 
 def execute_claim(task_id, fence, attempt_id):
+    from .product_heartbeat import lease_heartbeat
+    with lease_heartbeat(task_id, fence):
+        return _execute_claim_workflow(task_id, fence, attempt_id)
+
+
+def _execute_claim_workflow(task_id, fence, attempt_id):
     """Execute one database lease through the LangGraph orchestration layer."""
     from .product_blueprint_knowledge import prepare_blueprint_knowledge
     from .product_workflow import run_product_workflow

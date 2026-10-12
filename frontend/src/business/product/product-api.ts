@@ -80,6 +80,8 @@ export interface ProductKnowledgeStatus {
   detail: string;
 }
 export interface DocumentTask extends TaskSummary {
+  retry_after?: string | null;
+  generation_steps?: { key: string; status: string; attempts: number; error_code: string; retry_after?: string | null }[];
   intake_mode?: 'manual' | 'equipment_background';
   analysis_progress?: Partial<Record<ProductWorkflowPhase, ProductWorkflowProgress>>;
   activity?: { phase: string; status: ProductWorkflowProgress['status']; detail?: string; updated_at: string }[];
@@ -169,6 +171,7 @@ export const artifactHistoryDownload = (id: string) => `${artifactDownload(id)}?
 export const draftDownload = (id: string) => `/api/product/outputs/${encodeURIComponent(id)}/download/`;
 export const draftHistoryDownload = (id: string) => `${draftDownload(id)}?history=1`;
 export const draftPreview = (id: string, page = 1) => `/api/product/outputs/${encodeURIComponent(id)}/preview/?page=${encodeURIComponent(String(page))}`;
+export const savedDraftDownload = (task: Pick<DocumentTask, 'id' | 'input_version' | 'blueprint_version'>, family: Exclude<OutputFamily, 'presentation'>) => `${pathFor(task.id)}saved-draft/download/?${new URLSearchParams({ family, input_version: String(task.input_version), blueprint_version: String(task.blueprint_version) })}`;
 export const getDraftOutputs = (id: string, signal: AbortSignal) => apiRequest<{ task_version: number; outputs: DraftOutput[] }>(`${pathFor(id)}outputs/`, { signal });
 export const getTaskHistory = (id: string, signal: AbortSignal) => apiRequest<TaskHistory>(`${pathFor(id)}history/`, { signal });
 export const artifactPreview = (id: string, page: number) => `/api/product/artifacts/${encodeURIComponent(id)}/preview/?page=${encodeURIComponent(String(page))}`;

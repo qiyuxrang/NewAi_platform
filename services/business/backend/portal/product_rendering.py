@@ -87,7 +87,10 @@ def _validated_outputs(directory, report, source_sha256, kind):
         raise DocumentError("office_render_invalid_output")
     pdf_sha256 = _output(pdf, b"%PDF-")
     page_hashes = [_output(page, b"\x89PNG\r\n\x1a\n") for page in pages]
-    if (report.get("input_sha256") != source_sha256 or report.get("pdf_sha256") != pdf_sha256
+    # The frozen PowerPoint renderer predates the PDF hash field. Validate the
+    # actual private output above and always publish its computed hash.
+    declared_pdf_hash = report.get("pdf_sha256", pdf_sha256 if kind == "powerpoint" else None)
+    if (report.get("input_sha256") != source_sha256 or declared_pdf_hash != pdf_sha256
             or report.get("image_sha256", page_hashes) != page_hashes):
         raise DocumentError("office_render_invalid_output")
     reviewed = directory / "reviewed.docx" if kind == "word" else None

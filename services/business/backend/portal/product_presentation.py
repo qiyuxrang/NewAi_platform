@@ -108,8 +108,7 @@ def render_presentation_draft(task, pair):
     if quality["quality_gate"].get("status") != "pass" or quality["missing_source_refs"]:
         raise DocumentError("presentation_unavailable", diagnostic={"stage": "presentation_quality", "reason": "quality_failed"})
     office = None
-    if (getattr(settings, "PRODUCT_OFFICE_RENDER_ENABLED", False)
-            and getattr(settings, "PRODUCT_OFFICE_RENDERER", "word") == "libreoffice"):
+    if getattr(settings, "PRODUCT_OFFICE_RENDER_ENABLED", False):
         from .product_rendering import render_office
         try:
             office = render_office(output.relative_to(root).as_posix(), hashlib.sha256(output.read_bytes()).hexdigest())
