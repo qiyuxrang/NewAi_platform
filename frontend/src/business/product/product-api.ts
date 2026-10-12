@@ -97,8 +97,8 @@ export interface DocumentTask extends TaskSummary {
   input_version: number;
   blueprint_version: number;
   input: TaskInput | null;
-  blueprint: (Artifact & { payload: BlueprintPayload }) | null;
-  chapters: { id: string; family: Exclude<OutputFamily, "presentation">; version?: number; payload: ChapterPayload }[];
+  blueprint: (Artifact & { payload: BlueprintPayload; input_hash?: string }) | null;
+  chapters: { id: string; family: Exclude<OutputFamily, "presentation">; version?: number; input_hash?: string; blueprint_hash?: string; payload: ChapterPayload }[];
   reports: ReportRevision[];
   artifacts: Artifact[];
   sources: { id: string; original_name: string; purpose?: '' | 'equipment' | 'background'; size?: number; media_type?: string; sha256?: string; created_at?: string; warnings?: SourceWarning[]; parsed?: ExtractionSummary }[];
@@ -183,4 +183,3 @@ export async function uploadSource(id: string, file: File, version: number, sign
   const result = await apiRequest<{ source_id: string; task: DocumentTask }>(`${pathFor(id)}sources/`, { method: "POST", body, signal });
   return result.task;
 }
-

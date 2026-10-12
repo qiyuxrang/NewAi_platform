@@ -26,10 +26,38 @@ from .product_rules import ProductRulesError, rules_hash, stage_rules
 from .product_formal import has_repeated_filler, unsupported_financial_conclusion
 
 
+_DIAGRAM_VALIDATION_REASONS = frozenset({
+    "invalid diagram model output", "invalid diagram schema",
+    "diagram identifiers differ from planned figures", "invalid diagram text",
+    "diagram evidence outside authored chapter", "diagram is missing its report evidence anchor",
+    "unsupported or unsafe Mermaid source", "duplicate diagram source", "diagram model output is incomplete",
+})
+
+_DRAFT_PENDING_CONDITION = {
+    "text": "按待确认草稿继续生成：保留蓝图缺项、资料冲突和输入校验提示；未确认的数据不得用于选型、采购、投资或正式发布结论；来源、对象数量和权限校验仍必须通过。",
+    "type": "human",
+}
+
+_DRAFT_QUANTITY_PENDING_CONDITION = {
+    "text": "按待确认草稿继续生成并复用已保存正文：保留蓝图缺项、资料冲突和输入校验提示；实际执行来源、对象数量和权限校验，数量来源无法唯一归属时保留原文及逐段待确认提示，不认定数量校验通过，不猜测或合并清单行；明确数量不符、来源越界和权限问题仍阻断；未确认的数据不得用于选型、采购、投资或正式发布结论。",
+    "type": "human",
+}
+
+
+def _approved_pending_draft(task, blueprint):
+    approved = approved_blueprint(task)
+    return bool(task.pending_action in {"generate_outputs", "three_drafts"} and approved
+                and approved.sha256 == blueprint.sha256
+                and any(condition in blueprint.payload.get("conditions", []) for condition in
+                        (_DRAFT_PENDING_CONDITION, _DRAFT_QUANTITY_PENDING_CONDITION)))
+
+
 class ExecutionError(Exception):
-    def __init__(self, code, *, quality_issues=None):
+    def __init__(self, code, *, quality_issues=None, diagram_validation_reason=""):
         self.code = code
         self.quality_issues = list(quality_issues or [])
+        self.diagram_validation_reason = (diagram_validation_reason
+                                          if diagram_validation_reason in _DIAGRAM_VALIDATION_REASONS else "")
         super().__init__(code)
 
 
@@ -71,6 +99,9 @@ def _failure_diagnostic(error):
         if type(details.get("returncode")) is int:
             diagnostic["returncode"] = details["returncode"]
     quality_issues = getattr(error, "quality_issues", [])
+    diagram_reason = getattr(error, "diagram_validation_reason", "")
+    if diagram_reason in _DIAGRAM_VALIDATION_REASONS:
+        diagnostic["diagram_validation_reason"] = diagram_reason
     if quality_issues:
         diagnostic["quality_issues"] = _bounded_quality_issues(quality_issues)
         diagnostic["quality_issue_count"] = len(quality_issues)
@@ -442,6 +473,29 @@ def _model(task_id, fence, attempt_id, route, payload, *, retry_invalid_output=T
     output_contract = ("\n输出根对象的键集合必须与以下schema完全相同；不得返回输入元信息、校验说明或纠正指令。"
                        "必须包含全部字段，空数组也必须返回，示例占位字符串不能作为内容：\n"
                        + json.dumps(payload["schema"], ensure_ascii=False)) if "schema" in payload else ""
+    if payload["action"] == "independent_review":
+        output_contract += (
+            "\n独立复核根对象必须恰含passed和issues两个键。passed必须是JSON布尔值true或false，"
+            "不能是字符串、数字或null；issues必须是JSON字符串数组，最多100项，每项不超过2000个字符，"
+            "不能返回问题对象、对象数组或null。每项字符串完整说明位置、具体问题、依据及修正要求。"
+            "未发现实质问题时返回passed=true和issues=[]；存在真实问题时返回passed=false及全部真实issues，"
+            "不得为了通过格式校验删除问题、丢失依据或改成passed=true。"
+        )
+    if payload["action"] == "diagram":
+        output_contract += (
+            "\n图表根对象只含diagrams数组；必须返回figures中的全部图且每个figure_id恰好一次，不增删图。"
+            "每项恰含figure_id、title、description、source、evidence_block_ids、anchor_text六个字段。"
+            "figure_id是figures原ID字符串；title为1至120字符、description为1至400字符、"
+            "source为1至6000字符、anchor_text为2至100字符的非空字符串，不含NUL。"
+            "evidence_block_ids为1至30项字符串数组，只选本批report_blocks中实际支持该图的id。"
+            "优先选择2至12字符的具体短语，不引用整句；先从所引用正文逐字复制短语作为anchor_text，"
+            "再把这个完整短语逐字放进一个实际可见的"
+            "节点标签或消息文字；不得改写、缩写、拆分、加括号或仅放在隐藏节点ID中。"
+            "anchor_text必须同时连续出现在所引用原文及source中，提交前逐字自查两处，不能只在标题或说明中出现。"
+            "source仅使用flowchart TB/TD/BT/RL/LR或sequenceDiagram；不含Markdown围栏、%%注释、"
+            "HTML、URL、javascript、click、style、classDef或linkStyle；各图source不能仅改变空白后重复。"
+            "纠错仍返回本批全部图和全部六个字段，保留正文待确认边界与真实引用。"
+        )
     if payload["action"] == "chapter":
         output_contract += (
             "\n章节根对象必须完整包含chapter_id、title、paragraphs、source_ids四个字段。"
@@ -524,6 +578,7 @@ def _model(task_id, fence, attempt_id, route, payload, *, retry_invalid_output=T
             evidence["reasoning_tokens"] = reasoning_tokens
         task.save(update_fields=["checkpoint", "updated_at"])
     structure_failure = None
+    review_normalization = None
     candidate_before_validation = None
     validation_stage = "json_parse"
     try:
@@ -542,6 +597,20 @@ def _model(task_id, fence, attempt_id, route, payload, *, retry_invalid_output=T
             raise ExecutionError("invalid_model_output")
         if payload["action"] == "independent_review":
             validation_stage = "review_types"
+            issues = result.get("issues")
+            values = issues if isinstance(issues, list) else []
+            # Preserve every field of structured findings, without coercing flags or dropping issues.
+            normalized = [json.dumps(issue, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+                          if isinstance(issue, dict) and issue else issue for issue in values]
+            structure_failure = {"reason": "review_output_invalid",
+                "passed_type": type(result.get("passed")).__name__, "issues_type": type(issues).__name__,
+                "issue_count": len(values), "non_string_issue_count": sum(not isinstance(issue, str) for issue in values),
+                "object_issue_count": sum(isinstance(issue, dict) and bool(issue) for issue in values),
+                "oversize_issue_count": sum(isinstance(issue, str) and len(issue) > 2000 for issue in normalized)}
+            if structure_failure["object_issue_count"]:
+                review_normalization = {"object_issue_count": structure_failure["object_issue_count"],
+                                        "original_response_sha256": digest(result)}
+                result = {**result, "issues": normalized}
             # Keep reviewer semantics inside the same bounded correction path as
             # JSON and schema failures. The review caller still needs the actual
             # passed flag and issue list, so validation must not replace result.
@@ -574,9 +643,16 @@ def _model(task_id, fence, attempt_id, route, payload, *, retry_invalid_output=T
                 task.checkpoint["calls"][-1]["structure_failure"] = structure_failure
             if error.quality_issues:
                 task.checkpoint["calls"][-1]["quality_issues"] = _bounded_quality_issues(error.quality_issues)
+            if error.diagram_validation_reason:
+                task.checkpoint["calls"][-1]["diagram_validation_reason"] = error.diagram_validation_reason
             task.save(update_fields=["checkpoint", "updated_at"])
         if retry_invalid_output:
             correction = _output_correction(payload["action"])
+            if payload["action"] == "diagram" and error.diagram_validation_reason:
+                correction["diagram_validation_correction"] += (
+                    " 本次固定校验原因：" + error.diagram_validation_reason +
+                    "。如为锚点问题，从evidence_block_ids对应正文逐字复制2至12字符短语为anchor_text，"
+                    "并将该完整短语逐字写入source内一个可见节点标签或消息；两处连续原文必须完全相同。")
             if payload["action"] == "chapter":
                 correction["chapter_validation_correction"] = (
                     "上一轮章节响应未通过校验。chapter_id和title必须与chapter中的原值逐字一致；"
@@ -619,15 +695,24 @@ def _model(task_id, fence, attempt_id, route, payload, *, retry_invalid_output=T
         if evidence["attempt_id"] != str(attempt_id) or evidence["input_hash"] != dispatch_input_hash:
             raise ExecutionError("lease_lost")
         evidence.update(response_validated=True, response_sha256=digest(result))
+        if (payload["action"] == "chapter" and candidate_before_validation is not None
+                and candidate_before_validation["paragraphs"] != result["paragraphs"]):
+            evidence["chapter_output_normalization"] = {
+                "original_response_sha256": digest(candidate_before_validation),
+                "removed_paragraph_count": len(candidate_before_validation["paragraphs"]) - len(result["paragraphs"]),
+                "accepted_response_sha256": digest(result),
+            }
+        if review_normalization:
+            evidence["review_output_normalization"] = review_normalization
         task.save(update_fields=["checkpoint", "updated_at"])
     return result
 
 
 @transaction.atomic
-def _store(task_id, fence, kind, payload, input_hash, blueprint_hash="", family="technical-solution"):
+def _store(task_id, fence, kind, payload, input_hash, blueprint_hash="", family="technical-solution", reason=""):
     task = _guard(task_id, fence)
     record = append_revision(task, kind, payload, input_hash=input_hash, blueprint_hash=blueprint_hash,
-                             family=family, reason=f"worker_{kind}")
+                             family=family, reason=reason or f"worker_{kind}")
     task.checkpoint = {**task.checkpoint, "last_revision": str(record.pk), "input_hash": input_hash, "blueprint_hash": blueprint_hash}
     task.lease_until = timezone.now() + timedelta(seconds=settings.PRODUCT_LEASE_SECONDS)
     if kind == "blueprint":
@@ -774,8 +859,19 @@ def _content_quality_issues(chapters, input_payload, blueprint_payload=None):
     return issues
 
 
-def _content_quality_guard(chapters, input_payload, blueprint_payload=None):
-    issues = _content_quality_issues(chapters, input_payload, blueprint_payload)
+def _blocking_content_issues(issues, *, draft=False):
+    if not draft:
+        return issues
+    # Draft prose findings remain review evidence; provenance and usable body are mandatory.
+    return [issue for issue in issues if issue["code"] in {
+        "source_review_required", "source_outside_blueprint", "quantity_mismatch", "quantity_source_ambiguous",
+        "unresolved_input_items", "unresolved_blueprint_items", "near_duplicate_content", "partial_duplicate_content",
+        "dangling_paragraph", "fragmented_quoted_paragraph",
+    }]
+
+
+def _content_quality_guard(chapters, input_payload, blueprint_payload=None, *, draft=False):
+    issues = _blocking_content_issues(_content_quality_issues(chapters, input_payload, blueprint_payload), draft=draft)
     if issues:
         raise ExecutionError("content_review_required", quality_issues=issues)
 
@@ -812,15 +908,15 @@ def _chapter_character_count(chapters):
     )
 
 
-def _formal_content_guard(chapters, family):
+def _formal_content_guard(chapters, family, *, draft=False):
     paragraphs = [paragraph for chapter in chapters for paragraph in chapter.payload.get("paragraphs", [])]
-    _formal_paragraph_guard(paragraphs, family)
+    _formal_paragraph_guard(paragraphs, family, draft=draft)
 
 
-def _formal_paragraph_guard(paragraphs, family):
+def _formal_paragraph_guard(paragraphs, family, *, draft=False):
     if has_repeated_filler(paragraphs):
         raise ExecutionError("repeated_body_filler")
-    if family == "feasibility" and any(unsupported_financial_conclusion(paragraph) for paragraph in paragraphs):
+    if not draft and family == "feasibility" and any(unsupported_financial_conclusion(paragraph) for paragraph in paragraphs):
         raise ExecutionError("investment_evidence_required")
 
 
@@ -839,29 +935,74 @@ def _record_output_generation(task_id, fence, family, target, actual):
     task.save(update_fields=["checkpoint", "updated_at"])
 
 
+def _reuse_source_expansion_chapters(task, fence, input_revision, blueprint, family, chapters):
+    from .product_service import approval_current
+
+    approved = approved_blueprint(task)
+    if not approved or approved.sha256 != blueprint.sha256:
+        return chapters
+    for previous in task.revisions.filter(kind="blueprint", input_hash=input_revision.sha256,
+                                          version__lt=blueprint.version).order_by("-version"):
+        old, new = deepcopy(previous.payload), deepcopy(blueprint.payload)
+        old_sources = [set(chapter.pop("source_ids")) for chapter in old["chapters"]]
+        new_sources = [set(chapter.pop("source_ids")) for chapter in new["chapters"]]
+        new["conditions"] = [condition for condition in new["conditions"]
+                             if condition in old["conditions"] or condition not in
+                             (_DRAFT_PENDING_CONDITION, _DRAFT_QUANTITY_PENDING_CONDITION)]
+        if (old != new or not all(a <= b for a, b in zip(old_sources, new_sources))
+                or not any(a < b for a, b in zip(old_sources, new_sources))):
+            continue
+        approval = previous.approvals.filter(actor_id=task.owner_id).select_related("actor").order_by("-created_at").first()
+        if not approval or approval.decision != "approve" or not approval_current(task, approval):
+            continue
+        saved = current_chapters(task, input_revision.sha256, previous.sha256, family)
+        for chapter in blueprint.payload["chapters"]:
+            original = saved.get(chapter["id"])
+            if original and chapter["id"] not in chapters:
+                payload = deepcopy(original.payload)
+                payload["source_ids"] = list(dict.fromkeys([*payload["source_ids"], *chapter["source_ids"]]))
+                chapters[chapter["id"]] = _store(task.pk, fence, "chapter", payload, input_revision.sha256,
+                    blueprint.sha256, family=family, reason=f"approved_source_scope_reuse:{original.pk}")
+        if saved:
+            break
+    return chapters
+
+
 def _generate_family(task_id, fence, attempt_id, task, input_revision, blueprint, family):
     from .product_service import validate_chapter
     from .product_content_quality import (inspect_chapter_contract, inspect_content_quality,
                                           inspect_repeated_content, unsupported_numeric_claims)
 
     chapters = current_chapters(task, input_revision.sha256, blueprint.sha256, family)
+    chapters = _reuse_source_expansion_chapters(task, fence, input_revision, blueprint, family, chapters)
+    draft = task.pending_action in {"generate_outputs", "three_drafts"}
     family_target = _family_target(family)
     chapter_total = max(1, len(blueprint.payload["chapters"]))
     chapter_target = (family_target + chapter_total - 1) // chapter_total
     enforce_length = settings.PRODUCT_ENFORCE_OUTPUT_LENGTH
     chapter_minimum = _minimum_characters(chapter_target)
+    source_items = _source_items(task, input_revision.payload)
     phase = 'writing_technical' if family == 'technical-solution' else 'writing_feasibility'
     label = '技术方案' if family == 'technical-solution' else '可行性研究报告'
     for chapter_index, chapter in enumerate(blueprint.payload["chapters"], 1):
         existing = chapters.get(chapter["id"])
         actual = _chapter_character_count([existing]) if existing else 0
-        if existing and (not enforce_length or actual >= chapter_minimum):
-            continue
+        previous = []
         def validate_output(result):
             checked = validate_chapter(result)
             if (checked["chapter_id"] != chapter["id"] or checked["title"] != chapter["title"]
                     or not checked["source_ids"] or not set(checked["source_ids"]) <= set(chapter["source_ids"])):
                 raise ExecutionError("invalid_model_output")
+            existing_body = [paragraph for saved_chapter in chapters.values()
+                             for paragraph in saved_chapter.payload.get("paragraphs", [])]
+            repeated = inspect_repeated_content(checked["paragraphs"], previous=existing_body)
+            removed = {issue["paragraph_index"] for issue in repeated
+                       if issue["code"] in {"near_duplicate_content", "partial_duplicate_content"}}
+            retained = [index for index in range(len(checked["paragraphs"])) if index not in removed]
+            checked["paragraphs"] = [checked["paragraphs"][index] for index in retained]
+            if not checked["paragraphs"]:
+                raise ExecutionError("invalid_model_output", quality_issues=[
+                    {**issue, "chapter_id": chapter["id"]} for issue in repeated])
             saved = {re.sub(r"\s+", "", paragraph) for paragraph in previous}
             if not any((normalized := re.sub(r"\s+", "", paragraph)) and normalized not in saved
                        for paragraph in checked["paragraphs"]):
@@ -873,14 +1014,18 @@ def _generate_family(task_id, fence, attempt_id, task, input_revision, blueprint
                 project_facts=_project_facts(input_revision.payload), source_context=_source_context(input_revision.payload)))
             quality_issues.extend(inspect_chapter_contract(checked["paragraphs"],
                 approved_chapters=blueprint.payload["chapters"], current_chapter_id=chapter["id"]))
-            existing_body = [paragraph for saved_chapter in chapters.values()
-                             for paragraph in saved_chapter.payload.get("paragraphs", [])]
             quality_issues.extend(inspect_repeated_content(checked["paragraphs"], previous=existing_body))
+            quality_issues.extend(_chapter_source_issues(input_revision.payload, blueprint.payload, checked,
+                                                        items=source_items))
+            quality_issues = _blocking_content_issues(quality_issues, draft=draft)
             if quality_issues:
                 raise ExecutionError("invalid_model_output", quality_issues=[
-                    {**issue, "chapter_id": chapter["id"]} for issue in quality_issues])
+                    {**issue, "chapter_id": chapter["id"], "paragraph_index": retained[issue["paragraph_index"]]}
+                    for issue in quality_issues])
             return checked
 
+        if existing and (not enforce_length or actual >= chapter_minimum):
+            continue
         for part_index in range((chapter_minimum + 599) // 600 + 4 if enforce_length else 1):
             previous = existing.payload["paragraphs"] if existing else []
             remaining = max(0, chapter_minimum - actual)
@@ -896,7 +1041,7 @@ def _generate_family(task_id, fence, attempt_id, task, input_revision, blueprint
                                                     for item in blueprint.payload["chapters"]]},
                 "input": model_input(task, input_revision.payload, chapter["source_ids"]), "chapter": chapter,
                 "continuation": {"append_only": bool(previous), "saved_characters": actual,
-                                 **_saved_writing_context(previous),
+                                  **_saved_writing_context(previous),
                                  "part": part_index + 1},
                 "length_target": {
                     "family_characters": family_target,
@@ -905,7 +1050,7 @@ def _generate_family(task_id, fence, attempt_id, task, input_revision, blueprint
                     "this_response_characters": min(2400, max(600, remaining)) if enforce_length else chapter_target,
                     "remaining_characters": remaining,
                     "paragraph_max_characters": 2400,
-                    "instruction": "本次只返回新增正文段落，不重写或重复已保存内容。按本次字数分段扩展本章尚未覆盖的设计、实施、校验与风险；不得重复堆字，不得补造事实、参数、设备或来源。资料不足时明确待确认项，不编造结论。总字数按正文非空白字符统计，不含标题、目录、图表或附件。",
+                    "instruction": "本次只返回新增正文段落，不重写或重复已保存内容。按本次字数分段扩展本章尚未覆盖的设计、实施、校验与风险；不得重复堆字，不得补造事实、参数、设备或来源。引用数量、金额、工期或目标时，保留资料中的原对象、单位和计划或实测状态，优先沿用完整事实原句；不能把并发人数改成若干个目标，把第几周的工作节点改成持续几周。未实测表示需要实际验证和记录，不表示测试数据必然无效或禁止量化测试。资料不足时明确待确认项，不编造结论。总字数按正文非空白字符统计，不含标题、目录、图表或附件。",
                 },
                 "schema": {"chapter_id": chapter["id"], "title": chapter["title"],
                            "paragraphs": ["string"], "source_ids": []},
@@ -922,7 +1067,7 @@ def _generate_family(task_id, fence, attempt_id, task, input_revision, blueprint
             payload["paragraphs"] = [*previous, *additions]
             payload["source_ids"] = list(dict.fromkeys([*(existing.payload["source_ids"] if existing else []), *payload["source_ids"]]))
             validate_chapter(payload)
-            _formal_paragraph_guard(payload["paragraphs"], family)
+            _formal_paragraph_guard(payload["paragraphs"], family, draft=draft)
             existing = chapters[chapter["id"]] = _store(task_id, fence, "chapter", payload, input_revision.sha256,
                                                        blueprint.sha256, family=family)
             actual = _chapter_character_count([existing])
@@ -935,7 +1080,7 @@ def _generate_family(task_id, fence, attempt_id, task, input_revision, blueprint
     if not ordered or any(item is None for item in ordered):
         raise ExecutionError("chapters_incomplete")
     actual = _chapter_character_count(ordered)
-    _formal_content_guard(ordered, family)
+    _formal_content_guard(ordered, family, draft=draft)
     _record_output_generation(task_id, fence, family, family_target, actual)
     if enforce_length and actual < _minimum_characters(family_target):
         raise ExecutionError("output_length_below_target")
@@ -944,10 +1089,28 @@ def _generate_family(task_id, fence, attempt_id, task, input_revision, blueprint
     return ordered
 
 
+def _item_in_sources(item, allowed):
+    return any(str(item.get(key)) in allowed for key in ("row_id", "source_id") if item.get(key) not in (None, ""))
+
+
+def _source_items(task, payload):
+    from .product_intake import extraction_hash
+    from .product_source_service import enrich_item_context
+
+    snapshots = {source["id"]: source for source in payload.get("sources", [])}
+    materials = {source["source_id"]: source["extraction_hash"] for source in payload.get("source_materials", [])}
+    parsed = {str(source.pk): source.parsed for source in task.sources.all()
+              if (snapshot := snapshots.get(str(source.pk)))
+              and snapshot.get("sha256") == source.sha256
+              and snapshot.get("extraction_hash") == extraction_hash(source.parsed)
+              and materials.get(str(source.pk), snapshot.get("extraction_hash")) == snapshot.get("extraction_hash")}
+    return enrich_item_context(payload.get("items", []), parsed)
+
+
 def model_input(task, payload, source_ids=None):
     context = {key: payload.get(key, [] if key == "conditions" else "") for key in ("project", "requirements", "conditions")}
     allowed = set(source_ids) if source_ids is not None else None
-    context["items"] = [item for item in payload.get("items", []) if allowed is None or str(item.get("row_id")) in allowed or str(item.get("source_id")) in allowed]
+    context["items"] = [item for item in _source_items(task, payload) if allowed is None or _item_in_sources(item, allowed)]
     for key in ("sources", "knowledge_sources"):
         context[key] = [source for source in payload.get(key, []) if allowed is None or str(source.get("id")) in allowed]
     context["statements"] = [item for item in payload.get("statements", []) if allowed is None or set(item.get("source_ids", [])) <= allowed]
@@ -1031,40 +1194,109 @@ def _blueprint_revision_feedback(task, input_revision):
             'comment': decision.comment, 'approval_id': str(decision.pk)}}
 
 
-def content_checks(input_payload, blueprint_payload, chapters):
-    from .product_content_quality import content_quality_policy_hash, unsupported_numeric_claims
-
+def _quantity_source_issues(items, payload, allowed, background=""):
+    from .product_content_quality import select_quantity_source_items
+    by_name = {}
+    for item in items:
+        name = str(item.get("name", "")).strip()
+        if name:
+            by_name.setdefault(name, []).append(item)
+    if not by_name:
+        return []
+    # Match the full known object first: 开关柜 must not capture 35kV开关柜.
+    names = re.compile("|".join(re.escape(name) for name in sorted(by_name, key=len, reverse=True)))
+    background_items = set()
+    for mention in names.finditer(background):
+        for item in by_name[mention.group()]:
+            unit = str(item.get("unit", "")).strip()
+            match = re.match(rf"\s*(\d+(?:\.\d+)?)\s*{re.escape(unit)}", background[mention.end():]) if unit else None
+            try:
+                if match and Decimal(match[1]) == Decimal(str(item.get("quantity", ""))):
+                    background_items.add(id(item))
+            except InvalidOperation:
+                continue
     issues = []
-    items = input_payload.get("items", [])
+    for paragraph_index, paragraph in enumerate(payload.get("paragraphs", [])):
+        mentions = list(names.finditer(paragraph))
+        for index, mention in enumerate(mentions):
+            candidates = [item for item in by_name[mention.group()]
+                if _item_in_sources(item, allowed) or id(item) in background_items]
+            detail = {"chapter_id": payload.get("chapter_id"), "paragraph_index": paragraph_index,
+                      "claim": mention.group()}
+            if not candidates:
+                issues.append({"code": "source_outside_blueprint", **detail})
+                # Keep checking the known object's quantity even if its source is excluded.
+                candidates = by_name[mention.group()]
+            before = paragraph[mentions[index - 1].end() if index else 0:mention.start()]
+            after = paragraph[mention.end():mentions[index + 1].start() if index + 1 < len(mentions) else len(paragraph)]
+            start = max(paragraph.rfind(boundary, 0, mention.start()) for boundary in "。；;\n") + 1
+            ends = [position for boundary in "。；;\n"
+                    if (position := paragraph.find(boundary, mention.end())) >= 0]
+            local_context = paragraph[start:min(ends) if ends else len(paragraph)]
+            candidates = select_quantity_source_items(candidates, local_context)
+            for unit in {str(item.get("unit", "")).strip() for item in candidates} - {""}:
+                quantities = []
+                for item in candidates:
+                    if str(item.get("unit", "")).strip() != unit:
+                        continue
+                    try:
+                        quantity = Decimal(str(item.get("quantity", "")))
+                        if quantity.is_finite():
+                            quantities.append((item, quantity))
+                    except InvalidOperation:
+                        continue
+                row_ids = "|".join(re.escape(str(item["row_id"])) for item, _ in quantities if item.get("row_id"))
+                row_marker = rf"(?:(?:{row_ids})\s*)?" if row_ids else ""
+                matches = [*re.findall(rf"^[^\d。；;\n，,、和与及]{{0,12}}(\d+(?:\.\d+)?)\s*{re.escape(unit)}(?![A-Za-z²³])", after),
+                           *re.findall(rf"(\d+(?:\.\d+)?)\s*{re.escape(unit)}\s*{row_marker}$", before)]
+                if not matches or not quantities:
+                    continue
+                if len({quantity for _, quantity in quantities}) > 1:
+                    issues.append({"code": "quantity_source_ambiguous", **detail})
+                elif any(Decimal(match) != quantities[0][1] for match in matches):
+                    item = quantities[0][0]
+                    issues.append({"code": "quantity_mismatch", "row_id": str(item.get("row_id")),
+                        **({"source_item_id": item["source_item_id"]} if item.get("source_item_id") else {}), **detail})
+    return issues
+
+
+def _chapter_source_issues(input_payload, blueprint_payload, payload, *, items=None):
+    issues = []
+    items = input_payload.get("items", []) if items is None else items
     source_ids = {str(item.get("row_id")) for item in items}
     source_ids.update(str(source.get("id")) for source in input_payload.get("sources", []) if isinstance(source, dict))
     source_ids.update(source["id"] for source in input_payload.get("knowledge_sources", []))
     approved_sources = {chapter["id"]: set(chapter["source_ids"]) for chapter in blueprint_payload.get("chapters", [])}
+    background_sources = [source for source in input_payload.get("sources", [])
+        if isinstance(source, dict) and source.get("purpose") == "background"]
+    cited = payload.get("source_ids", [])
+    if not cited or any(str(source) not in source_ids for source in cited):
+        issues.append({"code": "source_review_required", "chapter_id": payload.get("chapter_id")})
+    if not set(cited) <= approved_sources.get(payload.get("chapter_id"), set()):
+        issues.append({"code": "source_outside_blueprint", "chapter_id": payload.get("chapter_id")})
+    allowed = set(cited) & approved_sources.get(payload.get("chapter_id"), set())
+    # Legacy TXT background is aggregated; every contributing background must be cited.
+    background = input_payload.get("background", "") if (background_sources
+        and all(source.get("media_type") == "text/plain" and str(source.get("id")) in allowed for source in background_sources)
+        and not input_payload.get("source_materials")) else ""
+    issues.extend(_quantity_source_issues(items, payload, allowed, background))
+    return issues
+
+
+def content_checks(input_payload, blueprint_payload, chapters, *, items=None):
+    from .product_content_quality import content_quality_policy_hash, unsupported_numeric_claims
+
+    issues = []
     for chapter in chapters:
         payload = chapter.payload
-        cited = payload.get("source_ids", [])
-        if not cited or any(str(source) not in source_ids for source in cited):
-            issues.append({"code": "source_review_required", "chapter_id": payload.get("chapter_id")})
-        if not set(cited) <= approved_sources.get(payload.get("chapter_id"), set()):
-            issues.append({"code": "source_outside_blueprint", "chapter_id": payload.get("chapter_id")})
+        issues.extend(_chapter_source_issues(input_payload, blueprint_payload, payload, items=items))
         issues.extend({**issue, "chapter_id": payload.get("chapter_id")} for issue in unsupported_numeric_claims(
             payload.get("paragraphs", []), project_facts=_project_facts(input_payload),
             source_context=_source_context(input_payload)))
-        for item in items:
-            name, unit = str(item.get("name", "")).strip(), str(item.get("unit", "")).strip()
-            if not name or not unit:
-                continue
-            try:
-                quantity = Decimal(str(item.get("quantity", "")))
-                if not quantity.is_finite():
-                    continue
-            except InvalidOperation:
-                continue
-            patterns = [rf"{re.escape(name)}[^\d。；\n]{{0,12}}(\d+(?:\.\d+)?)\s*{re.escape(unit)}",
-                        rf"(\d+(?:\.\d+)?)\s*{re.escape(unit)}\s*{re.escape(name)}"]
-            for paragraph in payload.get("paragraphs", []):
-                if any(Decimal(match) != quantity for pattern in patterns for match in re.findall(pattern, paragraph)):
-                    issues.append({"code": "quantity_mismatch", "row_id": str(item.get("row_id")), "chapter_id": payload.get("chapter_id")})
+        if getattr(chapter, "family", "") == "feasibility":
+            issues.extend({"code": "financial_conclusion_requires_review", "chapter_id": payload.get("chapter_id"),
+                           "paragraph_index": index} for index, paragraph in enumerate(payload.get("paragraphs", []))
+                          if unsupported_financial_conclusion(paragraph))
     if blueprint_payload.get("missing") or blueprint_payload.get("conflicts"):
         issues.append({"code": "unresolved_blueprint_items"})
     if input_payload.get("issues"):
@@ -1104,10 +1336,12 @@ def _review_payload(task, input_revision, blueprint, chapters, family=""):
         "evidence_boundary": "project_fact_text只列已提供项目事实；input.requirements为需求与指令，不能当成已实现现状证据。公开引用可支持明确归属的通用技术观点或待确认候选，不能证明本项目已实施、缺少能力或符合固定参数。上下文有截取时仍需人工依据完整来源核对。",
     }
     draft_boundary = {}
-    if (blueprint_knowledge_status(input_revision.payload)["mode"] == PREVIEW
-            and blueprint.payload.get("missing") and not blueprint.payload.get("conflicts")):
+    if (_approved_pending_draft(task, blueprint) or
+            (blueprint_knowledge_status(input_revision.payload)["mode"] == PREVIEW
+             and blueprint.payload.get("missing") and not blueprint.payload.get("conflicts"))):
         draft_boundary = {"draft_review_boundary": {
-            "mode": PREVIEW, "approved_pending_items": list(blueprint.payload["missing"]),
+            "mode": "approved_pending_draft", "approved_pending_items": list(blueprint.payload["missing"]),
+            "conflicts": list(blueprint.payload.get("conflicts", [])), "input_issues": input_revision.payload.get("issues", []),
             "human_review": "required",
             "instruction": "本次复核带待确认事项的草稿，不作正式可行或投资结论批准。资料不完整但正文明确待确认、未补造参数且未作无依据财务结论时，不能仅因这些已批准待确认事项判为实质错误；它们仍会单独保留并要求人工全文审核。passed仅表示本次审查范围未发现实质错误，不代表资料完整或人工批准。事实、设备、数量、来源、范围冲突和无依据结论仍须如实列入issues，不能因为草稿或待确认而忽略。",
         }}
@@ -1172,6 +1406,9 @@ def _review_payload(task, input_revision, blueprint, chapters, family=""):
             "review_contract": review_contract,
             **draft_boundary,
         }
+    if _review_request_size(sampled) > 14500:
+        # The batch planner replaces these samples with complete body fragments.
+        sampled["chapters"] = []
     if _review_request_size(sampled) > 14500:
         raise ExecutionError("request_too_large")
     return sampled, "sampled"
@@ -1502,11 +1739,26 @@ def _ensure_content_review(task, fence, attempt_id, input_revision, blueprint, c
     from .product_blueprint_knowledge import PREVIEW, blueprint_knowledge_status
 
     # Re-run the current program policy even when a complete model review exists.
-    checked = content_checks(input_revision.payload, blueprint.payload, chapters)
+    checked = content_checks(input_revision.payload, blueprint.payload, chapters,
+                             items=_source_items(task, input_revision.payload))
+    draft = task.pending_action in {"generate_outputs", "three_drafts"}
     preview_pending = (blueprint_knowledge_status(input_revision.payload)["mode"] == PREVIEW
                        and bool(blueprint.payload.get("missing")) and not blueprint.payload.get("conflicts"))
-    blocking = [issue for issue in checked["issues"]
-                if not (preview_pending and issue["code"] == "unresolved_blueprint_items")]
+    approved_pending = _approved_pending_draft(task, blueprint)
+    quantity_pending = (approved_pending
+                        and _DRAFT_QUANTITY_PENDING_CONDITION in blueprint.payload.get("conditions", []))
+    blocking = _blocking_content_issues([issue for issue in checked["issues"]
+                if not ((preview_pending and issue["code"] == "unresolved_blueprint_items")
+                        or (approved_pending and issue["code"] in {"unresolved_blueprint_items", "unresolved_input_items"})
+                        or (quantity_pending and issue["code"] == "quantity_source_ambiguous"))], draft=draft)
+    if approved_pending:
+        checked["approved_pending"] = {"blueprint_sha256": blueprint.sha256, "input_sha256": input_revision.sha256,
+            "missing": blueprint.payload.get("missing", []), "conflicts": blueprint.payload.get("conflicts", []),
+            "input_issues": input_revision.payload.get("issues", [])}
+        if quantity_pending:
+            checked["approved_pending"]["quantity_issues"] = [issue for issue in checked["issues"]
+                if issue["code"] == "quantity_source_ambiguous"]
+        checked["full_document_human_review_required"] = True
     if blocking:
         # Keep rejected program evidence reviewable without invoking the model
         # or promoting a partial/not-run review to an approved result.
@@ -1517,17 +1769,29 @@ def _ensure_content_review(task, fence, attempt_id, input_revision, blueprint, c
         _store(task.pk, fence, "review", checked, input_revision.sha256, blueprint.sha256, family=family)
         raise ExecutionError("content_review_required", quality_issues=blocking)
     review = task.revisions.filter(kind="review", family=family).order_by("-version").first()
-    if not _content_review_current(task, review, input_revision, blueprint, chapters):
-        checked["model_review"] = _review_family(task.pk, fence, attempt_id, task, input_revision, blueprint, chapters, family)
+    current = _content_review_current(task, review, input_revision, blueprint, chapters)
+    if not current or draft:
+        checked["model_review"] = (review.payload["model_review"] if current else
+            _review_family(task.pk, fence, attempt_id, task, input_revision, blueprint, chapters, family))
+        if current and draft and review.payload.get("diagram_review"):
+            from .product_pair import _report_generation_hash
+            diagram_review = review.payload["diagram_review"]
+            if (diagram_review.get("contract_sha256") == _diagram_contract_hash()
+                    and task.artifacts.filter(review=review,
+                        generation_hash=_report_generation_hash(task, family, input_revision, blueprint)).exists()):
+                checked["diagram_review"] = diagram_review
         checked["chapter_hashes"] = {chapter.payload["chapter_id"]: chapter.sha256 for chapter in chapters}
-        checked["passed"] = (not checked["issues"] and checked["model_review"]["status"] == "passed"
+        checked["passed"] = (not checked["issues"] and not checked.get("diagram_review") and checked["model_review"]["status"] == "passed"
                              and not checked["model_review"]["full_document_human_review_required"])
         if preview_pending:
             checked["draft_pending"] = list(blueprint.payload["missing"])
             checked["full_document_human_review_required"] = True
-        review = _store(task.pk, fence, "review", checked, input_revision.sha256, blueprint.sha256, family=family)
+        if draft and not checked["passed"]:
+            checked["full_document_human_review_required"] = True
+        if not current or checked != review.payload:
+            review = _store(task.pk, fence, "review", checked, input_revision.sha256, blueprint.sha256, family=family)
     model = review.payload.get("model_review", {})
-    if model.get("status") != "passed" or model.get("issues") or model.get("coverage", {}).get("all_batches_passed") is not True:
+    if not draft and (model.get("status") != "passed" or model.get("issues") or model.get("coverage", {}).get("all_batches_passed") is not True):
         raise ExecutionError("content_review_required")
     return review
 
@@ -1537,21 +1801,30 @@ def _diagram_contract_hash():
     return diagram_contract_hash()
 
 
-def _generate_diagrams(task_id, fence, attempt_id, document):
-    from .product_diagrams import DIAGRAM_INSTRUCTION, DIAGRAM_PROMPT_VERSION, diagram_batches, validate_diagram_batch
+def _generate_diagrams(task_id, fence, attempt_id, document, *, draft=False):
+    from .product_diagrams import DIAGRAM_INSTRUCTION, DIAGRAM_PROMPT_VERSION, diagram_batches, excerpt_diagrams, validate_diagram_batch
 
     diagrams = []
     for figures, paragraphs in diagram_batches(document):
         if not paragraphs:
             raise ExecutionError("diagram_generation_invalid")
+        evidence_ids = {f"B{index}": paragraph["id"] for index, paragraph in enumerate(paragraphs, 1)}
         def validate(payload):
             try:
-                return validate_diagram_batch(payload, figures, paragraphs)
+                if isinstance(payload, dict) and isinstance(payload.get("diagrams"), list):
+                    payload = deepcopy(payload)
+                    for item in payload["diagrams"]:
+                        if isinstance(item, dict) and isinstance(item.get("evidence_block_ids"), list):
+                            item["evidence_block_ids"] = [evidence_ids.get(ref, ref) if isinstance(ref, str) else ref
+                                                          for ref in item["evidence_block_ids"]]
+                return validate_diagram_batch(payload, figures, paragraphs, draft=draft)
             except ValueError as error:
-                raise ExecutionError("invalid_model_output", quality_issues=getattr(error, "quality_issues", None)) from error
+                raise ExecutionError("invalid_model_output", quality_issues=getattr(error, "quality_issues", None),
+                                     diagram_validation_reason=str(error)) from error
         request = {
             "action": "diagram", "family": document["family"], "prompt_version": DIAGRAM_PROMPT_VERSION,
-            "project_title": document["metadata"]["title"], "report_blocks": paragraphs,
+            "project_title": document["metadata"]["title"],
+            "report_blocks": [{**paragraph, "id": alias} for alias, paragraph in zip(evidence_ids, paragraphs)],
             "figures": [{"figure_id": figure["id"], "suggested_topic": figure["caption"]} for figure in figures],
             "instruction": DIAGRAM_INSTRUCTION,
             "schema": {"diagrams": [{"figure_id": "本批figure_id", "title": "本项目具体图标题", "description": "图中关系与待确认边界说明",
@@ -1563,7 +1836,20 @@ def _generate_diagrams(task_id, fence, attempt_id, document):
         except ExecutionError as error:
             if error.code != "invalid_model_output":
                 raise
-            raise ExecutionError("diagram_generation_invalid", quality_issues=error.quality_issues) from error
+            if (draft and error.diagram_validation_reason not in {
+                    "diagram evidence outside authored chapter", "diagram identifiers differ from planned figures"}
+                    and not any(issue["code"] == "body_source_identifier" for issue in error.quality_issues)):
+                with transaction.atomic():
+                    task = _guard(task_id, fence)
+                    excerpts = excerpt_diagrams(figures, paragraphs)
+                    task.checkpoint["calls"][-1]["diagram_excerpt_fallback"] = {
+                        "figure_ids": [item["figure_id"] for item in excerpts], "sha256": digest(excerpts),
+                        "full_document_human_review_required": True}
+                    task.save(update_fields=["checkpoint", "updated_at"])
+                diagrams.extend(excerpts)
+                continue
+            raise ExecutionError("diagram_generation_invalid", quality_issues=error.quality_issues,
+                                 diagram_validation_reason=error.diagram_validation_reason) from error
     return diagrams
 
 
@@ -1728,6 +2014,7 @@ def _execute_claim_action(task_id, fence, attempt_id):
             human_review_required = preview_pending
             sampled = False
             batched = False
+            reports = []
             for family in (value for value in families if value != "presentation"):
                 chapters = _generate_family(task_id, fence, attempt_id, task, input_revision, blueprint, family)
                 review = _ensure_content_review(task, fence, attempt_id, input_revision, blueprint, chapters, family)
@@ -1735,9 +2022,13 @@ def _execute_claim_action(task_id, fence, attempt_id):
                 sampled = sampled or checked["model_review"]["scope"] == "sampled"
                 batched = batched or checked["model_review"]["scope"] == "full_batched"
                 human_review_required = (human_review_required
+                                         or checked.get("full_document_human_review_required", False)
                                          or checked["model_review"]["full_document_human_review_required"])
-            _analysis_progress(task_id, fence, 'outputs', 'running', detail='正文已保存，正在制作可下载文件')
-            generate_report_drafts(task, fence, attempt_id, input_revision, blueprint)
+                _analysis_progress(task_id, fence, 'outputs', 'running', detail='正文已保存，正在制作可下载文件')
+                reports.extend(generate_report_drafts(task, fence, attempt_id, input_revision, blueprint,
+                                                     families=[family]))
+            human_review_required = human_review_required or any(
+                report.render_evidence.get("diagram_generation", {}).get("quality_issue_count", 0) for report in reports)
             if "presentation" in families:
                 generate_presentation_artifact(task, fence, attempt_id, input_revision, blueprint)
             labels = {"technical-solution": "技术方案", "feasibility": "可行性研究报告", "presentation": "汇报PPT"}
@@ -1767,7 +2058,8 @@ def _execute_claim_action(task_id, fence, attempt_id):
         if not ordered or any(chapter is None for chapter in ordered):
             raise ExecutionError("chapters_incomplete")
         if task.pending_action == "write":
-            checked = content_checks(input_revision.payload, blueprint.payload, ordered)
+            checked = content_checks(input_revision.payload, blueprint.payload, ordered,
+                                     items=_source_items(task, input_revision.payload))
             checked["model_review"] = _review_family(
                 task_id, fence, attempt_id, task, input_revision, blueprint, ordered
             )

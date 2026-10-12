@@ -160,6 +160,51 @@ class ProductReviewOutputRetryTests(PortalTestCase):
         self.assertFalse(review["coverage"]["all_batches_passed"])
         self.assertFalse(DocumentRevision.objects.filter(task=self.task, kind="review").exists())
 
+    def test_structured_findings_preserve_fields_cache_hashes_and_safe_type_diagnostics(self):
+        from portal.product_worker import _review_payload, _review_batch_payloads, _review_binding, _valid_cached_review_batch
+        task_id, fence, attempt_id = self.claimed()
+        finding = {"chapter_id": "chapter-1", "paragraph_index": 1, "issue": "数量用途未经材料证实。",
+                   "evidence": {"source": "r1", "claim": "正文中的数量用途"}, "correction": "核对原始依据。"}
+        response = {"passed": True, "issues": [finding, "实施时间尚未确认。"]}
+        normalized = {**response, "issues": [json.dumps(finding, ensure_ascii=False, sort_keys=True, separators=(",", ":")), response["issues"][1]]}
+        with patch("portal.product_worker.generate_for_use", return_value={"content": json.dumps(response, ensure_ascii=False)}) as model:
+            review = _review_family(task_id, fence, attempt_id, self.task, self.input_revision, self.blueprint, [self.chapter], "technical-solution")
+            self.assertEqual(model.call_count, 1)
+            self.assertIn("passed必须是JSON布尔值true或false", model.call_args.args[2][0]["content"])
+        self.assertEqual(review["status"], "issues_found")
+        self.assertEqual(review["issues"], normalized["issues"])
+        self.assertEqual(json.loads(review["issues"][0]), finding)
+        self.assertFalse(review["coverage"]["all_batches_passed"])
+        self.task.refresh_from_db()
+        call = self.task.checkpoint["calls"][-1]
+        batch = review["coverage"]["batches"][0]
+        self.assertEqual(call["response_sha256"], digest(normalized))
+        self.assertEqual(batch["response_sha256"], digest(normalized))
+        self.assertEqual(call["review_output_normalization"], {"object_issue_count": 1, "original_response_sha256": digest(response)})
+        payload, scope = _review_payload(self.task, self.input_revision, self.blueprint, [self.chapter], "technical-solution")
+        requests = [payload] if scope == "full" else _review_batch_payloads(payload, [self.chapter])
+        binding = _review_binding(self.task, self.input_revision, self.blueprint, [self.chapter], requests)
+        self.assertTrue(_valid_cached_review_batch(batch, 1, requests[0], binding, self.task.checkpoint["calls"]))
+        with patch("portal.product_worker.generate_for_use") as model:
+            repeated = _review_family(task_id, fence, attempt_id, self.task, self.input_revision, self.blueprint, [self.chapter], "technical-solution")
+            model.assert_not_called()
+        self.assertEqual(repeated["issues"], normalized["issues"])
+        for invalid in ({"passed": "false", "issues": [None, "秘密原文" * 501]},
+                        {"passed": False, "issues": [{"issue": "秘密原文" * 501}, {}]}):
+            with self.subTest(passed_type=type(invalid["passed"]).__name__), patch("portal.product_worker.generate_for_use", return_value={"content": json.dumps(invalid, ensure_ascii=False)}):
+                with self.assertRaises(ExecutionError):
+                    _model(task_id, fence, attempt_id, "product_review", {"action": "independent_review", "schema": {"passed": "boolean", "issues": ["string"]}}, retry_invalid_output=False)
+                self.task.refresh_from_db()
+                diagnostic = self.task.checkpoint["calls"][-1]["structure_failure"]
+                self.assertEqual(diagnostic["passed_type"], type(invalid["passed"]).__name__)
+                self.assertEqual(diagnostic["issues_type"], "list")
+                self.assertEqual(diagnostic["issue_count"], 2)
+                self.assertEqual(diagnostic["oversize_issue_count"], 1)
+                self.assertGreaterEqual(diagnostic["non_string_issue_count"], 1)
+                self.assertNotIn("秘密原文", json.dumps(self.task.checkpoint, ensure_ascii=False))
+        with self.assertRaises(ExecutionError):
+            _validated_reviewer(response)
+
     def test_compliance_observation_gets_one_correction_and_keeps_real_issue(self):
         task_id, fence, attempt_id = self.claimed()
         actual_issue = "前段合规，但后段数字无依据。"

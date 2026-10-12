@@ -10,7 +10,8 @@ import "./product-clean-layout.css";
 
 interface Submission { body: CreateTask; key: string; task: DocumentTask | null; remaining: File[]; equipment: File | null; start: boolean }
 export default function NewProductProject() {
-  const { data, error: loadError, reload } = useProductOverview();
+  const filePicker = useRef(false);
+  const { data, error: loadError, reload } = useProductOverview("", true, filePicker);
   const [title, setTitle] = useState("");
   const [requirements, setRequirements] = useState("");
   const [background, setBackground] = useState("");
@@ -30,6 +31,17 @@ export default function NewProductProject() {
   const input = useRef<HTMLInputElement>(null);
   useUnsavedWarning(!leaving && Boolean(title || requirements || background || conditions || files.length || equipment || pending));
   useEffect(() => () => request.current?.abort(), []);
+
+  function finishFileSelection() {
+    filePicker.current = false;
+    reload();
+  }
+
+  function registerFileInput(element: HTMLInputElement | null) {
+    if (!element) return;
+    element.addEventListener("cancel", finishFileSelection);
+    return () => element.removeEventListener("cancel", finishFileSelection);
+  }
 
   function addFiles(next: File[]) {
     if (pending || busy || !data) return;
@@ -117,10 +129,10 @@ export default function NewProductProject() {
         <div className="pd-form-columns"><Field id="new-project-background" label="项目背景"><textarea id="new-project-background" value={background} onChange={event => setBackground(event.target.value)} maxLength={10000} rows={3} placeholder="现状、使用场景或已有基础…"/></Field><Field id="new-project-conditions" label="约束条件" hint="每行一项，生成蓝图时保留这些条件。"><textarea id="new-project-conditions" value={conditions} onChange={event => setConditions(event.target.value)} maxLength={10000} rows={3} placeholder="例如：不改变现有设备数量"/></Field></div>
         </details>
         <div className="pd-panel-heading"><h3>乙方设备清单 <small>1 份</small></h3></div>
-        <Field id="equipment-source" label="设备清单文件" hint="用于读取设备名称、数量和单位。"><input id="equipment-source" type="file" accept={data.capabilities.upload_extensions.join(',')} onChange={event => { chooseEquipment(event.target.files?.[0] || null); event.target.value = ''; }}/></Field>
+        <Field id="equipment-source" label="设备清单文件" hint="用于读取设备名称、数量和单位。"><input ref={registerFileInput} id="equipment-source" type="file" accept={data.capabilities.upload_extensions.join(',')} onClick={() => { filePicker.current = true; }} onChange={event => { chooseEquipment(event.target.files?.[0] || null); event.target.value = ''; finishFileSelection(); }}/></Field>
         {equipment && <p className="pd-service-note">{equipment.name} · {formatBytes(equipment.size)} <button className="text-button" type="button" onClick={() => setEquipment(null)}>移除设备清单</button></p>}
         <div className="pd-panel-heading"><h3>项目背景材料 <small>支持多份</small></h3><span className="pd-muted">{files.length} 个待上传</span></div>
-        <div className="pd-dropzone" onDragOver={event => { event.preventDefault(); }} onDrop={event => { event.preventDefault(); addFiles(Array.from(event.dataTransfer.files)); }}><ProductIcon name="upload"/><strong>选择或拖拽项目背景材料</strong><span>支持 {data.capabilities.upload_extensions.join("、")} · 单个文件最多 {formatBytes(data.capabilities.upload_max_bytes)}</span><button className="button secondary" type="button" onClick={() => input.current?.click()}>选择项目资料</button><input ref={input} type="file" className="sr-only" aria-label="选择项目资料文件" multiple accept={data.capabilities.upload_extensions.join(",")} onChange={event => { addFiles(Array.from(event.target.files || [])); event.target.value = ""; }}/></div>
+        <div className="pd-dropzone" onDragOver={event => { event.preventDefault(); }} onDrop={event => { event.preventDefault(); addFiles(Array.from(event.dataTransfer.files)); }}><ProductIcon name="upload"/><strong>选择或拖拽项目背景材料</strong><span>支持 {data.capabilities.upload_extensions.join("、")} · 单个文件最多 {formatBytes(data.capabilities.upload_max_bytes)}</span><button className="button secondary" type="button" onClick={() => input.current?.click()}>选择项目资料</button><input ref={element => { input.current = element; return registerFileInput(element); }} type="file" className="sr-only" aria-label="选择项目资料文件" multiple accept={data.capabilities.upload_extensions.join(",")} onClick={() => { filePicker.current = true; }} onChange={event => { addFiles(Array.from(event.target.files || [])); event.target.value = ""; finishFileSelection(); }}/></div>
         {files.length > 0 && <ul className="pd-upload-list" aria-label="待上传项目资料">{files.map((file, index) => <li key={`${file.name}-${index}`}><ProductIcon name="file"/><div><strong>{file.name}</strong><small>{formatBytes(file.size)}</small></div><button type="button" className="text-button" aria-label={`移除 ${file.name}`} onClick={() => setFiles(values => values.filter((_, i) => i !== index))}>移除</button></li>)}</ul>}
       </fieldset>
       {busy && <section className="pd-upload-progress" role="status" aria-live="polite" aria-busy="true"><span className="pd-spinner"/><div><strong>{progress}</strong><progress className="pd-native-progress" max={uploadProgress.total || 1} value={uploadProgress.completed} aria-label="资料上传解析进度" aria-valuetext={`${uploadProgress.completed} / ${uploadProgress.total} 份资料已完成`}/><p>已完成 {uploadProgress.completed} / {uploadProgress.total} 份资料</p></div></section>}
@@ -129,4 +141,3 @@ export default function NewProductProject() {
     <aside className="pd-new-aside"><section className="pd-panel"><h3>本次交付</h3><ul><li><ProductIcon name="file"/>技术方案 · DOCX<small>正文 ≥ 50,000 字 · 图表 ≥ 15 张</small></li><li><ProductIcon name="file"/>可行性研究报告 · DOCX<small>正文 ≥ 70,000 字 · 图表 ≥ 20 张</small></li><li><ProductIcon name="layers"/>汇报演示文稿 · PPTX<small>基于两份报告编制，共用事实来源</small></li></ul><p className="pd-muted">创建后显示真实成果状态与版本。</p></section><section className="pd-panel pd-subtle"><h3>一起推进项目</h3><ol><li>解析背景与设备清单</li><li>检索知识并生成蓝图</li><li>本人确认蓝图</li><li>编制正文、图表与汇报文稿</li><li>下载三件套成果</li></ol></section>{!data.capabilities.retrieval && <section className="pd-service-note" role="note"><ProductIcon name="shield"/><p>知识库未启用；生成能否继续以后台实际状态为准。</p></section>}{!canGenerate && <section className="pd-service-note"><ProductIcon name="shield"/><p>生成授权未开通，资料仍可保存。</p></section>}</aside></div>
   </div>;
 }
-

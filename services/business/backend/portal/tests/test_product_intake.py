@@ -5,7 +5,7 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from django.core.files.uploadedfile import SimpleUploadedFile
-from django.test import Client, override_settings
+from django.test import Client, SimpleTestCase, override_settings
 from django.conf import settings
 
 from portal.product_models import DocumentSource, DocumentTask, DocumentRevision
@@ -15,6 +15,51 @@ from portal.product_intake import parser_environment, extraction_hash
 from portal.product_worker import model_input
 from .base import PortalTestCase, json_body
 from .intake_fixtures import docx, xlsx, pdf, package, CT
+
+
+class ProductSourceItemContextTests(SimpleTestCase):
+    def parsed_table(self):
+        from portal.source_parsers.core import Result, table_items
+        result = Result()
+        rows = [["序号", "设备名称", "型号及规格", "单位", "数量"],
+                ["", "（一）原煤仓配电室", "", "", ""], ["1", "高压开关柜", "KYN28A-12", "台", "15"],
+                ["", "（二）产品仓下配电室", "", "", ""], ["1", "高压开关柜", "KYN28A-12", "台", "2"]]
+        blocks = [result.add("\t".join(cells), {"sheet": "设备", "row": row}, "table_row", cells=cells)
+                  for row, cells in enumerate(rows, 1)]
+        table_items(result, blocks)
+        return {"blocks": blocks, "items": result.items}
+
+    def test_table_context_preserves_original_section_specification_and_serial(self):
+        parsed = self.parsed_table()
+        self.assertEqual([item["row_id"] for item in parsed["items"]], ["1", "1"])
+        self.assertEqual([item["source_section"] for item in parsed["items"]], ["原煤仓配电室", "产品仓下配电室"])
+        self.assertEqual([item["specification"] for item in parsed["items"]], ["KYN28A-12", "KYN28A-12"])
+        self.assertNotEqual(parsed["items"][0]["block_id"], parsed["items"][1]["block_id"])
+
+    def test_old_items_derive_context_only_from_identical_unedited_source_block(self):
+        from portal.product_source_service import enrich_item_context
+        parsed = self.parsed_table()
+        items = [{key: item[key] for key in ("row_id", "name", "quantity", "unit", "source_location")}
+                 | {"source_item_id": f"source:{item['block_id']}"} for item in parsed["items"]]
+        original_items, original_parsed = copy.deepcopy(items), copy.deepcopy(parsed)
+        result = enrich_item_context(items, {"source": parsed})
+        self.assertEqual(result[0]["source_section"], "原煤仓配电室")
+        self.assertEqual(result[1]["source_section"], "产品仓下配电室")
+        self.assertEqual(items, original_items)
+        self.assertEqual(parsed, original_parsed)
+        items[0]["quantity"] = "99"
+        items[1]["source_edited"] = True
+        self.assertTrue(all("source_section" not in item for item in enrich_item_context(items, {"source": parsed})))
+
+    def test_new_contribution_carries_context_without_changing_raw_facts(self):
+        from types import SimpleNamespace
+        from portal.product_source_service import add_contribution
+        parsed = self.parsed_table()
+        payload = {"items": [], "issues": [], "sources": [], "source_materials": [], "background": ""}
+        add_contribution(payload, SimpleNamespace(pk="source", purpose="equipment", warnings=[]), parsed)
+        self.assertEqual([item["quantity"] for item in payload["items"]], ["15", "2"])
+        self.assertEqual([item["source_section"] for item in payload["items"]], ["原煤仓配电室", "产品仓下配电室"])
+        self.assertEqual(payload["items"][1]["source_item_id"], "source:b5")
 
 
 class ProductIntakeTests(PortalTestCase):

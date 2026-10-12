@@ -23,7 +23,7 @@ export function productError(reason: unknown): string {
   return reason instanceof Error ? reason.message : "暂时无法读取数据，请稍后重试。";
 }
 
-export function useProductOverview(query = "", enabled = true) {
+export function useProductOverview(query = "", enabled = true, refreshPaused?: { current: boolean }) {
   const [refresh, setRefresh] = useState(0);
   const requestKey = useMemo(() => ({ query, enabled, refresh }), [query, enabled, refresh]);
   const [response, setResponse] = useState<{ key: typeof requestKey; data: ProductOverview | null; error: string } | null>(null);
@@ -38,11 +38,11 @@ export function useProductOverview(query = "", enabled = true) {
   }, [requestKey]);
   useEffect(() => {
     if (!enabled) return;
-    const check = () => { if (!document.hidden) setRefresh(value => value + 1); };
+    const check = () => { if (!document.hidden && !refreshPaused?.current) setRefresh(value => value + 1); };
     window.addEventListener("focus", check);
     document.addEventListener("visibilitychange", check);
     return () => { window.removeEventListener("focus", check); document.removeEventListener("visibilitychange", check); };
-  }, [enabled]);
+  }, [enabled, refreshPaused]);
   // A response belongs to one request, including permission enablement and refresh.
   // Hide it during render as soon as that request changes, before effects run.
   const current = enabled && response?.key === requestKey ? response : null;
@@ -59,4 +59,3 @@ export function useUnsavedWarning(dirty: boolean) {
     return () => { window.removeEventListener("beforeunload", leave); window.removeEventListener("portal:navigation-guard", guard); };
   }, [dirty]);
 }
-

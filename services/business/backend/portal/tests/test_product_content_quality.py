@@ -9,6 +9,7 @@ from portal.product_content_quality import (
     inspect_repeated_content,
     project_fact_text,
     unsupported_numeric_claims,
+    select_quantity_source_items,
 )
 
 
@@ -23,6 +24,59 @@ FACTS = {
 class ProductContentQualityTests(SimpleTestCase):
     def inspect(self, *paragraphs, facts=FACTS, references=None):
         return inspect_content_quality(paragraphs, project_facts=facts, source_context=references)
+
+    def test_same_name_quantity_binding_needs_unique_explicit_region_row_or_specification(self):
+        candidates = [
+            {"source_item_id": "s:b3", "name": "高压开关柜", "quantity": "15", "source_section": "原煤仓配电室",
+             "specification": "KYN28A-12", "source_location": {"row": 3}},
+            {"source_item_id": "s:b5", "name": "高压开关柜", "quantity": "2", "source_section": "产品仓下配电室",
+             "specification": "KYN28A-12", "source_location": {"row": 5}}]
+        self.assertEqual(select_quantity_source_items(candidates, "原煤仓配电室高压开关柜15台。"), candidates[:1])
+        self.assertEqual(select_quantity_source_items(candidates, "产品仓下高压开关柜2台。"), candidates[1:])
+        self.assertEqual(select_quantity_source_items(candidates, "原表第5行高压开关柜2台。"), candidates[1:])
+        for text in ("高压开关柜2台。", "KYN28A-12高压开关柜2台。", "原煤仓与产品仓下高压开关柜。",
+                     "原煤仓配电室原表第5行高压开关柜2台。", "原表第3行与第5行高压开关柜各自核对。"):
+            self.assertEqual(select_quantity_source_items(candidates, text), candidates)
+        variants = [{**item, "source_section": "同一区域", "specification": spec}
+                    for item, spec in zip(candidates, ("MNS型(660V)", "MNS型(380V)"))]
+        self.assertEqual(select_quantity_source_items(variants, "MNS型（380V）高压开关柜。"), variants[1:])
+        self.assertEqual(select_quantity_source_items(variants, "380V高压开关柜2台。"), variants)
+
+    def test_explicit_multiple_rows_keep_the_selected_objects_without_guessing_a_total(self):
+        candidates = [{"source_location": {"row": row}, "name": "电笛", "quantity": quantity}
+                      for row, quantity in ((277, "1"), (286, "1"), (222, "13"))]
+        self.assertEqual(select_quantity_source_items(candidates, "原表第277行和第286行电笛各1套。"), candidates[:2])
+        self.assertEqual(select_quantity_source_items(candidates, "电笛2套。"), candidates)
+
+    def test_document_target_counts_bind_local_migration_and_total_page_fields(self):
+        facts = "首批迁移文档为100份，合成测试文档总页数为1000页。"
+        actual = ("样本数量、抽取方法及覆盖范围均无既定数值，"
+                  "需由项目负责人结合首批迁移目标（100份文档）和实际存储结构共同确定；"
+                  "文档总页数目标为1000页。")
+        self.assertEqual(unsupported_numeric_claims([actual], project_facts=facts), [])
+        self.assertEqual(self.inspect(actual, facts=facts), [])
+        self.assertEqual([issue["parameter"] for issue in unsupported_numeric_claims(
+            [actual + "日志保留期为90天。"], project_facts=facts)], ["90"])
+        self.assertEqual(unsupported_numeric_claims([actual], project_facts=
+            "首批迁移文档为一百份，合成测试文档总页数为一千页。"), [])
+
+    def test_document_target_counts_do_not_authorize_other_uses_or_objects(self):
+        facts = "首批迁移文档为100份，合成测试文档总页数为1000页。目标并发访问为5人。"
+        for actual in ("第二批迁移目标（100份文档）。", "每部门首批迁移目标（100份文档）。",
+                       "抽样目标为100份文档。", "首批迁移目标（100份日志）。",
+                       "首批迁移文档为100份日志。", "首批迁移目标（100份文档及日志）。",
+                       "首批迁移目标（101份文档）。", "已完成首批迁移目标（100份文档）。",
+                       "首批迁移目标（100份文档）已全部完成。", "每次首批迁移目标（100份文档）。",
+                       "合同文档总页数目标为1000页。", "每部门文档总页数为1000页。",
+                       "现有文档总页数为1000页。", "文档总页数目标为1001页。",
+                       "文档总页数目标为1000页上限。", "使用5个并发目标进行压力测试。"):
+            with self.subTest(actual=actual):
+                self.assertTrue(unsupported_numeric_claims([actual], project_facts=facts))
+        actual = "首批迁移目标（100份文档）。"
+        for source in ("", "首批迁移文档为100份待确认。", "不得将首批迁移文档设为100份。"):
+            with self.subTest(source=source):
+                self.assertTrue(unsupported_numeric_claims([actual], project_facts=source))
+        self.assertTrue(unsupported_numeric_claims([actual], source_context=facts))
 
     def test_explanatory_verification_path_is_not_a_record_quota(self):
         actual = ("本章目标定义的可检验性还需补充一条约束验证路径：蓝图给出的三个建设方向——"
@@ -95,11 +149,12 @@ class ProductContentQualityTests(SimpleTestCase):
                 self.assertTrue(self.inspect(text, facts=actual))
 
     def test_hash_algorithm_identifiers_only_qualify_the_complete_lexical_token(self):
-        field = "校验算法（如MD5、SHA256）"
+        field = "校验算法（如MD5、SHA256、SHA-256）"
         self.assertEqual(self.inspect(field), [])
         self.assertEqual(unsupported_numeric_claims([field], project_facts=FACTS), [])
         for text, value in (("使用MD5核查数据，记录大小为5GB。", "5"),
                             ("使用SHA256核查数据，响应时间为256毫秒。", "256"),
+                            ("使用SHA-256核查数据，响应时间为256毫秒。", "256"),
                             ("MySHA256Client不能替代经核验的算法。", "256")):
             with self.subTest(text=text):
                 self.assertEqual([p["parameter"] for p in unsupported_numeric_claims([text], project_facts=FACTS)], [value])

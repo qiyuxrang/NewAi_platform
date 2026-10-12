@@ -225,9 +225,17 @@ class ProductDocumentTests(SimpleTestCase):
                      "evidence_block_ids": [block["id"]], "anchor_text": anchor}
                     for index, figure in enumerate(item for item in document["blocks"] if item["type"] == "figure")]
         diagrams = patch("portal.product_documents._diagram_sources",
-                         side_effect=lambda document, generator: _diagram_sources(document, generator or synthetic_diagrams))
+                         side_effect=lambda document, generator, **kwargs: _diagram_sources(document, generator or synthetic_diagrams, **kwargs))
         diagrams.start()
         self.addCleanup(diagrams.stop)
+
+    def test_word_headings_leave_numbering_to_template_without_changing_approved_title(self):
+        self.chapter.payload["title"] = "第八章 可行性研究报告：项目必要性与市场分析"
+        for family in ("technical-solution", "feasibility"):
+            document = content_document(self.task, self.input_revision, self.blueprint, [self.chapter], family, draft=True)
+            heading = next(block for block in document["blocks"] if block["type"] == "heading")
+            self.assertEqual(heading["text"], "可行性研究报告：项目必要性与市场分析")
+            self.assertEqual(self.chapter.payload["title"], "第八章 可行性研究报告：项目必要性与市场分析")
 
     def test_frozen_assets_have_exact_hashes(self):
         manifest = frozen_pack()

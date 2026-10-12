@@ -6,6 +6,30 @@ from .product_models import DocumentRevision
 from .product_service import ProductError, append_revision, invalidate_generation
 
 
+def enrich_item_context(items, parsed_sources):
+    """Derive context from original saved blocks; never replace item facts or IDs."""
+    from .source_parsers.core import Result, table_items
+    contexts = {}
+    for source_id, parsed in parsed_sources.items():
+        result = Result()
+        tables = {}
+        for block in parsed.get("blocks", []):
+            if "cells" in block:
+                location = block.get("location", {})
+                tables.setdefault((location.get("sheet"), location.get("table")), []).append(block)
+        for rows in tables.values():
+            table_items(result, rows)
+        contexts.update({f"{source_id}:{item['block_id']}": item for item in result.items})
+    enriched = []
+    for item in items:
+        original = contexts.get(item.get("source_item_id"))
+        context = ({key: original[key] for key in ("source_section", "specification") if key in original}
+                   if original and all(original.get(key) == item.get(key) for key in ("row_id", "name", "quantity", "unit"))
+                   and not item.get("source_edited") else {})
+        enriched.append({**item, **context})
+    return enriched
+
+
 def add_contribution(payload, source, parsed, *, replacing=False):
     source_id = str(source.pk)
     if replacing:
@@ -16,6 +40,7 @@ def add_contribution(payload, source, parsed, *, replacing=False):
         payload["issues"] = [item for item in payload.get("issues", []) if item.get("source_id") != source_id]
     payload.setdefault("items", []).extend({
         **{key: item[key] for key in ("row_id", "name", "quantity", "unit")},
+        **{key: item[key] for key in ("source_section", "specification") if key in item},
         "source_id": source_id, "source_row": item.get("source_row"),
         "source_item_id": f"{source_id}:{item.get('block_id', index)}", "source_location": item.get("source_location", {"row": item.get("source_row", 0)}),
     } for index, item in enumerate(parsed.get("items", []) if source.purpose != "background" else [], 1))

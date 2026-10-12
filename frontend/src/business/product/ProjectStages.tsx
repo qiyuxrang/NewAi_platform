@@ -25,6 +25,18 @@ const readTab = (): WorkspaceTab => {
 };
 const lines = (value: string) => value.split("\n").map(text => text.trim()).filter(Boolean);
 const outputTargetLabel = (target: number) => `至少 ${target.toLocaleString()} 字`;
+const savedCharacters = (chapters: DocumentTask['chapters']) => chapters.reduce((total, chapter) => total + chapter.payload.paragraphs.reduce((count, paragraph) => count + Array.from(paragraph.replace(/\s/g, '')).length, 0), 0);
+function currentSavedChapters(task: DocumentTask): DocumentTask['chapters'] {
+  const latest = new Map<string, DocumentTask['chapters'][number]>();
+  for (const chapter of task.chapters) {
+    if (chapter.blueprint_hash && task.blueprint?.sha256 && chapter.blueprint_hash !== task.blueprint.sha256) continue;
+    if (chapter.input_hash && task.blueprint?.input_hash && chapter.input_hash !== task.blueprint.input_hash) continue;
+    const key = `${chapter.family}:${chapter.payload.chapter_id}`;
+    const previous = latest.get(key);
+    if (!previous || (chapter.version ?? 0) > (previous.version ?? 0)) latest.set(key, chapter);
+  }
+  return [...latest.values()];
+}
 
 // Draft preview availability is independent from formal candidate evidence.
 // The candidate endpoint retains its own current-version and approval guards.
@@ -122,6 +134,7 @@ export default function ProjectStages(props: Props) {
     finally { setDownloading(''); }
   };
   const running = ["RUNNING", "QUEUED"].includes(task.state);
+  const savedChapters = currentSavedChapters(task);
   const phases = workflowPhases(task, outputs);
   const finishedPhases = phases.filter(phase => phase.status === 'completed').length;
   const settledPhases = phases.filter(phase => phase.status === 'completed' || phase.status === 'skipped').length;
@@ -152,6 +165,7 @@ export default function ProjectStages(props: Props) {
       <details className="pd-runtime-details"><summary>查看完整处理节点</summary><ol className="pd-progress-milestones" aria-label="完整处理链路">{milestones.map((phase, index) => <li key={phase.id} data-status={phase.status} aria-current={phase.status === 'running' || phase.status === 'waiting' ? 'step' : undefined}><span className="pd-milestone-dot" aria-hidden="true">{phase.status === 'completed' ? <ProductIcon name="check"/> : phase.status === 'skipped' ? '—' : phase.status === 'failed' || phase.status === 'blocked' ? '!' : index + 1}</span><strong>{phase.title}</strong><small>{phase.statusLabel || statusLabels[phase.status]}</small></li>)}</ol><ol>{phases.map(phase => <li key={phase.id}><strong>{phase.title}</strong><span>{phase.statusLabel || statusLabels[phase.status]}</span><p>{runtimeDetail(phase.detail)}</p></li>)}</ol></details>
     </section>
     {task.error_code && <div className="pd-feedback" role="alert"><strong>当前任务需要处理</strong><p>{task.error_code === "model_authorization_required" ? "尚未取得模型调用与资料外发授权。项目已保留，可以先完善资料与人工蓝图。" : task.error_code === "revision_requested" ? "蓝图已退回修改，请查看确认记录并修订。" : failureMessages[task.error_code] || (task.blueprint_approved ? "生成未完成，已保存项目资料和已完成章节。可从现有进度继续，不需要重新审批蓝图。" : "生成未完成，项目资料已保留，请核对提示后重试。")}</p>{!disabled("retry") && <button className="button secondary" disabled={busy} onClick={() => void onAction("retry/", {})}>从已保存进度重试</button>}</div>}
+    {!!savedChapters.length && <section className="pd-feedback" aria-label="正文保存情况"><strong>已保存正文：{savedChapters.length} 章 · {savedCharacters(savedChapters).toLocaleString()} 非空白字</strong><p>已保存正文可直接查看、复制；任务状态与成果文件状态仍按后台记录显示。</p><div className="pd-actions">{(['technical-solution', 'feasibility'] as const).filter(family => savedChapters.some(chapter => chapter.family === family)).map(family => <button key={family} type="button" className="button secondary" onClick={() => move(family)}>查看{outputNames[family]}正文</button>)}</div></section>}
     <div className="pd-project-tabs">
       <div className="pd-detail-tabs" role="tablist" aria-label="项目交付工作区" onKeyDown={event => { if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return; event.preventDefault(); const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>("button")); const current = buttons.indexOf(document.activeElement as HTMLButtonElement); const next = event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : (current + (event.key === "ArrowRight" ? 1 : -1) + buttons.length) % buttons.length; buttons[next]?.focus(); }}>{visibleTabs.map(item => <button key={item.id} id={`tab-${item.id}`} type="button" role="tab" aria-controls={`panel-${item.id}`} aria-selected={activeTab === item.id} data-state={activeTab === item.id ? "active" : "inactive"} tabIndex={activeTab === item.id ? 0 : -1} onClick={() => move(item.id)}>{item.name}{item.id === "sources" && <small>{task.sources.length}</small>}</button>)}</div>
       {activeTab === "blueprint" && <section id="panel-blueprint" role="tabpanel" aria-labelledby="tab-blueprint" className="pd-tab-panel">
@@ -189,6 +203,8 @@ function FilesHeading() { return <ProductIcon name="layers"/>; }
 
 function ArtifactWorkspace({ family, task, outputs, outputsError, disabled, onAction, move, onDownload, downloading }: { family: OutputFamily; task: DocumentTask; outputs: DraftOutput[]; outputsError: string; disabled: (action: string) => boolean; onAction: Action; move: (tab: WorkspaceTab) => void; onDownload: (path: string, filename: string) => Promise<void>; downloading: boolean }) {
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [copyStatus, setCopyStatus] = useState('');
+  const [copyFallback, setCopyFallback] = useState(false);
   const output = outputs.filter(item => item.family === family && item.current && !item.stale).at(-1);
   const artifact = output && task.artifacts.find(item => item.id === output.id);
   const preview = currentPreview(output, artifact);
@@ -197,16 +213,25 @@ function ArtifactWorkspace({ family, task, outputs, outputsError, disabled, onAc
   const targetLabel = target === undefined ? undefined : outputTargetLabel(target);
   const meetsMinimum = progress !== undefined && target !== undefined && progress.actual_characters >= target;
   const format = family === "presentation" ? "PowerPoint · PPTX" : "Word · DOCX";
-  const content = task.chapters.filter(chapter => chapter.family === family);
-  if (outputsError) return <div role="alert" className="pd-feedback">{outputsError}</div>;
+  const chapterOrder = new Map(task.blueprint?.payload.chapters.map((chapter, index) => [chapter.id, index]));
+  const content = currentSavedChapters(task).filter(chapter => chapter.family === family).sort((a, b) => (chapterOrder.get(a.payload.chapter_id) ?? Infinity) - (chapterOrder.get(b.payload.chapter_id) ?? Infinity));
+  const fullText = content.map(chapter => [chapter.payload.title, ...chapter.payload.paragraphs].join('\n\n')).join('\n\n');
+  const copyText = async () => {
+    try {
+      await navigator.clipboard.writeText(fullText);
+      setCopyStatus('已复制全部已保存正文。'); setCopyFallback(false);
+    } catch {
+      setCopyStatus('浏览器未允许自动复制，请在下方原文框中全选后按 Ctrl+C。'); setCopyFallback(true);
+    }
+  };
   return <section className="pd-artifact-workspace" aria-labelledby={`${family}-title`}>
-    <header className="pd-artifact-title"><div className="pd-artifact-head"><DocumentSymbol family={family}/><div><span className="pd-section-label">成果工作区</span><h3 id={`${family}-title`}>{outputNames[family]}</h3><small>{format}</small></div></div>{output ? <span className={`pd-badge ${output.approved ? "good" : "warning"}`}>{output.approved ? "已批准" : "草稿 · 未正式发布"}</span> : <span className="pd-badge neutral">尚未生成</span>}</header>
-    {output ? <>
+    <header className="pd-artifact-title"><div className="pd-artifact-head"><DocumentSymbol family={family}/><div><span className="pd-section-label">成果工作区</span><h3 id={`${family}-title`}>{outputNames[family]}</h3><small>{format}</small></div></div>{outputsError ? <span className="pd-badge warning">成果状态读取失败</span> : output ? <span className={`pd-badge ${output.approved ? "good" : "warning"}`}>{output.approved ? "已批准" : "草稿 · 未正式发布"}</span> : <span className="pd-badge neutral">尚未生成</span>}</header>
+    {outputsError ? <div role="alert" className="pd-feedback">{outputsError}</div> : output ? <>
       <dl className="pd-artifact-facts"><div><dt>当前版本</dt><dd>v{output.version}</dd></div><div><dt>审批状态</dt><dd>{output.approved ? "已批准" : "待业务确认"}</dd></div><div><dt>内容来源</dt><dd>{output.content_version ? `内容 v${output.content_version} · ${output.content_approved ? "已审" : "来源快照"}` : "结构化内容来源"}</dd></div>{targetLabel && <div><dt>篇幅结果</dt><dd>{progress ? `${progress.actual_characters.toLocaleString()} / ${targetLabel} · ${meetsMinimum ? "已达目标" : "未达当前最低要求，可续写或重试"}` : targetLabel}</dd></div>}</dl>
       <div className="pd-workbench-command"><div><span className="pd-section-label">可执行操作</span><h3>当前成果文件</h3></div><div className="pd-actions"><button className="button primary" disabled={downloading} onClick={() => void onDownload(family === "technical-solution" ? artifactDownload(output.id) : draftDownload(output.id), `${task.title}-${outputNames[family]}.${family === "presentation" ? "pptx" : "docx"}`)}><ProductIcon name="download"/>{downloading ? "正在下载…" : "下载文件"}</button>{preview ? <button type="button" className="button secondary" aria-expanded={previewOpen} onClick={() => setPreviewOpen(value => !value)}>{previewOpen ? '收起首页预览' : '预览第 1 页'}</button> : <span className="pd-muted">暂无 Office 预览证据</span>}<button className="button secondary" onClick={() => move("history")}>查看历史版本</button></div></div>
       {previewOpen && preview ? <BusinessImage key={`${output.id}-${output.sha256}`} src={preview} alt={`${outputNames[family]}第 1 页授权预览`}/> : null}
     </> : <div className="pd-artifact-empty"><h3>{task.blueprint_approved ? runningOutputMessage(task) : "蓝图尚未确认，成果生成保持锁定"}</h3><p>{task.blueprint_approved ? "生成完成后，当前版本将在此提供下载。" : "请先在蓝图审批中完成确认。"}</p><div className="pd-actions"><button className="button primary" onClick={() => move("blueprint")}>查看蓝图审批</button>{!disabled("retry") && <button className="button secondary" onClick={() => void onAction("retry/", {})}>重试生成</button>}</div></div>}
-    {!!content.length && <section className="wb-saved-content" aria-label={`${outputNames[family]}已保存正文`}><h3>已保存的正文内容</h3><p className="pd-muted">正文依据服务端已保存章节显示，最终排版以下载文件为准。</p>{content.map(chapter => <details key={chapter.id}><summary>{chapter.payload.title}</summary>{chapter.payload.paragraphs.map((paragraph, index) => <p key={index}>{paragraph}</p>)}<small>引用 {chapter.payload.source_ids.length} 项资料</small></details>)}</section>}
+    {!!content.length && <section className="wb-saved-content" aria-label={`${outputNames[family]}已保存正文`}><div className="pd-panel-heading"><h3>已保存的正文内容 · {content.length} 章 · {savedCharacters(content).toLocaleString()} 非空白字</h3><button type="button" className="button secondary" onClick={() => void copyText()}>复制全文</button></div><p className="pd-muted">按蓝图章节顺序显示已保存原文。正文保存不代表成果文件已生成或审批通过。</p>{copyStatus && <p role="status">{copyStatus}</p>}{copyFallback && <textarea aria-label={`${outputNames[family]}全文复制原文`} readOnly value={fullText} rows={12} onFocus={event => event.currentTarget.select()}/>} {content.map(chapter => <details key={chapter.id}><summary>{chapter.payload.title}</summary>{chapter.payload.paragraphs.map((paragraph, index) => <p key={index}>{paragraph}</p>)}<small>引用 {chapter.payload.source_ids.length} 项资料</small></details>)}</section>}
     <BlockerNotes task={task}/>
   </section>;
 }

@@ -5,8 +5,8 @@ from decimal import Decimal, InvalidOperation
 from collections.abc import Mapping
 
 from django.conf import settings
-from django.db import IntegrityError, transaction
-from django.db.models import Q
+from django.db import IntegrityError, connection, transaction
+from django.db.models import F, Q
 
 from .models import User
 from .security import can_use_department
@@ -282,6 +282,9 @@ def review_policy_version():
 
 
 def task_for(user, task_id, write=False, review=False):
+    if write and connection.vendor == "sqlite":
+        # SQLite ignores select_for_update; reserve its writer before authorization reads.
+        DocumentTask.objects.filter(pk=task_id).update(version=F("version"))
     if not product_user_allowed(user):
         raise ProductError("not_found", "对象不存在。", 404)
     queryset = DocumentTask.objects.select_related("owner", "reviewer")

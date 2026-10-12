@@ -263,13 +263,54 @@ def _validate_diagram_content(item: dict, evidence: dict) -> None:
         raise error
 
 
-def validate_diagram_batch(payload: dict, figures: list[dict], paragraphs: list[dict]) -> list[dict]:
+def excerpt_diagrams(figures: list[dict], paragraphs: list[dict]) -> list[dict]:
+    snippets = [(paragraph, match.group()) for paragraph in paragraphs
+                for match in re.finditer(r"[\u3400-\u9fff]{2,40}", paragraph["text"])]
+    if not snippets:
+        raise ValueError("diagram is missing its report evidence anchor")
+    diagrams = []
+    for index, figure in enumerate(figures):
+        paragraph, excerpt = snippets[index % len(snippets)]
+        identifier = hashlib.sha256(figure["id"].encode()).hexdigest()[:16]
+        diagrams.append({"figure_id": figure["id"], "title": "草稿摘录图，详细关系待人工确认",
+            "description": "仅呈现本章真实正文摘录，不表示完整关系设计；详细关系待人工确认。",
+            "source": f'flowchart TB\nEXCERPT_{identifier}["{excerpt}"]',
+            "evidence_block_ids": [paragraph["id"]], "anchor_text": excerpt})
+    return validate_diagram_batch({"diagrams": diagrams}, figures, paragraphs, draft=True)
+
+
+def _draft_diagram_source(source: str) -> str:
+    # These decorations cannot add nodes, relations or interactive behavior.
+    css = (r"(?:(?:fill|stroke|color):\s*#[0-9a-fA-F]{3,8}|"
+           r"stroke-dasharray:\s*\d+(?:\s+\d+)*|stroke-width:\s*\d+(?:\.\d+)?px)")
+    kept, classes = [], set()
+    for line in source.splitlines(keepends=True):
+        decoration = re.fullmatch(
+            rf"\s*(style|classDef)\s+([A-Za-z_]\w*)\s+{css}(?:\s*,\s*{css})*\s*;?\s*", line)
+        if decoration:
+            if decoration[1] == "classDef":
+                classes.add(decoration[2])
+        else:
+            kept.append(line)
+    source = "".join(kept)
+    if classes:
+        names = "|".join(re.escape(name) for name in sorted(classes))
+        # Quoted visible text is never a class attachment.
+        pieces = re.split(r'("(?:[^"\\]|\\.)*")', source)
+        for index in range(0, len(pieces), 2):
+            pieces[index] = re.sub(rf"(?<=[\]\)}}]):::(?:{names})(?!\w)", "", pieces[index])
+        source = "".join(pieces)
+    # Empty, attribute-free line breaks become plain text before the HTML guard.
+    return re.sub(r"<br\s*/?>", " ", source, flags=re.I)
+
+
+def validate_diagram_batch(payload: dict, figures: list[dict], paragraphs: list[dict], *, draft=False, quality_issues=None) -> list[dict]:
     if not isinstance(payload, dict) or set(payload) != {"diagrams"} or not isinstance(payload["diagrams"], list):
         raise ValueError("invalid diagram model output")
     expected = {figure["id"] for figure in figures}
     evidence = {block["id"]: block for block in paragraphs}
-    diagrams = payload["diagrams"]
-    seen, sources = set(), set()
+    diagrams = [dict(item) if isinstance(item, dict) else item for item in payload["diagrams"]]
+    seen, sources, findings = set(), set(), []
     for item in diagrams:
         if not isinstance(item, dict) or set(item) != {"figure_id", "title", "description", "source", "evidence_block_ids", "anchor_text"}:
             raise ValueError("invalid diagram schema")
@@ -283,20 +324,47 @@ def validate_diagram_batch(payload: dict, figures: list[dict], paragraphs: list[
         if (not isinstance(refs, list) or not refs or len(refs) > 30
                 or any(not isinstance(ref, str) or ref not in evidence for ref in refs)):
             raise ValueError("diagram evidence outside authored chapter")
+        if draft:
+            source = _draft_diagram_source(source)
+            item["source"] = source
         anchor = item["anchor_text"]
-        if len(anchor.strip()) < 2 or anchor not in source or not any(anchor in evidence[ref]["text"] for ref in refs):
+        supported_anchor = any(anchor in evidence[ref]["text"] for ref in refs)
+        if len(anchor.strip()) < 2 or (not draft and not supported_anchor):
             raise ValueError("diagram is missing its report evidence anchor")
+        if anchor not in source or not supported_anchor:
+            # Repair only metadata using an existing complete visible label.
+            # Drafts may also repair an inaccurate anchor, using the same literal evidence.
+            labels = [label for label in _diagram_visible_labels(source)
+                      if 2 <= len(label) <= 100 and label in source
+                      and any(label in evidence[ref]["text"] for ref in refs)]
+            if not labels:
+                raise ValueError("diagram is missing its report evidence anchor")
+            item["anchor_text"] = max(labels, key=len)
         if (not re.match(r"\s*(?:flowchart\s+(?:TB|TD|BT|RL|LR)|sequenceDiagram)\b", source)
                 or re.search(r"%%|https?://|javascript:|<|\b(?:click|style|classDef|linkStyle)\b", source, re.I)):
             raise ValueError("unsupported or unsafe Mermaid source")
         normalized = re.sub(r"\s+", "", source)
         if normalized in sources:
             raise ValueError("duplicate diagram source")
-        _validate_diagram_content(item, evidence)
+        if re.match(r"\s*flowchart TB\s+EXCERPT_[0-9a-f]{16}\[", source):
+            if not draft:
+                raise ValueError("diagram excerpt fallback requires draft review")
+            findings.append({"code": "diagram_excerpt_fallback", "figure_id": identifier, "field": "source",
+                "claim": "草稿摘录图，详细关系待人工确认",
+                "correction": "按引用正文人工确认详细关系；摘录卡不代表完整关系图或人工批准。"})
+        try:
+            _validate_diagram_content(item, evidence)
+        except ValueError as error:
+            issues = getattr(error, "quality_issues", [])
+            if not draft or not issues or any(issue["code"] == "body_source_identifier" for issue in issues):
+                raise
+            findings.extend(issues)
         seen.add(identifier)
         sources.add(normalized)
     if seen != expected:
         raise ValueError("diagram model output is incomplete")
+    if quality_issues is not None:
+        quality_issues.extend(findings)
     return diagrams
 
 

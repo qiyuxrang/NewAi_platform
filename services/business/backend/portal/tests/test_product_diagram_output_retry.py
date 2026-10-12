@@ -1,9 +1,12 @@
 import json
+from copy import deepcopy
 from unittest.mock import patch
 
 from django.test import override_settings
 
-from portal.product_worker import ExecutionError, _generate_diagrams
+from portal.product_worker import ExecutionError, _failure_diagnostic, _generate_diagrams
+from portal.product_diagrams import validate_diagram_batch
+from portal.product_service import digest
 from .base import PortalTestCase
 from . import test_product_review_output_retry as fixture
 
@@ -30,6 +33,187 @@ class ProductDiagramOutputRetryTests(PortalTestCase):
         return {"content": json.dumps({"diagrams": [item]}, ensure_ascii=False)}
 
     @patch("portal.product_worker.generate_for_use")
+    def test_draft_excerpt_after_two_rejections_keeps_real_refs_and_pending_evidence(self, model):
+        task_id, fence, attempt_id = self.claimed()
+        document = self.document()
+        invalid = json.loads(self.reply()["content"])
+        invalid["diagrams"][0]["source"] += '\nclick A1 "https://external.invalid"'
+        model.return_value = {"content": json.dumps(invalid, ensure_ascii=False)}
+        excerpts = _generate_diagrams(task_id, fence, attempt_id, document, draft=True)
+        self.assertEqual(model.call_count, 2)
+        self.assertEqual(len(excerpts), 1)
+        item = excerpts[0]
+        self.assertEqual(item["evidence_block_ids"], ["P1"])
+        self.assertIn(item["anchor_text"], document["blocks"][1]["text"])
+        self.assertIn(item["anchor_text"], item["source"])
+        self.assertNotIn("-->", item["source"])
+        self.assertNotIn("click", item["source"])
+        self.assertIn("详细关系待人工确认", item["title"])
+        warnings = []
+        self.assertEqual(validate_diagram_batch({"diagrams": excerpts}, [document["blocks"][-1]],
+            [document["blocks"][1]], draft=True, quality_issues=warnings), excerpts)
+        self.assertEqual(warnings[0]["code"], "diagram_excerpt_fallback")
+        with self.assertRaises(ValueError):
+            validate_diagram_batch({"diagrams": excerpts}, [document["blocks"][-1]], [document["blocks"][1]])
+        from portal.product_documents import _diagram_sources
+        document["pending"] = []
+        with patch("portal.product_documents.validate_document_requirements"), \
+                patch("portal.product_documents.apply_diagram_descriptions"):
+            retained = []
+            _diagram_sources(document, lambda _: excerpts, draft=True, quality_issues=retained)
+        self.assertEqual(retained, warnings)
+        self.assertIn("尚未人工批准", document["pending"][-1]["text"])
+        self.task.refresh_from_db()
+        calls = self.task.checkpoint["calls"]
+        self.assertTrue(all(call.get("parse_error") == "invalid_model_output" for call in calls[-2:]))
+        self.assertTrue(all("response_validated" not in call for call in calls[-2:]))
+        self.assertEqual(calls[-1]["diagram_excerpt_fallback"]["sha256"], digest(excerpts))
+        with self.assertRaises(ExecutionError) as formal:
+            _generate_diagrams(task_id, fence, attempt_id, document)
+        self.assertEqual(formal.exception.code, "diagram_generation_invalid")
+        self.assertEqual(model.call_count, 4)
+        unknown = json.loads(self.reply()["content"])
+        unknown["diagrams"][0]["evidence_block_ids"] = ["OTHER_PROJECT_BLOCK"]
+        model.return_value = {"content": json.dumps(unknown, ensure_ascii=False)}
+        with self.assertRaises(ExecutionError):
+            _generate_diagrams(task_id, fence, attempt_id, document, draft=True)
+        self.assertEqual(model.call_count, 6)
+        def revoke(*args):
+            self.owner.roles.clear()
+            return {"content": json.dumps(invalid, ensure_ascii=False)}
+        model.side_effect = revoke
+        with self.assertRaises(ExecutionError) as permission:
+            _generate_diagrams(task_id, fence, attempt_id, document, draft=True)
+        self.assertEqual(permission.exception.code, "permission_changed")
+        self.assertEqual(model.call_count, 7)
+
+    @patch("portal.product_worker.generate_for_use")
+    def test_draft_semantic_findings_are_retained_and_only_benign_style_is_removed(self, model):
+        from portal.product_documents import _diagram_sources
+        document = self.document()
+        figures, paragraphs = [document["blocks"][-1]], [document["blocks"][1]]
+        payload = json.loads(self.reply()["content"])
+        payload["diagrams"][0]["title"] = "项目投资预算10万元"
+        original_source = payload["diagrams"][0]["source"]
+        payload["diagrams"][0]["source"] += "\nstyle B2 stroke-dasharray: 5 5"
+        with self.assertRaises(ValueError):
+            validate_diagram_batch(payload, figures, paragraphs)
+        findings = []
+        normalized = validate_diagram_batch(payload, figures, paragraphs, draft=True, quality_issues=findings)
+        self.assertTrue(findings)
+        self.assertEqual(normalized[0]["source"], original_source + "\n")
+        self.assertEqual(normalized[0]["title"], payload["diagrams"][0]["title"])
+        document["pending"] = []
+        downstream = []
+        with patch("portal.product_documents.validate_document_requirements"), \
+                patch("portal.product_documents.apply_diagram_descriptions"):
+            self.assertEqual(_diagram_sources(document, lambda _: normalized, draft=True, quality_issues=downstream), normalized)
+        self.assertEqual(downstream, findings)
+        self.assertIn("尚未人工批准", document["pending"][-1]["text"])
+        self.assertNotIn("diagram_quality_issues", document)
+        for source in (original_source + "\nclick B2 \"https://external.invalid\"",
+                       original_source + "\nstyle B2 fill:url(javascript:evil)",
+                       original_source + "\nclassDef pending opacity:0.5", original_source + "\n%%{init: {}}%%"):
+            candidate = deepcopy(payload)
+            candidate["diagrams"][0]["source"] = source
+            rejected = []
+            with self.subTest(source=source), self.assertRaises(ValueError):
+                validate_diagram_batch(candidate, figures, paragraphs, draft=True, quality_issues=rejected)
+            self.assertEqual(rejected, [])
+        candidate = deepcopy(payload)
+        candidate["diagrams"].append({**candidate["diagrams"][0], "figure_id": "FOREIGN_FIGURE"})
+        rejected = []
+        with self.assertRaises(ValueError):
+            validate_diagram_batch(candidate, figures, paragraphs, draft=True, quality_issues=rejected)
+        self.assertEqual(rejected, [])
+        candidate = deepcopy(payload)
+        candidate["diagrams"][0]["title"] = "DIAGRAM_01_FIGURE"
+        with self.assertRaises(ValueError):
+            validate_diagram_batch(candidate, figures, paragraphs, draft=True)
+        task_id, fence, attempt_id = self.claimed()
+        model.return_value = {"content": json.dumps(payload, ensure_ascii=False)}
+        self.assertEqual(_generate_diagrams(task_id, fence, attempt_id, document, draft=True), normalized)
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.checkpoint["calls"][-1]["response_sha256"], digest(normalized))
+
+    @patch("portal.product_worker.generate_for_use")
+    def test_draft_plain_linebreak_and_benign_class_keep_visible_text_and_relations(self, model):
+        import re
+        from portal.product_diagrams import _diagram_visible_labels
+        document = self.document()
+        figures, paragraphs = [document["blocks"][-1]], [document["blocks"][1]]
+        payload = json.loads(self.reply()["content"])
+        payload["diagrams"][0]["source"] = (
+            'flowchart LR\nA1["权限控制<BR/>待确认"]:::pending --> B2["审计流程"]\n'
+            'classDef pending fill:#fff,stroke:#333,stroke-width:2px\n')
+        original = deepcopy(payload)
+        with self.assertRaises(ValueError):
+            validate_diagram_batch(payload, figures, paragraphs)
+        diagrams = validate_diagram_batch(payload, figures, paragraphs, draft=True)
+        source = diagrams[0]["source"]
+        self.assertEqual(source, 'flowchart LR\nA1["权限控制 待确认"] --> B2["审计流程"]\n')
+        self.assertEqual(payload, original)
+        self.assertEqual(diagrams[0], {**payload["diagrams"][0], "source": source})
+        self.assertEqual(_diagram_visible_labels(source),
+            _diagram_visible_labels(re.sub(r"<br\s*/?>", " ", payload["diagrams"][0]["source"], flags=re.I)))
+        for unsafe in ('<br onclick="evil">', '<img src="https://external.invalid">', '<script>evil</script>',
+                       '<br style="color:red">', 'classDef pending fill:url(javascript:evil)',
+                       'classDef pending opacity:0.5', 'linkStyle 0 stroke:#fff', 'click A1 "https://external.invalid"'):
+            candidate = deepcopy(original)
+            candidate["diagrams"][0]["source"] += "\n" + unsafe
+            with self.subTest(unsafe=unsafe), self.assertRaises(ValueError):
+                validate_diagram_batch(candidate, figures, paragraphs, draft=True)
+        task_id, fence, attempt_id = self.claimed()
+        model.return_value = {"content": json.dumps(original, ensure_ascii=False)}
+        self.assertEqual(_generate_diagrams(task_id, fence, attempt_id, document, draft=True), diagrams)
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.checkpoint["calls"][-1]["response_sha256"], digest(diagrams))
+
+    @patch("portal.product_worker.generate_for_use")
+    def test_literal_report_anchor_normalizes_only_to_complete_visible_evidence(self, model):
+        document = self.document()
+        figures, paragraphs = [document["blocks"][-1]], [document["blocks"][1]]
+        payload = json.loads(self.reply()["content"])
+        payload["diagrams"][0]["anchor_text"] = "数据采集方案支持权限控制和审计"
+        original = deepcopy(payload)
+        normalized = validate_diagram_batch(payload, figures, paragraphs)
+        self.assertEqual(normalized[0]["anchor_text"], "权限控制")
+        self.assertEqual(payload, original)
+        self.assertEqual(normalized[0], {**original["diagrams"][0], "anchor_text": "权限控制"})
+        self.assertEqual(validate_diagram_batch({"diagrams": normalized}, figures, paragraphs), normalized)
+        inaccurate = deepcopy(original)
+        inaccurate["diagrams"][0]["anchor_text"] = "未准确引用的锚点元数据"
+        with self.assertRaises(ValueError):
+            validate_diagram_batch(inaccurate, figures, paragraphs)
+        self.assertEqual(validate_diagram_batch(inaccurate, figures, paragraphs, draft=True), normalized)
+        for changes in (
+            {"anchor_text": "虚构正文锚点"},
+            {"evidence_block_ids": ["OTHER_PROJECT_BLOCK"]},
+            {"source": 'flowchart LR\nA["权限控制扩展"] --> B["正文未提供的标签"]'},
+            {"source": 'flowchart LR\nAUTH_GATEWAY --> B["正文未提供的标签"]'},
+            {"source": 'flowchart LR\nA["权限控制"]\nclick A "https://external.invalid"'},
+            {"title": "项目投资预算10万元"},
+        ):
+            candidate = deepcopy(original)
+            candidate["diagrams"][0].update(changes)
+            # A hidden identifier is literal report text, never a visible label.
+            evidence = [{**paragraphs[0], "text": paragraphs[0]["text"] + "内部引用AUTH_GATEWAY。"}]
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                validate_diagram_batch(candidate, figures, evidence)
+            if not {"anchor_text", "title"} & changes.keys():
+                with self.subTest(draft_changes=changes), self.assertRaises(ValueError):
+                    validate_diagram_batch(candidate, figures, evidence, draft=True, quality_issues=[])
+        task_id, fence, attempt_id = self.claimed()
+        model.return_value = {"content": json.dumps(original, ensure_ascii=False)}
+        self.assertEqual(_generate_diagrams(task_id, fence, attempt_id, document), normalized)
+        self.assertEqual(model.call_count, 1)
+        self.task.refresh_from_db()
+        call = self.task.checkpoint["calls"][-1]
+        self.assertTrue(call["response_validated"])
+        self.assertEqual(call["response_sha256"], digest(normalized))
+        self.assertNotEqual(call["response_sha256"], digest(original["diagrams"]))
+
+    @patch("portal.product_worker.generate_for_use")
     def test_invalid_diagram_has_one_correction_and_returns_only_validated_items(self, model):
         task_id, fence, attempt_id = self.claimed()
         model.side_effect = [self.reply(valid=False), self.reply()]
@@ -39,6 +223,17 @@ class ProductDiagramOutputRetryTests(PortalTestCase):
         self.assertEqual(model.call_count, 2)
         correction = json.loads(model.call_args_list[1].args[2][1]["content"])
         self.assertIn("diagram_validation_correction", correction)
+        reason = "diagram is missing its report evidence anchor"
+        self.assertIn(reason, correction["diagram_validation_correction"])
+        self.assertIn("可见节点标签或消息", correction["diagram_validation_correction"])
+        primary = model.call_args_list[0].args[2][0]["content"]
+        self.assertIn("六个字段", primary)
+        self.assertIn("anchor_text为2至100字符", primary)
+        self.assertIn("所引用原文及source", primary)
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.checkpoint["calls"][-2]["diagram_validation_reason"], reason)
+        self.assertNotIn("diagram_validation_reason", self.task.checkpoint["calls"][-1])
+        self.assertTrue(self.task.checkpoint["calls"][-1]["response_validated"])
         self.assertEqual(self.task.attempts.get(pk=attempt_id).model_calls, 2)
         self.assertFalse(self.task.artifacts.exists())
 
@@ -49,6 +244,10 @@ class ProductDiagramOutputRetryTests(PortalTestCase):
         with self.assertRaises(ExecutionError) as error:
             _generate_diagrams(task_id, fence, attempt_id, self.document())
         self.assertEqual(error.exception.code, "diagram_generation_invalid")
+        self.assertEqual(_failure_diagnostic(error.exception)["diagram_validation_reason"],
+                         "diagram is missing its report evidence anchor")
+        unknown = ExecutionError("diagram_generation_invalid", diagram_validation_reason="private provider text")
+        self.assertNotIn("diagram_validation_reason", _failure_diagnostic(unknown))
         self.assertEqual(model.call_count, 2)
         self.assertFalse(self.task.artifacts.exists())
 

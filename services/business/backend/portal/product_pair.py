@@ -126,7 +126,11 @@ def report_current(task, report):
     if any(chapter is None for chapter in ordered) or not _content_review_current(task, artifact.review, current_input, blueprint, ordered):
         return False
     model = artifact.review.payload.get("model_review", {})
-    if model.get("status") != "passed" or model.get("issues") or model.get("coverage", {}).get("all_batches_passed") is not True:
+    pending_draft = (artifact.render_evidence.get("kind") == "draft"
+                     and artifact.render_evidence.get("content_review") == "human_review_required"
+                     and artifact.review.payload.get("full_document_human_review_required") is True
+                     and artifact.review.payload.get("passed") is False)
+    if not pending_draft and (model.get("status") != "passed" or model.get("issues") or model.get("coverage", {}).get("all_batches_passed") is not True):
         return False
     expected = _report_generation_hash(task, report.family, current_input, blueprint)
     return bool(expected and artifact and artifact.generation_hash == expected)

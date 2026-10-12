@@ -73,7 +73,7 @@ def frozen_pack(family="technical-solution"):
         raise DocumentError("template_unavailable") from None
 
 
-def content_document(task, input_revision, blueprint, chapters, family="technical-solution"):
+def content_document(task, input_revision, blueprint, chapters, family="technical-solution", *, draft=False, review_issues=()):
     if family not in {"technical-solution", "feasibility"}:
         raise DocumentError("template_unavailable")
     if blueprint.payload.get("template_version") != "frozen-original-v1":
@@ -93,16 +93,18 @@ def content_document(task, input_revision, blueprint, chapters, family="technica
     requirement_ids = [item["id"] for item in requirements]
     blocks = []
     chapter_count = len(chapters)
-    omitted_financial_claims = False
+    financial_claims_found = False
     for chapter_index, chapter in enumerate(chapters):
         payload = chapter.payload
         stable = "C" + hashlib.sha256(payload["chapter_id"].encode()).hexdigest()[:24]
         cited = [mapped for original in payload["source_ids"] for mapped in source_map.get(original, [])] or ["SINPUT"]
-        blocks.append({"id": stable, "type": "heading", "level": 1, "text": payload["title"], "source_ids": cited, "requirement_ids": requirement_ids})
+        heading_title = re.sub(r"^第[一二三四五六七八九十0-9]+[章节]\s*", "", payload["title"])
+        blocks.append({"id": stable, "type": "heading", "level": 1, "text": heading_title, "source_ids": cited, "requirement_ids": requirement_ids})
         for index, paragraph in enumerate(payload["paragraphs"], start=1):
             if family == "feasibility" and unsupported_financial_conclusion(paragraph):
-                omitted_financial_claims = True
-                continue
+                financial_claims_found = True
+                if not draft:
+                    continue
             subsection = SUBSECTION_TITLES[family][(index - 1) % len(SUBSECTION_TITLES[family])]
             blocks.append({"id": f"{stable}S{index}", "type": "heading", "level": 2, "text": subsection,
                            "source_ids": cited, "requirement_ids": requirement_ids})
@@ -130,12 +132,23 @@ def content_document(task, input_revision, blueprint, chapters, family="technica
     pending = []
     if family == "feasibility":
         pending.append("未提供经核实的成本与收益依据，不形成经济成本、收益或回报结论。")
-        if omitted_financial_claims:
-            pending.append("可研正文包含未经核实的投资或回报数值结论，已拒绝纳入交付；请补充并确认对应依据。")
+        if financial_claims_found:
+            pending.append("可研正文中的投资或回报数值仍需核对依据，尚未人工批准。" if draft else
+                           "可研正文包含未经核实的投资或回报数值结论，已拒绝纳入交付；请补充并确认对应依据。")
     pending.extend(blueprint.payload.get("missing", []))
     pending.extend(blueprint.payload.get("conflicts", []))
     if facts.get("issues"):
         pending.append("输入资料存在缺项或冲突，请在平台逐项复核，不得按无问题发布。")
+    if draft:
+        positions = {chapter.payload["chapter_id"]: index for index, chapter in enumerate(chapters, start=1)}
+        for issue in review_issues:
+            if issue.get("code") == "quantity_source_ambiguous":
+                chapter = positions.get(issue.get("chapter_id"))
+                paragraph = issue.get("paragraph_index")
+                pending.append(f"正文第{chapter}章第{paragraph + 1}段“{issue.get('claim', '')}”的数量来源无法唯一归属，"
+                               "数值未经确认；不得用于选型、采购、投资或正式发布结论。"
+                               if chapter is not None and type(paragraph) is int else
+                               "正文存在数量来源无法唯一归属的问题，数值未经确认；不得用于选型、采购、投资或正式发布结论。")
     if pending:
         blocks.append({"id": "PENDING_HEADING", "type": "heading", "level": 1, "text": "待确认事项", "source_ids": ["SINPUT"], "requirement_ids": []})
         for index, value in enumerate(pending, start=1):
@@ -398,24 +411,32 @@ def _normalize_word_layout(target, document):
         raise DocumentError("document_validation_failed") from None
 
 
-def _diagram_sources(document, generator):
+def _diagram_sources(document, generator, *, draft=False, quality_issues=None):
     if generator is None:
         raise DocumentError("diagram_generation_required")
     try:
         diagrams = generator(document)
-        validate_diagram_batch({"diagrams": diagrams},
+        findings = []
+        diagrams = validate_diagram_batch({"diagrams": diagrams},
                                [block for block in document["blocks"] if block["type"] == "figure"],
                                [block for block in document["blocks"] if block["type"] == "paragraph"
-                                and not block["id"].startswith("DIAGRAM_")])
+                                and not block["id"].startswith("DIAGRAM_")], draft=draft, quality_issues=findings)
         apply_diagram_descriptions(document, diagrams)
         validate_document_requirements(document)
+        if findings:
+            notice = f"图表正文依据复核发现{len(findings)}项待审问题，图示为草稿，尚未人工批准。"
+            document["pending"].append({"id": "DIAGRAM_REVIEW", "text": notice})
+            document["blocks"].append({"id": "DIAGRAM_REVIEW_NOTICE", "type": "paragraph", "text": notice,
+                                       "source_ids": ["SINPUT"], "requirement_ids": []})
+            if quality_issues is not None:
+                quality_issues.extend(findings)
         return diagrams
     except (ValueError, KeyError, TypeError):
         raise DocumentError("diagram_generation_invalid") from None
 
 
 def _render_document(task, chapters, manifest, runtime, document, filename, status, business_approval, extra_evidence=None,
-                     *, diagram_generator=None, diagram_progress=None):
+                     *, draft=False, diagram_generator=None, diagram_progress=None):
     root = private_root().resolve()
     directory = (root / str(task.pk) / "artifacts" / uuid.uuid4().hex).resolve()
     if not directory.is_relative_to(root):
@@ -428,7 +449,8 @@ def _render_document(task, chapters, manifest, runtime, document, filename, stat
         if diagram_progress:
             diagram_progress("running", figure_count=structural["figure_count"])
         try:
-            sources = _diagram_sources(document, diagram_generator)
+            diagram_issues = []
+            sources = _diagram_sources(document, diagram_generator, draft=draft, quality_issues=diagram_issues)
             content_path.write_text(json.dumps(document, ensure_ascii=False, allow_nan=False), encoding="utf-8")
             # Source is confined to owned private temporary input, even on renderer failure.
             with tempfile.TemporaryDirectory(prefix="mermaid-", dir=directory) as temporary:
@@ -461,6 +483,10 @@ def _render_document(task, chapters, manifest, runtime, document, filename, stat
                                 "figures": [{"id": item["figure_id"], "source_sha256": rendered[item["figure_id"]]["sourceSha256"],
                                              "image_sha256": rendered[item["figure_id"]]["imageSha256"],
                                              "evidence_block_ids": item["evidence_block_ids"]} for item in sources]}
+            if diagram_issues:
+                from .product_worker import _bounded_quality_issues
+                diagram_evidence.update(quality_issues=_bounded_quality_issues(diagram_issues),
+                                        quality_issue_count=len(diagram_issues), full_document_human_review_required=True)
             if diagram_progress:
                 diagram_progress("completed", figure_count=structural["figure_count"])
         except Exception:
@@ -492,19 +518,19 @@ def _render_document(task, chapters, manifest, runtime, document, filename, stat
             "template_hash": template["sha256"], "render_evidence": evidence}
 
 
-def render_report_draft(task, input_revision, blueprint, chapters, family, *, document=None, diagram_generator=None, diagram_progress=None):
+def render_report_draft(task, input_revision, blueprint, chapters, family, *, draft=False, document=None, diagram_generator=None, diagram_progress=None):
     from .product_blueprint_knowledge import blueprint_knowledge_status
     paragraphs = [paragraph for chapter in chapters for paragraph in chapter.payload.get("paragraphs", [])]
     if has_repeated_filler(paragraphs):
         raise DocumentError("repeated_body_filler")
-    if family == "feasibility" and any(unsupported_financial_conclusion(paragraph) for paragraph in paragraphs):
+    if not draft and family == "feasibility" and any(unsupported_financial_conclusion(paragraph) for paragraph in paragraphs):
         raise DocumentError("investment_evidence_required")
     manifest = frozen_pack(family)
     runtime = _document_runtime()
-    document = document if document is not None else content_document(task, input_revision, blueprint, chapters, family)
+    document = document if document is not None else content_document(task, input_revision, blueprint, chapters, family, draft=draft)
     return _render_document(task, chapters, manifest, runtime, document, "draft.docx", "draft_unverified", "blocked",
                             {"knowledge": blueprint_knowledge_status(input_revision.payload)},
-                            diagram_generator=diagram_generator, diagram_progress=diagram_progress)
+                            draft=draft, diagram_generator=diagram_generator, diagram_progress=diagram_progress)
 
 
 def render_draft(task, input_revision, blueprint, chapters, **diagram_options):

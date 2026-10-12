@@ -115,6 +115,8 @@ ALIASES = {"row_id": {"序号", "顺序", "行号", "编号", "row_id"}, "name":
 def table_items(result, rows):
     """Promote only explicit equipment table headers; never infer OCR columns."""
     columns = None
+    section = ""
+    specification_column = None
     seen = set()
     for block in rows:
         cells = block["cells"]
@@ -126,6 +128,8 @@ def table_items(result, rows):
                 columns = None
             else:
                 columns = {key: indexes[0] if indexes else None for key, indexes in headers.items()}
+                specification_column = next((index for index, value in enumerate(values)
+                    if re.sub(r"\s", "", value) in {"产品目录中的型号及规格", "型号及规格", "型号规格", "规格型号", "规格", "型号"}), None)
             continue
         if columns is None: continue
         if values and values[0] in {"合计", "总计", "小计", "说明", "备注"}:
@@ -139,10 +143,15 @@ def table_items(result, rows):
         item = {key: cell(key) for key in ALIASES}
         if (item['name'] and not any(item[key] for key in ('row_id', 'quantity', 'unit'))
                 and re.match(r'^(?:[（(][一二三四五六七八九十百0-9]+[）)]|[一二三四五六七八九十百]+[、.．])', item['name'])):
+            section = re.sub(r'^(?:[（(][一二三四五六七八九十百0-9]+[）)]|[一二三四五六七八九十百]+[、.．])\s*', '', item['name'])
             seen.clear()
             continue
         item.update(source_row=block["location"].get("row", 0), source_location=block["location"], block_id=block["id"])
         if not any(item[key] for key in ALIASES): continue
+        if section:
+            item["source_section"] = section
+        if specification_column is not None and specification_column < len(values) and values[specification_column]:
+            item["specification"] = values[specification_column]
         for key in ("name", "quantity", "unit"):
             if not item[key]: result.warn("missing_" + key, {"name": "设备名称缺失", "quantity": "设备数量缺失或需核对公式", "unit": "设备单位缺失"}[key], block["location"])
         if item["row_id"] and item["row_id"] in seen: result.warn("duplicate_row_id", "本表原始行号重复，已保留并使用独立来源标识。", block["location"])

@@ -24,6 +24,10 @@ _UNITS = (
     "TB|GB|MB|KB|TiB|GiB|MiB|KiB|Mbps|Gbps|QPS|TPS|%|％"
 )
 _QUANTITY = re.compile(rf"(?P<number>{_NUM})\s*(?:个\s*)?(?P<unit>{_UNITS})(?![A-Za-z])", re.I)
+_DOCUMENT_COUNT = re.compile(
+    rf"(?:(?P<batch>首批|第{_NUM}批)?迁移(?P<migration>文档(?:数量)?|目标)|"
+    r"(?P<pages>文档总页数))\s*(?:目标|设定)?\s*(?:为|是|共|[:：])?\s*[（(]?\s*"
+    rf"(?P<number>{_NUM})\s*(?P<unit>份|页)(?P<document>\s*文档)?(?![\u3400-\u9fffA-Za-z0-9_-])")
 _CADENCE = re.compile(r"每(?:个)?(?P<unit>工作日|毫秒|秒|分钟|小时|天|日|周|星期|月|季度|年)")
 _GRANULARITY = re.compile(r"(?P<unit>毫秒|秒|分钟|小时|天)级")
 _PERCENT = re.compile(rf"百分之(?P<number>{_NUM})")
@@ -193,7 +197,7 @@ _REFERENCE_IDENTIFIERS = re.compile(
 # Fixed protocol/metric names carry lexical digits, not project scalar values.
 # Their complete local spans do not authorise the same numeral elsewhere.
 _LEXICAL_NUMERIC_IDENTIFIERS = re.compile(
-    r"(?<![A-Za-z0-9_])(?:OAuth2(?:\.0)?|P(?:95|99)|UTF-8|MD5|SHA256)(?![A-Za-z0-9_])", re.I)
+    r"(?<![A-Za-z0-9_])(?:OAuth2(?:\.0)?|P(?:95|99)|UTF-8|MD5|SHA-?256)(?![A-Za-z0-9_])", re.I)
 _CONCEPT_SENTENCES = re.compile(r"[^。！？!?；;\n]+")
 _LOW_CARDINALITY_SMALL_FILE_CAUSE = re.compile(
     r"(?:低基数(?:字段|分区键|分区字段|键|列)?|(?:分区键|分区字段|分区依据).{0,8}低基数)"
@@ -1106,6 +1110,25 @@ def _software_version_mentions(text):
     return found
 
 
+def _document_counts(clause):
+    """Bind document counts to their local field, batch and planned/actual use."""
+    for match in _DOCUMENT_COUNT.finditer(clause):
+        if (match["pages"] and match["unit"] != "页"
+                or match["migration"] and (match["unit"] != "份"
+                    or match["migration"] == "目标" and not match["document"])):
+            continue
+        # A complete reference predicate separates surrounding sample discussion
+        # from the migration target. Unknown adjacent owners/types remain bound.
+        prefix = re.split(r"结合|依据|沿用|参照", clause[:match.start()])[-1]
+        if not re.fullmatch(r"\s*(?:(?:合成测试|本项目|项目|本次|其中)\s*)*", prefix):
+            continue
+        if re.match(r"\s*[）)]?\s*(?:的)?(?:上限|下限|配额|阈值)", clause[match.end():]):
+            continue
+        actual = bool(re.search(r"已(?:经)?(?:全部)?(?:完成|迁移|上传|达到|实现)|实测|现有|既有", clause))
+        yield match, (_number(match["number"]), match["unit"],
+                      _normalise(match["batch"] or ""), bool(match["pages"]), actual)
+
+
 def unsupported_numeric_claims(paragraphs, *, project_facts=None, source_context=None):
     """Keep the numeric floor aligned with locally grounded/qualified parameters.
 
@@ -1114,7 +1137,9 @@ def unsupported_numeric_claims(paragraphs, *, project_facts=None, source_context
     period or capacity elsewhere in a sentence still requires project evidence.
     Subject/purpose checks for grounded quantities remain in inspect_content_quality.
     """
-    evidence = _evidence(project_fact_text(project_facts))
+    project_text = project_fact_text(project_facts)
+    evidence = _evidence(project_text)
+    document_sources = {match.group() for match in _DOCUMENT_COUNT.finditer(project_text)}
     reference_ids = {_reference_identity(match.group())
                      for match in _REFERENCE_IDENTIFIERS.finditer(_public_text(source_context))}
     reference_versions = {(software, version) for software, version, *_
@@ -1129,12 +1154,20 @@ def unsupported_numeric_claims(paragraphs, *, project_facts=None, source_context
         spans.extend(match.span() for match in re.finditer(r"(?m)^\s*\d{1,3}[.、)）]\s+(?=\S)", paragraph))
         spans.extend(match.span() for match in re.finditer(
             r"\d{1,3}(?:个(?:评估|分析|检查)维度|种(?:校验|检查|分析)规则|项(?:检查|分析|评估)步骤)", paragraph))
+        document_fields = {match.span() for match in _DOCUMENT_COUNT.finditer(paragraph)}
         clauses = _clauses(paragraph)
         remainders = _conditional_system_remainders(paragraph)
         pending_fields = _pending_frequency_spans(paragraph)
         basis_fields = _metric_basis_spans(paragraph) + _invalid_metric_spans(paragraph) + _qualified_parameter_spans(paragraph)
         for position, (clause, offset) in enumerate(clauses):
             prohibited = _prohibited_parameter_spans(clause)
+            for document, scope in _document_counts(clause):
+                # Clause joins must not shorten a compound noun such as 文档及日志.
+                if ((offset + document.start(), offset + document.end()) in document_fields
+                        and any(scope == source_scope and source.group() in document_sources
+                       and _parameter_scopes_supported(clause, fact, allocation=True)
+                       for fact, _ in evidence for source, source_scope in _document_counts(fact))):
+                    spans.append((offset + document.start("number"), offset + document.end("number")))
             for parameter in _parameters(clause):
                 remainder = remainders.get((offset + parameter[0], offset + parameter[1]))
                 if remainder:
@@ -1462,6 +1495,34 @@ def _status_supported(clause, marker, evidence):
         if any(assertion in _normalise(fact) for assertion in assertions):
             return True
     return False
+
+
+def select_quantity_source_items(candidates, context):
+    """Narrow only by explicit original location/specification, never by quantity."""
+    normal = lambda text: re.sub(r"\s|[()（）]", "", str(text))
+    text = normal(context)
+    selected = list(candidates)
+    selectors = []
+    rows = {int(value) for value in re.findall(r"(?:清册|原表|原文件|资料)?第(\d+)行", context)}
+    if rows:
+        selectors.append([item for item in candidates if item.get("source_location", {}).get("row", item.get("source_row")) in rows])
+    sections = []
+    specifications = []
+    for item in candidates:
+        section = normal(item.get("source_section", ""))
+        region = re.sub(r"(?:配电室|控制分站|控制主站)$", "", section)
+        if section and (section in text or (len(region) >= 3 and region in text)):
+            sections.append(item)
+        specification = normal(item.get("specification", ""))
+        if specification and not specification.startswith(("=", "#")) and specification in text:
+            specifications.append(item)
+    if sections:
+        selectors.append(sections)
+    if specifications:
+        selectors.append(specifications)
+    for matches in selectors:
+        selected = [item for item in selected if item in matches]
+    return selected if selected else list(candidates)
 
 
 def inspect_content_quality(paragraphs, *, project_facts=None, source_context=None, chapter_ids=()):

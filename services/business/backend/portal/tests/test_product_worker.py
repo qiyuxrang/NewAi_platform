@@ -46,6 +46,128 @@ class ProductQualityIssueContextTests(SimpleTestCase):
         self.assertNotIn("context", _bounded_quality_issues([base])[0])
 
 
+class ProductDiagramEvidenceAliasTests(SimpleTestCase):
+    def test_short_model_ids_restore_exact_body_references_and_reject_unknown_ids(self):
+        from portal.product_worker import _generate_diagrams
+        paragraph = {"id": "C123456789012345678901234P1", "type": "paragraph", "text": "权限控制和审计流程需验证。", "source_ids": ["SINPUT"]}
+        document = {"family": "technical-solution", "metadata": {"title": "测试"}, "blocks": [
+            {"id": "H1", "type": "heading", "level": 1, "text": "测试"}, paragraph,
+            {"id": "DIAGRAM_01_FIGURE", "type": "figure", "caption": "权限与审计"}]}
+        item = {"figure_id": "DIAGRAM_01_FIGURE", "title": "权限与审计", "description": "验证权限和审计流程。",
+                "source": "flowchart LR\nA[权限控制] --> B[审计流程]", "evidence_block_ids": ["B1"], "anchor_text": "权限控制"}
+        def model(*args, **kwargs):
+            self.assertEqual(args[4]["report_blocks"], [{"id": "B1", "text": paragraph["text"], "source_ids": ["SINPUT"]}])
+            return kwargs["output_validator"]({"diagrams": [item]})
+        with patch("portal.product_worker._model", side_effect=model):
+            result = _generate_diagrams("test", 1, "attempt", document)
+            self.assertEqual(result[0]["evidence_block_ids"], [paragraph["id"]])
+            self.assertEqual(item["evidence_block_ids"], ["B1"])
+            for invalid in ("B2", "OTHER_PROJECT_BLOCK"):
+                item["evidence_block_ids"] = [invalid]
+                with self.assertRaises(ExecutionError):
+                    _generate_diagrams("test", 1, "attempt", document)
+
+
+class ProductQuantitySourceTests(SimpleTestCase):
+    def check(self, text, approved=("1",), cited=None, items=None, background="", sources=None):
+        items = items or [
+            {"row_id": "1", "source_id": "file-a", "source_item_id": "file-a:1", "name": "开关柜", "quantity": "2", "unit": "台"},
+            {"row_id": "2", "source_id": "file-b", "source_item_id": "file-b:2", "name": "开关柜", "quantity": "3", "unit": "台"},
+        ]
+        chapter = SimpleNamespace(payload={"chapter_id": "c", "title": "设备清单",
+            "source_ids": list(approved if cited is None else cited), "paragraphs": [text]})
+        result = content_checks({"items": items, "background": background,
+            "sources": sources or [{"id": "file-a"}, {"id": "file-b"}]},
+            {"chapters": [{"id": "c", "title": "设备清单", "source_ids": list(approved)}]}, [chapter])
+        return [issue for issue in result["issues"] if issue["code"] in {
+            "quantity_mismatch", "quantity_source_ambiguous", "source_outside_blueprint", "source_review_required"}]
+
+    def test_selected_row_does_not_compare_other_same_name_quantity(self):
+        for text in ("开关柜2台。", "2台开关柜。"):
+            with self.subTest(text=text):
+                self.assertEqual(self.check(text), [])
+        issues = self.check("开关柜3台。")
+        self.assertTrue(any(issue["code"] == "quantity_mismatch" and issue["row_id"] == "1" for issue in issues))
+
+    def test_original_area_disambiguates_and_specification_mm_is_not_quantity_m(self):
+        items = [{"row_id": "1", "name": "黄绿线", "quantity": "110", "unit": "m", "source_section": "原煤仓配电室"},
+                 {"row_id": "2", "name": "黄绿线", "quantity": "120", "unit": "m", "source_section": "产品仓下配电室"}]
+        self.assertEqual(self.check("原煤仓配电室的黄绿线110m。", approved=("1", "2"), items=items), [])
+        self.assertEqual(self.check("黄绿线截面积规格16mm²待核对。", approved=("1", "2"), items=items), [])
+        self.assertTrue(any(issue["code"] == "quantity_mismatch" for issue in
+            self.check("原煤仓配电室的黄绿线120m。", approved=("1", "2"), items=items)))
+
+    def test_cited_project_background_can_support_its_bound_equipment_quantity(self):
+        source = {"id": "background", "purpose": "background", "media_type": "text/plain"}
+        options = {"approved": ("background",), "background": "新增开关柜2台。", "sources": [source]}
+        self.assertEqual(self.check("开关柜2台。", **options), [])
+        self.assertTrue(any(issue["code"] == "quantity_mismatch" for issue in self.check("开关柜3台。", **options)))
+        for sources in ([source, {**source, "id": "uncited-background"}], [{**source, "purpose": "reference"}]):
+            self.assertTrue(any(issue["code"] == "source_outside_blueprint"
+                for issue in self.check("开关柜2台。", **{**options, "sources": sources})))
+        self.assertTrue(any(issue["code"] == "quantity_source_ambiguous"
+            for issue in self.check("开关柜2台。", **{**options, "background": "开关柜2台；开关柜3台。"})))
+
+    def test_equipment_lists_bind_prefix_and_suffix_quantities_to_each_object(self):
+        items = [{"row_id": row, "name": name, "quantity": quantity, "unit": "台"}
+            for row, name, quantity in (("TEST-SRV", "应用服务器", "2"), ("TEST-STO", "备份存储", "1"),
+                ("TEST-SW", "网络交换机", "2"), ("TEST-FW", "防火墙", "1"))]
+        for text in ("将2台应用服务器（TEST-SRV）、1台备份存储（TEST-STO）、2台网络交换机（TEST-SW）和1台防火墙（TEST-FW）用于部署。",
+            "应用服务器2台、备份存储1台、网络交换机2台和防火墙1台。",
+            "2台TEST-SRV应用服务器、1台TEST-STO备份存储、2台TEST-SW网络交换机和1台TEST-FW防火墙。",
+            "仅新增2台应用服务器和1台备份存储。", "应用服务器共计2台，备份存储1台。"):
+            with self.subTest(text=text):
+                self.assertEqual(self.check(text, approved=tuple(item["row_id"] for item in items), items=items), [])
+                wrong = text.replace("2台应用服务器", "3台应用服务器").replace("应用服务器2台", "应用服务器3台")
+                wrong = wrong.replace("2台TEST-SRV应用服务器", "3台TEST-SRV应用服务器").replace("应用服务器共计2台", "应用服务器共计3台")
+                self.assertTrue(any(issue["code"] == "quantity_mismatch"
+                    for issue in self.check(wrong, approved=tuple(item["row_id"] for item in items), items=items)))
+
+    def test_file_sources_and_duplicate_row_ids_keep_their_scope(self):
+        self.assertEqual(self.check("开关柜2台。", approved=("file-a",)), [])
+        self.assertTrue(any(issue["code"] == "quantity_mismatch"
+            for issue in self.check("开关柜3台。", approved=("file-a",))))
+        items = [{"row_id": str(index), "source_id": "file-a", "source_item_id": f"file-a:{index}",
+            "name": "开关柜", "quantity": str(index + 1), "unit": "台"} for index in (1, 2)]
+        self.assertTrue(any(issue["code"] == "quantity_source_ambiguous"
+            for issue in self.check("开关柜2台。", approved=("file-a",), items=items)))
+        items = [{"row_id": "1", "source_id": source, "source_item_id": f"{source}:1",
+            "name": "开关柜", "quantity": quantity, "unit": "台"}
+            for source, quantity in (("file-a", "2"), ("file-b", "3"))]
+        self.assertEqual(self.check("开关柜2台。", approved=("file-a",), items=items), [])
+        self.assertTrue(any(issue["code"] == "quantity_source_ambiguous"
+            for issue in self.check("开关柜2台。", items=items)))
+
+    def test_outside_sources_and_specific_objects_still_fail(self):
+        issues = self.check("开关柜3台。", cited=("2",))
+        self.assertTrue(any(issue["code"] == "source_outside_blueprint" for issue in issues))
+        items = [{"row_id": "1", "name": "开关柜", "quantity": "2", "unit": "台"},
+            {"row_id": "2", "name": "变压器", "quantity": "3", "unit": "台"}]
+        for text in ("变压器3台。", "变压器4台。", "变压器安装位置需核对。"):
+            with self.subTest(text=text):
+                self.assertTrue(any(issue["code"] == "source_outside_blueprint"
+                    for issue in self.check(text, items=items)))
+
+        items = [{"row_id": "1", "name": "开关柜", "quantity": "2", "unit": "台"},
+            {"row_id": "2", "name": "35kV开关柜", "quantity": "3", "unit": "台"}]
+        self.assertEqual(self.check("35kV开关柜3台。", approved=("2",), items=items), [])
+        self.assertTrue(any(issue["code"] == "source_outside_blueprint"
+            for issue in self.check("35kV开关柜3台。", items=items)))
+        self.assertTrue(any(issue["code"] == "quantity_mismatch"
+            for issue in self.check("35kV开关柜2台。", approved=("1", "2"), items=items)))
+
+    def test_ambiguous_same_names_never_guess_or_sum_distinct_objects(self):
+        for text in ("开关柜2台。", "开关柜3台。", "开关柜5台。"):
+            with self.subTest(text=text):
+                self.assertTrue(any(issue["code"] == "quantity_source_ambiguous"
+                    for issue in self.check(text, approved=("1", "2"))))
+        items = [{"row_id": "1", "name": "10kV开关柜", "quantity": "2", "unit": "台"},
+            {"row_id": "2", "name": "35kV开关柜", "quantity": "3", "unit": "台"}]
+        self.assertEqual(self.check("10kV开关柜2台；35kV开关柜3台。", approved=("1", "2"), items=items), [])
+        self.assertTrue(any(issue["code"] == "quantity_mismatch"
+            for issue in self.check("10kV开关柜3台；35kV开关柜2台。", approved=("1", "2"), items=items)))
+
+
 class ProductChapterCorrectionContextTests(SimpleTestCase):
     def candidate_and_request(self):
         candidate = {"chapter_id": "chapter-1", "title": "章节1", "paragraphs": ["待修复的分析正文。"], "source_ids": ["r1"]}
@@ -473,6 +595,84 @@ class ProductWorkerTests(PortalTestCase):
                     input_hash=self.input_revision.sha256, blueprint_hash=self.blueprint.sha256)
                 for chapter, paragraph in zip(self.blueprint_payload["chapters"], paragraphs)]
 
+    def saved_chapters_with_long_duplicate(self, family):
+        paragraphs = ["沿用清单中2台测试设备。",
+                      "对照原始材料检查设备布置与施工条件，核对签字记录和现场照片，保留待确认事项。" * 6,
+                      "本章依据授权材料规划校验步骤，具体实施窗口仍须由业务负责人确认。"]
+        return [append_revision(self.task, "chapter", {"chapter_id": chapter["id"], "title": chapter["title"],
+                    "paragraphs": [paragraph], "source_ids": ["r1"]},
+                    input_hash=self.input_revision.sha256, blueprint_hash=self.blueprint.sha256, family=family)
+                for chapter, paragraph in zip(self.blueprint_payload["chapters"], paragraphs)]
+
+    @override_settings(PRODUCT_TECHNICAL_TARGET_CHARACTERS=60, PRODUCT_FEASIBILITY_TARGET_CHARACTERS=60)
+    @patch("portal.product_worker.generate_for_use")
+    def test_mixed_duplicate_chapter_keeps_only_new_body_and_binds_normalized_audit(self, model):
+        from portal.product_worker import _generate_family, _chapter_character_count
+        task_id, fence, attempt_id = claim_task()
+        for family in ("technical-solution", "feasibility"):
+            with self.subTest(family=family):
+                saved = self.saved_chapters_with_long_duplicate(family)
+                originals = [deepcopy(row.payload) for row in saved]
+                duplicate = originals[1]["paragraphs"][0]
+                addition = "实施前向业务负责人核对采集权限，记录字段映射与验收依据。"
+                candidate = {**originals[0], "paragraphs": [duplicate, duplicate + "补充检查交接签字。", addition]}
+                accepted = {**candidate, "paragraphs": [addition]}
+                model.return_value = {"content": json.dumps(candidate)}
+                result = _generate_family(task_id, fence, attempt_id, self.task, self.input_revision, self.blueprint, family)
+                self.assertEqual(result[0].payload["paragraphs"], [*originals[0]["paragraphs"], addition])
+                self.assertEqual([row.pk for row in result[1:]], [row.pk for row in saved[1:]])
+                for row, original in zip(saved, originals):
+                    row.refresh_from_db()
+                    self.assertEqual(row.payload, original)
+                self.task.refresh_from_db()
+                evidence = self.task.checkpoint["calls"][-1]
+                self.assertEqual(evidence["chapter_output_normalization"], {
+                    "original_response_sha256": digest(candidate), "removed_paragraph_count": 2,
+                    "accepted_response_sha256": digest(accepted)})
+                self.assertEqual(evidence["response_sha256"], digest(accepted))
+                self.assertTrue(evidence["response_validated"])
+                self.assertNotIn("parse_error", evidence)
+                self.assertNotIn(duplicate, json.dumps(evidence, ensure_ascii=False))
+                self.assertEqual(self.task.checkpoint["output_generation"][family]["actual_characters"],
+                                 _chapter_character_count(result))
+        self.assertEqual(model.call_count, 2)
+
+    @override_settings(PRODUCT_TECHNICAL_TARGET_CHARACTERS=60)
+    @patch("portal.product_worker.generate_for_use")
+    def test_all_long_duplicates_still_fail_after_one_correction_without_changing_saved_body(self, model):
+        from portal.product_worker import _generate_family
+        saved = self.saved_chapters_with_long_duplicate("technical-solution")
+        candidate = {**saved[0].payload, "paragraphs": [saved[1].payload["paragraphs"][0] + "补充检查交接签字。"]}
+        model.return_value = {"content": json.dumps(candidate)}
+        task_id, fence, attempt_id = claim_task()
+        with self.assertRaises(ExecutionError) as error:
+            _generate_family(task_id, fence, attempt_id, self.task, self.input_revision, self.blueprint, "technical-solution")
+        self.assertEqual(error.exception.code, "invalid_model_output")
+        self.assertEqual(error.exception.quality_issues[0]["code"], "partial_duplicate_content")
+        self.assertEqual(model.call_count, 2)
+        self.assertEqual(self.task.revisions.filter(kind="chapter").count(), 3)
+        self.task.refresh_from_db()
+        self.assertTrue(all(not call.get("response_validated") for call in self.task.checkpoint["calls"]))
+
+    @override_settings(PRODUCT_TECHNICAL_TARGET_CHARACTERS=60)
+    @patch("portal.product_worker.generate_for_use")
+    def test_removing_duplicate_body_cannot_bypass_numeric_facts_or_source_scope(self, model):
+        from portal.product_worker import _generate_family
+        saved = self.saved_chapters_with_long_duplicate("technical-solution")
+        task_id, fence, attempt_id = claim_task()
+        for invalid in ({"paragraphs": ["数据备份保留三十天。"]}, {"source_ids": ["not-approved"]}):
+            with self.subTest(invalid=invalid):
+                candidate = {**saved[0].payload, "paragraphs": ["实施前核对授权资料与验收依据。"], **invalid}
+                candidate["paragraphs"] = [saved[1].payload["paragraphs"][0], *candidate["paragraphs"]]
+                model.return_value = {"content": json.dumps(candidate)}
+                with self.assertRaises(ExecutionError) as error:
+                    _generate_family(task_id, fence, attempt_id, self.task, self.input_revision, self.blueprint, "technical-solution")
+                if "paragraphs" in invalid:
+                    self.assertTrue(error.exception.quality_issues)
+                    self.assertTrue(all(issue["paragraph_index"] == 1 for issue in error.exception.quality_issues))
+                self.assertEqual(self.task.revisions.filter(kind="chapter").count(), 3)
+        self.assertEqual(model.call_count, 4)
+
     @override_settings(PRODUCT_TECHNICAL_TARGET_CHARACTERS=60)
     @patch("portal.product_worker.generate_for_use")
     def test_duplicate_continuation_is_corrected_and_appends_without_overwriting_saved_text(self, model):
@@ -709,12 +909,13 @@ class ProductWorkerTests(PortalTestCase):
         model.side_effect = self.generation_replies(passed=False, issues=["方案依据仍需核实"])
         run_once()
         self.task.refresh_from_db()
-        self.assertEqual(self.task.error_code, "content_review_required")
-        render.assert_not_called()
+        self.assertEqual((self.task.state, self.task.error_code), ("WAITING_REVIEW", ""))
+        render.assert_called_once()
         review = self.task.revisions.get(kind="review").payload
         self.assertEqual(review["model_review"]["status"], "issues_found")
         self.assertEqual(review["model_review"]["issues"], ["方案依据仍需核实"])
         self.assertFalse(review["passed"])
+        self.assertTrue(review["full_document_human_review_required"])
 
     @override_settings(PRODUCT_BLUEPRINT_KNOWLEDGE_MODE="source_only_preview")
     @patch("portal.product_three_drafts.generate_report_drafts")
@@ -751,20 +952,127 @@ class ProductWorkerTests(PortalTestCase):
     @override_settings(PRODUCT_BLUEPRINT_KNOWLEDGE_MODE="source_only_preview")
     @patch("portal.product_three_drafts.generate_report_drafts")
     @patch("portal.product_worker.generate_for_use")
-    def test_preview_gaps_do_not_hide_quantity_or_unsupported_number(self, model, render):
+    def test_preview_gaps_do_not_hide_quantity_mismatch(self, model, render):
         self.queue_outputs(missing=["预算和工期待确认"])
         replies = self.generation_replies()
         chapter = json.loads(replies[0]["content"])
         chapter["paragraphs"] = ["测试设备数量999台。"]
-        model.return_value = {"content": json.dumps(chapter)}
+        replies = [{"content": json.dumps(chapter)}] * 2
+        model.side_effect = replies
         run_once()
         self.task.refresh_from_db()
         self.assertEqual(self.task.error_code, "invalid_model_output")
         render.assert_not_called()
         self.assertEqual(model.call_count, 2)
         self.assertFalse(self.task.revisions.filter(kind="chapter").exists())
-        self.assertTrue(all("unsupported_parameter" in {issue["code"] for issue in call["quality_issues"]}
-                            for call in self.task.checkpoint["calls"]))
+        self.assertIn("quantity_mismatch", {issue["code"] for issue in
+            self.task.checkpoint["last_failure"]["quality_issues"]})
+
+    @override_settings(PRODUCT_BLUEPRINT_KNOWLEDGE_MODE="source_only_preview")
+    @patch("portal.product_three_drafts.generate_report_drafts")
+    @patch("portal.product_worker.generate_for_use")
+    def test_exact_owner_approved_pending_condition_keeps_conflicts_in_draft_review(self, model, render):
+        from portal.product_worker import _DRAFT_PENDING_CONDITION, _approved_pending_draft
+        self.blueprint_payload["conditions"].append(deepcopy(_DRAFT_PENDING_CONDITION))
+        self.queue_outputs(missing=["预算待确认"], conflicts=["重复行归属待确认"],
+                           input_issues=[{"code": "duplicate_row_id"}])
+        model.side_effect = self.generation_replies()
+        run_once()
+        self.task.refresh_from_db()
+        self.assertEqual((self.task.state, self.task.stage), ("WAITING_REVIEW", "FINAL_REVIEW"))
+        render.assert_called_once()
+        review = self.task.revisions.get(kind="review").payload
+        self.assertFalse(review["passed"])
+        self.assertEqual(review["approved_pending"]["conflicts"], ["重复行归属待确认"])
+        self.assertEqual({issue["code"] for issue in review["issues"]},
+                         {"unresolved_blueprint_items", "unresolved_input_items"})
+        self.assertTrue(review["full_document_human_review_required"])
+        self.task.pending_action = "write"
+        self.assertFalse(_approved_pending_draft(self.task, self.blueprint))
+        self.task.pending_action = "generate_outputs"
+        self.blueprint.approvals.all().delete()
+        self.assertFalse(_approved_pending_draft(self.task, self.blueprint))
+
+    @patch("portal.product_worker.generate_for_use")
+    def test_explicit_quantity_pending_approval_retains_body_findings_and_blocks_real_mismatch(self, model):
+        from portal.product_worker import _DRAFT_QUANTITY_PENDING_CONDITION, _ensure_content_review
+        from portal.product_documents import content_document
+        self.input_payload["items"].extend([
+            {"row_id": "r2", "name": "测试设备", "quantity": "3", "unit": "台"},
+            {"row_id": "r3", "name": "变压器", "quantity": "5", "unit": "台"},
+        ])
+        for chapter in self.blueprint_payload["chapters"]:
+            chapter["source_ids"] = ["r1", "r2", "r3"]
+        self.blueprint_payload["conditions"].append(deepcopy(_DRAFT_QUANTITY_PENDING_CONDITION))
+        self.queue_outputs()
+        chapters = self.saved_chapters_for_continuation()
+        original = deepcopy(chapters[0].payload)
+        original["source_ids"] = ["r1", "r2", "r3"]
+        chapters[0] = append_revision(self.task, "chapter", original, input_hash=self.input_revision.sha256,
+                                      blueprint_hash=self.blueprint.sha256)
+        task_id, fence, attempt_id = claim_task()
+        model.return_value = {"content": json.dumps({"passed": True, "issues": []})}
+        review = _ensure_content_review(self.task, fence, attempt_id, self.input_revision, self.blueprint, chapters)
+        self.assertFalse(review.payload["passed"])
+        self.assertTrue(review.payload["full_document_human_review_required"])
+        self.assertEqual(review.payload["approved_pending"]["quantity_issues"][0]["code"], "quantity_source_ambiguous")
+        document = content_document(self.task, self.input_revision, self.blueprint, chapters, draft=True,
+                                    review_issues=review.payload["issues"])
+        self.assertIn("第1章第1段", document["pending"][0]["text"])
+        self.assertIn("未经确认", document["pending"][0]["text"])
+        chapters[0].refresh_from_db()
+        self.assertEqual(chapters[0].payload, original)
+        self.task.pending_action = "write"
+        with self.assertRaises(ExecutionError):
+            _ensure_content_review(self.task, fence, attempt_id, self.input_revision, self.blueprint, chapters)
+        self.task.pending_action = "generate_outputs"
+        wrong = {**original, "paragraphs": ["变压器999台。"], "source_ids": ["r3"]}
+        chapters[0] = append_revision(self.task, "chapter", wrong, input_hash=self.input_revision.sha256,
+                                      blueprint_hash=self.blueprint.sha256)
+        with self.assertRaises(ExecutionError) as error:
+            _ensure_content_review(self.task, fence, attempt_id, self.input_revision, self.blueprint, chapters)
+        self.assertIn("quantity_mismatch", {issue["code"] for issue in error.exception.quality_issues})
+
+    @patch("portal.product_worker.generate_for_use")
+    def test_approved_source_expansion_preserves_saved_body_and_keeps_quantity_review(self, model):
+        from portal.product_worker import _generate_family, _DRAFT_PENDING_CONDITION, _reuse_source_expansion_chapters
+        self.input_payload["sources"] = [{"id": "reference"}]
+        self.queue_outputs()
+        saved = self.saved_chapters_for_continuation()
+        original = deepcopy(saved[0].payload)
+        original["paragraphs"] = ["清单中测试设备999台。"]
+        saved[0] = append_revision(self.task, "chapter", original,
+            input_hash=self.input_revision.sha256, blueprint_hash=self.blueprint.sha256)
+        condition_only = deepcopy(self.blueprint.payload)
+        condition_only["conditions"].append(deepcopy(_DRAFT_PENDING_CONDITION))
+        condition_revision = append_revision(self.task, "blueprint", condition_only,
+            input_hash=self.input_revision.sha256)
+        self.task.blueprint_version = condition_revision.version
+        self.task.save(update_fields=["blueprint_version"])
+        DocumentApproval.objects.create(task=self.task, revision=condition_revision, actor=self.owner,
+            decision="approve", sha256=condition_revision.sha256, authorization=approval_authorization(self.task, self.owner))
+        self.assertEqual(_reuse_source_expansion_chapters(self.task, 1, self.input_revision,
+                                                         condition_revision, "technical-solution", {}), {})
+        payload = deepcopy(self.blueprint.payload)
+        payload["chapters"][0]["source_ids"].append("reference")
+        payload["conditions"].append(deepcopy(_DRAFT_PENDING_CONDITION))
+        new = append_revision(self.task, "blueprint", payload, input_hash=self.input_revision.sha256)
+        self.task.blueprint_version = new.version
+        self.task.save(update_fields=["blueprint_version"])
+        DocumentApproval.objects.create(task=self.task, revision=new, actor=self.owner, decision="approve",
+            sha256=new.sha256, authorization=approval_authorization(self.task, self.owner))
+        model.return_value = self.reply("chapter-1")
+        task_id, fence, attempt_id = claim_task()
+        result = _generate_family(task_id, fence, attempt_id, self.task, self.input_revision, new, "technical-solution")
+        model.assert_not_called()
+        self.assertEqual(result[0].payload["paragraphs"], original["paragraphs"])
+        self.assertEqual(result[0].blueprint_hash, new.sha256)
+        saved[0].refresh_from_db()
+        self.assertEqual(saved[0].payload, original)
+        self.assertTrue(all(chapter.blueprint_hash == new.sha256 for chapter in result))
+        self.assertIn("approved_source_scope_reuse", result[0].change_reason)
+        self.assertIn("quantity_mismatch", {issue["code"] for issue in
+            content_checks(self.input_revision.payload, new.payload, result)["issues"]})
 
     @override_settings(PRODUCT_BLUEPRINT_KNOWLEDGE_MODE="source_only_preview")
     @patch("portal.product_three_drafts.generate_report_drafts")
@@ -854,6 +1162,29 @@ class ProductWorkerTests(PortalTestCase):
             _review_payload(self.task, self.input_revision, blueprint, chapters, "technical-solution")
         self.assertEqual(error.exception.code, "request_too_large")
 
+    @override_settings(PRODUCT_TECHNICAL_TARGET_CHARACTERS=50000)
+    @patch("portal.product_content_quality.content_review_prompt", return_value="审查" * 3500)
+    def test_oversized_unused_samples_do_not_block_complete_review_batches(self, prompt):
+        from portal.product_worker import _review_batch_payloads, _review_payload, _review_request_size
+        chapters = [SimpleNamespace(payload={"chapter_id": f"chapter-{index}", "title": "项目设计",
+                    "source_ids": ["r1"], "paragraphs": [f"章节{index}正文。" + "文" * 5400]}) for index in range(10)]
+        payload, scope = _review_payload(self.task, self.input_revision, self.blueprint, chapters, "technical-solution")
+        self.assertEqual(scope, "sampled")
+        self.assertEqual(payload["chapters"], [])
+        plan = _review_batch_payloads(payload, chapters)
+        body = [{"chapter_id": chapter.payload["chapter_id"], "paragraphs": chapter.payload["paragraphs"]} for chapter in chapters]
+        recovered = {chapter.payload["chapter_id"]: "" for chapter in chapters}
+        for batch in plan:
+            self.assertLessEqual(_review_request_size(batch), 14500)
+            self.assertEqual(batch["review_contract"]["body_sha256"], digest(body))
+            for chapter in batch["chapters"]:
+                fragment = chapter["fragment"]
+                saved = recovered[chapter["chapter_id"]]
+                self.assertEqual(fragment["start"], len(saved))
+                recovered[chapter["chapter_id"]] += chapter["paragraphs"][0]
+                self.assertEqual(fragment["end"], len(recovered[chapter["chapter_id"]]))
+        self.assertEqual(recovered, {chapter.payload["chapter_id"]: chapter.payload["paragraphs"][0] for chapter in chapters})
+
     @override_settings(PRODUCT_BLUEPRINT_KNOWLEDGE_MODE="source_only_preview")
     @patch("portal.product_three_drafts.generate_report_drafts")
     @patch("portal.product_worker.generate_for_use")
@@ -863,8 +1194,8 @@ class ProductWorkerTests(PortalTestCase):
         model.side_effect = self.generation_replies(passed=False, issues=["正文存在未经确认的安全实现承诺"])
         run_once()
         self.task.refresh_from_db()
-        self.assertEqual(self.task.error_code, "content_review_required")
-        render.assert_not_called()
+        self.assertEqual((self.task.state, self.task.error_code), ("WAITING_REVIEW", ""))
+        render.assert_called_once()
         request = json.loads(model.call_args.args[2][1]["content"])
         self.assertEqual(request["review_contract"]["scope"], "full_batched")
         review = self.task.revisions.get(kind="review").payload
@@ -1529,6 +1860,8 @@ class ProductWorkerTests(PortalTestCase):
     def test_wrong_cross_chapter_mapping_gets_one_correction_and_is_not_saved(self, model):
         from portal.product_worker import _generate_family
         self.queue_numbered_outline()
+        self.task.pending_action = "write"
+        self.task.save(update_fields=["pending_action"])
         invalid = json.loads(self.reply("chapter-1")["content"])
         invalid["paragraphs"] = ["接口设计在第二章 数据存储方案展开。"]
         model.return_value = {"content": json.dumps(invalid)}
@@ -1588,6 +1921,8 @@ class ProductWorkerTests(PortalTestCase):
         from portal.product_pair import _report_generation_hash
         from portal.product_three_drafts import generate_report_drafts
         self.queue_numbered_outline()
+        self.task.pending_action = "write"
+        self.task.save(update_fields=["pending_action"])
         chapters = [append_revision(self.task, "chapter", json.loads(self.reply(chapter["id"])["content"]),
                     input_hash=self.input_revision.sha256, blueprint_hash=self.blueprint.sha256)
                     for chapter in self.blueprint_payload["chapters"]]

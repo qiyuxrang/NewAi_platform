@@ -63,7 +63,7 @@ class ThreeDraftFlowTests(PortalTestCase):
     @override_settings(PRODUCT_MODEL_CALLS_ALLOWED=True)
     @patch("portal.product_three_drafts.render_report_draft")
     @patch("portal.product_worker.generate_for_use")
-    def test_legacy_three_drafts_reviews_saved_body_and_blocks_real_tail_findings(self, model, render):
+    def test_legacy_three_drafts_reviews_saved_body_and_preserves_real_tail_findings(self, model, render):
         from portal.product_service import append_revision
         created = self.approve_blueprint(self.save_blueprint(self.create_task(reviewer=False)))["task"]
         record = DocumentTask.objects.get(pk=created["id"])
@@ -86,19 +86,35 @@ class ThreeDraftFlowTests(PortalTestCase):
             return {"content": json.dumps({"passed": not found,
                 "issues": ["正文末尾的来源归属需纠正"] if found else []})}
         model.side_effect = review
+        def report_result(task, input_revision, blueprint, chapters, family, **options):
+            path = Path(self.storage.name) / str(task.pk) / f"{family}.docx"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(b"pending-reviewed-draft")
+            return {"path": path.relative_to(self.storage.name).as_posix(),
+                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(), "template_hash": "b" * 64,
+                    "render_evidence": {"status": "draft_unverified",
+                        "diagram_generation": report_diagram_evidence(options["document"], path)}}
+        render.side_effect = report_result
         self.assertTrue(run_once())
         record.refresh_from_db()
-        self.assertEqual(record.error_code, "content_review_required")
-        self.assertEqual(record.state, "WAITING_INPUT")
-        render.assert_not_called()
-        self.assertFalse(record.artifacts.exists())
-        actual = record.revisions.get(kind="review").payload["model_review"]
+        self.assertEqual(record.error_code, "")
+        self.assertEqual(record.state, "WAITING_REVIEW")
+        render.assert_called_once()
+        self.assertEqual(record.artifacts.count(), 1)
+        checked = record.revisions.get(kind="review").payload
+        self.assertFalse(checked["passed"])
+        self.assertTrue(checked["full_document_human_review_required"])
+        actual = checked["model_review"]
         self.assertEqual(actual["scope"], "full_batched")
         self.assertTrue(actual["coverage"]["complete"])
         self.assertEqual(actual["coverage"]["chapter_hashes"], {"overview": chapter.sha256})
         self.assertEqual(actual["issues"], ["正文末尾的来源归属需纠正"])
         self.assertEqual(model.call_count, actual["coverage"]["batch_count"])
         self.assertGreater(model.call_count, 1)
+        artifact = record.artifacts.get()
+        download = self.owner_client.get(f"/api/product/outputs/{artifact.pk}/download/")
+        self.assertEqual(download.status_code, 200)
+        self.assertEqual(b"".join(download.streaming_content), b"pending-reviewed-draft")
 
     def test_business_technology_presentation_runtime_is_editable_and_source_bound(self):
         runtime = Path(settings.PRODUCT_DOCUMENT_PYTHON)

@@ -10,15 +10,16 @@ from .product_service import ProductError, digest
 from .product_storage import verified_artifact
 
 
-def generate_report_drafts(task, fence, attempt_id, input_revision, blueprint):
+def generate_report_drafts(task, fence, attempt_id, input_revision, blueprint, *, families=None):
     from django.conf import settings
     from .product_worker import (_analysis_progress, _chapter_character_count, _content_quality_guard, _family_target, _formal_content_guard,
                                  _generate_diagrams, _diagram_progress, _guard, _minimum_characters,
-                                 _record_output_generation, _renew, _ensure_content_review, _content_review_current, current_chapters)
+                                 _record_output_generation, _renew, _ensure_content_review, _content_review_current, _store, current_chapters)
     from .product_pair import _report_generation_hash
 
     artifacts = []
-    for family in ("technical-solution", "feasibility"):
+    draft = task.pending_action in {"generate_outputs", "three_drafts"}
+    for family in (families if families is not None else ("technical-solution", "feasibility")):
         if family not in task.checkpoint.get("output_families", ["technical-solution", "feasibility", "presentation"]):
             continue
         phase = 'render_technical' if family == 'technical-solution' else 'render_feasibility'
@@ -29,14 +30,15 @@ def generate_report_drafts(task, fence, attempt_id, input_revision, blueprint):
             raise ProductError("chapters_incomplete", f"{family} 报告内容不完整。", 409)
         target = _family_target(family)
         actual = _chapter_character_count(ordered)
-        _content_quality_guard(ordered, input_revision.payload, blueprint.payload)
-        _formal_content_guard(ordered, family)
+        _content_quality_guard(ordered, input_revision.payload, blueprint.payload, draft=draft)
+        _formal_content_guard(ordered, family, draft=draft)
         _record_output_generation(task.pk, fence, family, target, actual)
         if settings.PRODUCT_ENFORCE_OUTPUT_LENGTH and actual < _minimum_characters(target):
             raise ProductError("output_length_below_target", f"{label}正文尚未达到{target}字下限，请续写后再生成文件。", 409)
         _renew(task.pk, fence)
         review = _ensure_content_review(task, fence, attempt_id, input_revision, blueprint, ordered, family)
-        content = content_document(task, input_revision, blueprint, ordered, family)
+        content = content_document(task, input_revision, blueprint, ordered, family, draft=draft,
+                                   review_issues=review.payload.get("issues", []))
         report_hash = _report_generation_hash(task, family, input_revision, blueprint)
         existing = DocumentArtifact.objects.filter(task=task, generation_hash=report_hash).first()
         if existing:
@@ -48,12 +50,18 @@ def generate_report_drafts(task, fence, attempt_id, input_revision, blueprint):
             _analysis_progress(task.pk, fence, phase, 'completed', detail=f'{label}已保存，复用已核验的文件版本')
             continue
         try:
-            generated = render_report_draft(task, input_revision, blueprint, ordered, family, document=content,
-                                            diagram_generator=lambda document: _generate_diagrams(task.pk, fence, attempt_id, document),
+            generated = render_report_draft(task, input_revision, blueprint, ordered, family, draft=draft, document=content,
+                                            diagram_generator=lambda document: _generate_diagrams(task.pk, fence, attempt_id, document, draft=draft),
                                             diagram_progress=lambda status, **details: _diagram_progress(task.pk, fence, family, status, **details))
         except Exception:
             _analysis_progress(task.pk, fence, phase, 'failed', detail=f'{label}文件生成失败')
             raise
+        diagram_review = generated["render_evidence"].get("diagram_generation", {})
+        if diagram_review.get("quality_issue_count") and review.payload.get("passed"):
+            review = _store(task.pk, fence, "review", {**review.payload, "passed": False,
+                "full_document_human_review_required": True, "diagram_review": diagram_review},
+                input_revision.sha256, blueprint.sha256, family=family)
+            report_hash = _report_generation_hash(task, family, input_revision, blueprint)
         with transaction.atomic():
             fresh = _guard(task.pk, fence)
             report = save_report_content(fresh, family, content, input_hash=input_revision.sha256,
@@ -65,6 +73,7 @@ def generate_report_drafts(task, fence, attempt_id, input_revision, blueprint):
                 input_hash=input_revision.sha256, blueprint_hash=blueprint.sha256,
                 template_hash=generated["template_hash"], generation_hash=report_hash,
                 render_evidence={**generated["render_evidence"], "report_id": str(report.pk), "kind": "draft",
+                                 "content_review": "human_review_required" if review.payload.get("full_document_human_review_required") else "reviewed",
                                  "attempt_id": str(attempt_id)},
             )
             artifacts.append(artifact)

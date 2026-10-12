@@ -1,17 +1,123 @@
 import json
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+from copy import deepcopy
 from datetime import timedelta
+from pathlib import Path
+import shutil
+import sqlite3
+from tempfile import TemporaryDirectory
+from threading import Event
 from unittest.mock import patch
+import unittest
 
-from django.db import connection
+from django.core.management import call_command
+from django.db import connection, connections, transaction
+from django.db.backends.sqlite3.base import DatabaseWrapper
 from django.test import override_settings
 from django.test.utils import CaptureQueriesContext
 from django.utils import timezone
 
+from portal.models import Module, Role, User
 from portal.product_models import DocumentApproval, DocumentTask
-from portal.product_service import ProductError, append_revision, approval_authorization, digest
+from portal.product_service import ProductError, append_revision, approval_authorization, digest, task_for
 from portal.product_worker import ExecutionError, _analysis_progress, _model, claim_task, execute_claim
 
 from .base import PortalTestCase
+
+
+class SQLiteTaskWriteReservationTests(unittest.TestCase):
+    """Use a temporary migrated SQLite file to exercise independent connections."""
+
+    @classmethod
+    def setUpClass(cls):
+        super().setUpClass()
+        cls.temporary = TemporaryDirectory(prefix="product-task-lock-")
+        cls.template = Path(cls.temporary.name) / "template.sqlite3"
+        cls.database = deepcopy(connections["default"].settings_dict)
+        cls.database.update(ENGINE="django.db.backends.sqlite3", NAME=str(cls.template))
+        cls.database["OPTIONS"] = {"timeout": 0.8, "transaction_mode": "DEFERRED"}
+        original = connections["default"]
+        isolated = DatabaseWrapper(deepcopy(cls.database), "default")
+        connections["default"] = isolated
+        try:
+            call_command("migrate", verbosity=0, interactive=False)
+        except BaseException:
+            cls.temporary.cleanup()
+            raise
+        finally:
+            isolated.close()
+            connections["default"] = original
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.temporary.cleanup()
+        super().tearDownClass()
+
+    def setUp(self):
+        self.path = Path(self.temporary.name) / (self._testMethodName + ".sqlite3")
+        shutil.copyfile(self.template, self.path)
+        self.config = deepcopy(self.database)
+        self.config["NAME"] = str(self.path)
+        self.original = connections["default"]
+        self.connection = DatabaseWrapper(deepcopy(self.config), "default")
+        connections["default"] = self.connection
+        self.addCleanup(self.restore_connection)
+
+        module = Module.objects.create(code="product", name="产品", enabled=True)
+        role = Role.objects.create(code="product-test", name="产品测试")
+        role.modules.add(module)
+        self.owner = User.objects.create_user("sqlite-task-owner", password="test", must_change_password=False)
+        self.owner.roles.add(role)
+        self.task = DocumentTask.objects.create(
+            owner=self.owner, title="SQLite锁测试", idempotency_key="sqlite-task-lock",
+            payload_hash=digest({}), state="DRAFT",
+        )
+
+    def restore_connection(self):
+        self.connection.close()
+        connections["default"] = self.original
+
+    def test_write_task_reserves_sqlite_before_authorization_reads(self):
+        writer = sqlite3.connect(self.path, timeout=0.8, isolation_level=None)
+        writer.execute("BEGIN IMMEDIATE")
+        writer.execute('UPDATE "portal_documenttask" SET "version" = "version" WHERE "id" = ?', (str(self.task.pk),))
+        self.addCleanup(writer.close)
+        entered = Event()
+        statements = []
+
+        def authorize_on_second_connection():
+            worker_connection = DatabaseWrapper(deepcopy(self.config), "default")
+            connections["default"] = worker_connection
+
+            def observe(execute, sql, params, many, context):
+                if sql.lstrip().upper().startswith(("SELECT", "UPDATE")):
+                    statements.append(sql)
+                    if len(statements) == 1:
+                        entered.set()
+                return execute(sql, params, many, context)
+
+            try:
+                with worker_connection.execute_wrapper(observe), transaction.atomic():
+                    return task_for(self.owner, self.task.pk, write=True)
+            finally:
+                worker_connection.close()
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(authorize_on_second_connection)
+            try:
+                if not entered.wait(2):
+                    future.result(timeout=0)
+                    self.fail("task_for did not issue a database read or write")
+                with self.assertRaises(FutureTimeout):
+                    future.result(timeout=0.12)
+            finally:
+                writer.rollback()
+            task = future.result(timeout=2)
+
+        self.assertTrue(statements[0].lstrip().upper().startswith('UPDATE "PORTAL_DOCUMENTTASK"'), statements)
+        self.assertEqual(task.pk, self.task.pk)
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.version, 1)
 
 
 @override_settings(

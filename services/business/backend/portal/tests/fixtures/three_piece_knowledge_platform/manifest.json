@@ -1,0 +1,15 @@
+{
+  "synthetic": true,
+  "reuse_existing_sources": true,
+  "files": {
+    "equipment.csv": "b51f769eafb812ec967a7ffe7ed71b4143d8aee406b8c83c797de299190317b5",
+    "background.txt": "4e6e51033e5ec6d7587913b58bd64efbe28a35c0bcc5e6575adc943f4b4126cd"
+  },
+  "expected_equipment_rows": 4,
+  "technical_minimum_characters": 50000,
+  "technical_minimum_diagrams": 15,
+  "feasibility_minimum_characters": 70000,
+  "feasibility_minimum_diagrams": 20,
+  "requires_real_authorized_ragflow": true,
+  "requires_human_blueprint_confirmation": true
+}
