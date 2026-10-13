@@ -56,7 +56,7 @@ export default function DepartmentWorkspace() {
     </section>}
     <WorkspaceBoundary resetKey={`${departmentCode}/${featureCode}`}>
       {connection?.available && hrFeature && <HrWorkspace feature={featureCode!} />}
-      {connection?.available && departmentCode === 'product' && <ProductWorkspace feature={featureCode || 'documents'} />}
+      {connection?.available && departmentCode === 'product' && <ProductWorkspace feature={featureCode || 'overview'} />}
       {connection?.available && departmentCode === 'engineering' && featureCode && <BusinessSurface><EngineeringWorkspace section="estimate" /></BusinessSurface>}
     </WorkspaceBoundary>
     {!feature && departmentCode !== 'product' && <div className="grid grid-cols-2 gap-4">

@@ -14,10 +14,11 @@ from rest_framework.response import Response
 from .product_api import product_endpoint, _artifact_download_response, _body, _expected, _task_detail
 from .product_models import DocumentArtifact, DocumentRevision
 from .product_pair import FAMILIES, latest_report_content, output_current
-from .product_service import (ProductError, approved_blueprint, current_revision, effective_artifact_approval, input_authorized,
+from .product_delivery import artifact_delivery
+from .product_service import (ProductError, approved_blueprint, blueprint_chapters, current_revision, effective_artifact_approval, input_authorized,
                               require_owner, require_version, task_for, source_ids_belong, validate_chapter, append_revision)
 from .product_storage import StorageError, verified_artifact
-from .product_release import evidence_file
+from .product_release import evidence_file, public_quality_warnings, public_presentation_plan
 from .product_output_preview import draft_preview_evidence, public_draft_preview
 from .security import audit
 
@@ -36,15 +37,20 @@ def outputs(request, task_id):
         report = task.revisions.filter(pk=artifact.render_evidence.get("report_id"), kind=DocumentRevision.Kind.REPORT).first()
         current = output_current(task, artifact)
         approved = effective_artifact_approval(artifact) is not None
-        delivered = bool(current and task.agent_root_id and task.state == "COMPLETED")
+        delivery = artifact_delivery(artifact, current=current)
+        delivered = delivery["delivered"]
         result.append({"id": str(artifact.pk), "family": artifact.family, "version": artifact.version,
                        "sha256": artifact.sha256, "current": current, "stale": not current,
-                       "draft": not (approved or delivered), "approved": approved, "delivered": delivered,
+                       "draft": not approved and not delivered, "approved": approved, "delivered": delivered,
+                       "delivery_decision": delivery,
+                       "presentation_plan": public_presentation_plan(artifact.render_evidence.get("presentation_plan")),
                        "review_status": "stale" if not current else "approved" if approved else "delivered" if delivered else "pending_review",
                        "engine": artifact.render_evidence.get("engine", "frozen-word"),
                        "content_version": report.version if report else None,
                        "content_sha256": report.sha256 if report else None,
                        "content_approved": False if report else None,
+                       "quality_warnings": public_quality_warnings(artifact.render_evidence,
+                           artifact.review.payload.get("issues", []) if artifact.review else []),
                        **public_draft_preview(artifact, current=current),
                        "source_versions": artifact.render_evidence.get("source_versions", [])})
     return Response({"task_version": task.version, "outputs": result})
@@ -76,7 +82,7 @@ def saved_draft_download(request, task_id):
                                          input_hash=current.sha256, blueprint_hash=blueprint.sha256).order_by("version"):
         latest[chapter.payload.get("chapter_id")] = chapter
     saved, missing = [], []
-    for spec in blueprint.payload.get("chapters", []):
+    for spec in blueprint_chapters(blueprint.payload, family):
         chapter = latest.get(spec["id"])
         if chapter is not None:
             try:
@@ -93,13 +99,13 @@ def saved_draft_download(request, task_id):
         raise ProductError("saved_draft_unavailable", "当前输入与已批准蓝图尚无可下载的已保存章节。", 409)
     name = "技术方案" if family == "technical-solution" else "可行性研究报告"
     characters = sum(len(re.sub(r"\s", "", paragraph)) for chapter in saved for paragraph in chapter.payload["paragraphs"])
-    lines = [f"{task.title} · {name} · 已保存正文草稿", "【草稿：生成未完成 / 待配图 / 待排版 / 未审批】",
-             "本文件仅为已保存正文快照，不是正式成果或审批通过的文件。",
+    lines = [f"{task.title} · {name} · 已保存正文草稿", "【草稿：正文快照 / 未包含完整图文排版】",
+             "本文件仅为已保存正文快照；正式交付状态请在成果工作区查看。",
              f"输入版本：{task.input_version}；已批准蓝图版本：{task.blueprint_version}",
              f"导出时间：{timezone.localtime().isoformat()}",
-             f"已保存章节：{len(saved)} / {len(blueprint.payload.get('chapters', []))}；非空白字数：{characters}",
+             f"已保存章节：{len(saved)} / {len(blueprint_chapters(blueprint.payload, family))}；非空白字数：{characters}",
              "未完成章节：" + ("；".join(missing) if missing else "无缺章；整体生成与篇幅要求仍以后台记录为准"),
-             "配图、文档排版与正式审批：本 TXT 草稿均未包含，需在成果工作区核对。", ""]
+             "本 TXT 草稿未包含配图和文档排版；完整有效的 Word 成果生成后直接交付，无需再次审批。", ""]
     for chapter in saved:
         lines.extend([chapter.payload["title"], "", *chapter.payload["paragraphs"], ""])
     # Check again before releasing bytes: a permission or plan change cannot
@@ -115,7 +121,7 @@ def saved_draft_download(request, task_id):
         raise ProductError("stale_draft", "输入或蓝图版本已变化，请刷新后重新下载。", 409)
     title = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", task.title).strip(" .") or "报告"
     response = FileResponse(BytesIO("\n".join(lines).encode("utf-8-sig")), as_attachment=True,
-                            filename=f"已保存正文草稿-未审批-{title}-{name}.txt", content_type="text/plain; charset=utf-8")
+                            filename=f"已保存正文草稿-{title}-{name}.txt", content_type="text/plain; charset=utf-8")
     response["Cache-Control"] = "private, no-store"
     response["X-Content-Type-Options"] = "nosniff"
     audit(request.user, "product_saved_draft_download", f"{task.pk}:v{task.version}:{family}:{len(saved)}")
@@ -148,7 +154,7 @@ def draft_download(request, artifact_id):
     if not input_authorized(task, task.revisions.filter(kind="input", sha256=artifact.input_hash).first()):
         raise ProductError("source_permission_changed", "来源授权已变化。", 404)
     title = re.sub(r'[\\/:*?"<>|\x00-\x1f]', "_", task.title).strip(" .") or "报告"
-    prefix = "成果" if current and task.agent_root_id and task.state == "COMPLETED" else "草稿" if current else "历史草稿-已过期"
+    prefix = "成果" if artifact_delivery(artifact, current=current)["delivered"] else "草稿" if current else "历史草稿-已过期"
     response = FileResponse(target.open("rb"), as_attachment=True,
                             filename=f"{prefix}-{title}-{artifact.family}-v{artifact.version}{target.suffix}")
     response["X-Product-Artifact-Current"] = "true" if current else "false"
@@ -242,7 +248,7 @@ def report_chapter(request, task_id):
         if blueprint is None:
             raise ProductError("blueprint_approval_required", "蓝图尚未批准。", 409)
         payload = validate_chapter({key: body[key] for key in ("chapter_id", "title", "paragraphs", "source_ids")})
-        spec = next((chapter for chapter in blueprint.payload["chapters"] if chapter["id"] == payload["chapter_id"]), None)
+        spec = next((chapter for chapter in blueprint_chapters(blueprint.payload, "feasibility") if chapter["id"] == payload["chapter_id"]), None)
         if not spec or spec["title"] != payload["title"] or not source_ids_belong(task, payload["source_ids"]) or not set(payload["source_ids"]) <= set(spec["source_ids"]):
             raise ProductError("invalid_chapter", "章节或来源超出已批准蓝图。", 409)
         current = current_revision(task, "input")

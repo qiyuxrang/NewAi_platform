@@ -23,7 +23,7 @@ export interface TaskInput {
 export interface BlueprintPayload {
   purpose: string;
   audience: string;
-  chapters: { id: string; title: string; scope: string; source_ids: string[] }[];
+  chapters: { id: string; title: string; scope: string; source_ids: string[]; family?: Exclude<OutputFamily, "presentation"> }[];
   conditions: { text: string; type: "program" | "model" | "human" }[];
   missing: string[];
   conflicts: string[];
@@ -31,16 +31,51 @@ export interface BlueprintPayload {
 }
 export interface ChapterPayload { chapter_id: string; title: string; paragraphs: string[]; source_ids: string[] }
 export type OutputFamily = "technical-solution" | "feasibility" | "presentation";
-export interface DraftOutput { id: string; family: OutputFamily; version: number; sha256: string; current: boolean; stale: boolean; draft: boolean; approved: boolean; review_status: "stale" | "approved" | "pending_review"; engine: string; content_version: number | null; content_sha256: string | null; content_approved: boolean | null; source_versions: { family: string; version: number; sha256: string; approval_id?: string }[]; has_preview?: boolean; page_count?: number; preview_url?: string | null }
+export const presentationStyles = { auto: '自动选择', business: '商务汇报', consulting: '咨询决策', government: '政务汇报', engineering: '技术评审', 'dark-tech': '深色科技', minimal: '简约展示' } as const;
+export type PresentationStyle = keyof typeof presentationStyles;
+export interface PresentationPlan {
+  style: Exclude<PresentationStyle, 'auto'>;
+  style_label: string;
+  selection_reason: string;
+  goal: string;
+  goal_label: string;
+  audience: string;
+  sources: { family: string; version: number; sha256: string }[];
+  pages: { page: number; title: string; type: string; core_message?: string; items: string[]; speaker_notes: string; source_refs: string[] }[];
+}
+export const blueprintChapters = (payload: BlueprintPayload | null | undefined, family: Exclude<OutputFamily, "presentation">) =>
+  (payload?.chapters || []).filter(chapter => !chapter.family || chapter.family === family);
+export function manualBlueprint(input: TaskInput | null): BlueprintPayload {
+  const titles = {
+    'technical-solution': ['需求分析与设计依据', '总体技术路线与系统架构', '子系统与设备配置设计', '部署实施与接口联调', '测试验收与运维设计'],
+    feasibility: ['建设背景与必要性', '建设范围与基础条件', '技术与组织可行性', '投资估算与资金安排', '效益分析与风险评价'],
+  };
+  return { purpose: input?.requirements || '', audience: '项目评审人员',
+    chapters: (['technical-solution', 'feasibility'] as const).flatMap(family => titles[family].map((title, index) => ({
+      id: `${family}-chapter-${index + 1}`, family, title, scope: '', source_ids: [],
+    }))), conditions: (input?.conditions || []).map(text => ({ text, type: 'human' as const })),
+    missing: [], conflicts: [], template_version: 'frozen-original-v1' };
+}
+export interface OutputQualityWarnings {
+  issue_count: number;
+  issues: { code: string; text?: string }[];
+  figures?: { planned: number; rendered: number; pending_count?: number; pending: { figure_id: string; error_code: string }[] };
+  actual_characters?: number;
+  minimum_characters?: number;
+}
+export type OutputReviewStatus = 'stale' | 'approved' | 'pending_review' | 'delivered';
+export interface DeliveryDecision { status: 'stale' | 'draft' | 'delivered'; delivered: boolean; blocking_issues: { code: string; text?: string; family?: string }[]; warnings?: { code: string; text?: string }[]; quality_scope?: string }
+export interface DraftOutput { id: string; family: OutputFamily; version: number; sha256: string; current: boolean; stale: boolean; draft: boolean; approved: boolean; delivered?: boolean; delivery_decision?: DeliveryDecision; review_status: OutputReviewStatus; quality_warnings?: OutputQualityWarnings; engine: string; content_version: number | null; content_sha256: string | null; content_approved: boolean | null; source_versions: { family: string; version: number; sha256: string; approval_id?: string }[]; has_preview?: boolean; page_count?: number; preview_url?: string | null; presentation_plan?: PresentationPlan | null }
 export type ReviewCategory = "fact" | "inference" | "conflict" | "missing";
 export interface InputIssue { issue_hash: string; [key: string]: unknown }
 export interface RenderEvidence {
+  presentation_plan?: PresentationPlan | null;
   kind: "candidate";
   status: "rendered" | "verified";
   page_count: number;
   pages: { page: number; sha256: string }[];
 }
-export interface Artifact { id: string; family?: OutputFamily; version: number; sha256: string; approved?: boolean; draft?: boolean; render_evidence?: RenderEvidence }
+export interface Artifact { id: string; family?: OutputFamily; version: number; sha256: string; approved?: boolean; draft?: boolean; delivered?: boolean; delivery_decision?: DeliveryDecision; render_evidence?: RenderEvidence }
 export interface ReportRevision { id: string; family: Exclude<OutputFamily, "presentation">; version: number; sha256: string; input_hash: string; blueprint_hash: string; current: boolean; approved: boolean; created_at: string }
 export interface HistoryEvent { event: string; id: string; family?: OutputFamily; kind?: string; version?: number; sha256?: string; parent_sha256?: string; reason?: string; source_refs?: string[]; actor?: { type: string; id: string | number | null; name: string } }
 export interface TaskHistory { task_id: string; task_version: number; history_immutable: boolean; tamper_claim: string; timeline: HistoryEvent[] }
@@ -72,6 +107,10 @@ export interface ProductWorkflowProgress {
   total_count?: number;
 }
 export interface ProductKnowledgeStatus {
+  evidence_ready?: boolean;
+  ragflow_source_count?: number;
+  web_source_count?: number;
+  web_search?: { status: 'skipped' | 'running' | 'completed' | 'blocked'; source_count: number; queries: string[]; missing_domains: string[]; detail: string; provider?: 'tavily' | 'brave'; code?: string; fact_scope?: 'PUBLIC_REFERENCE' };
   mode: 'source_only_preview' | 'ragflow_required';
   required: boolean;
   status: 'source_only_preview' | 'waiting_for_ragflow' | 'ready';
@@ -80,7 +119,10 @@ export interface ProductKnowledgeStatus {
   detail: string;
 }
 export interface DocumentTask extends TaskSummary {
+  presentation_plan?: PresentationPlan | null;
   retry_after?: string | null;
+  retry_budget?: { used: number; limit: number; remaining: number };
+  quality_warnings?: ({ family: OutputFamily } & OutputQualityWarnings)[];
   generation_steps?: { key: string; status: string; attempts: number; error_code: string; retry_after?: string | null }[];
   intake_mode?: 'manual' | 'equipment_background';
   analysis_progress?: Partial<Record<ProductWorkflowPhase, ProductWorkflowProgress>>;
@@ -134,14 +176,14 @@ export interface ProductOverview {
   pagination: { page: number; page_size: number; total: number; pages: number };
   recent_projects: TaskSummary[];
   todos: TaskSummary[];
-  recent_outputs: { id: string; task_id: string; title: string; family: OutputFamily; version: number; created_at: string; current: boolean; review_status: "stale" | "approved" | "pending_review" }[];
+  recent_outputs: { id: string; task_id: string; title: string; family: OutputFamily; version: number; created_at: string; current: boolean; delivered?: boolean; review_status: OutputReviewStatus }[];
   reviewers: { id: number; name: string }[];
   capabilities: { model_generation: boolean; retrieval: boolean; formal_release: boolean; office_preview: boolean; upload_extensions: string[]; upload_max_bytes: number; local_ocr?: boolean; parser_ready?: boolean };
   templates: { id: string; name: string; version: string; families: OutputFamily[]; approved: boolean; description: string }[];
 }
 export const getProductOverview = (query: string, signal: AbortSignal) => apiRequest<ProductOverview>(`/api/product/workspace/${query ? `?${query}` : ""}`, { signal });
 export interface ProductOutputHistory {
-  outputs: { id: string; task_id: string; title: string; family: OutputFamily; version: number; created_at: string; current: boolean; review_status: 'stale' | 'approved' | 'pending_review'; download_url: string }[];
+  outputs: { id: string; task_id: string; title: string; family: OutputFamily; version: number; created_at: string; current: boolean; delivered?: boolean; review_status: OutputReviewStatus; download_url: string }[];
   pagination: { page: number; page_size: number; total: number; pages: number };
 }
 export const getProductOutputHistory = (query: string, signal: AbortSignal) => apiRequest<ProductOutputHistory>(`/api/product/workspace/outputs/${query ? `?${query}` : ''}`, { signal });

@@ -41,9 +41,11 @@ class ProductDraftPreviewTests(PortalTestCase):
             with override_settings(PRODUCT_MODEL_CALLS_ALLOWED=True), patch("portal.product_worker.generate_for_use",
                     return_value={"content": '{"passed":true,"issues":[]}'}) as model:
                 review = _ensure_content_review(self.task, fence, attempt_id, self.input, self.blueprint, [chapter], family)
-                model.assert_called_once()
-            self.assertTrue(review.payload["model_review"]["coverage"]["complete"])
-            self.assertEqual(review.payload["model_review"]["scope"], "full")
+                model.assert_not_called()
+            self.assertTrue(review.payload["program_checks_complete"])
+            self.assertFalse(review.payload["passed"])
+            self.assertEqual(review.payload["model_review"]["status"], "not_run")
+            self.assertEqual(review.payload["model_review"]["scope"], "program_only")
             report = save_report_content(self.task, family, {
                 "blocks": [{"id": "p1", "type": "paragraph", "text": family, "source_ids": ["SINPUT"]}],
                 "pending": []}, input_hash=self.input.sha256, blueprint_hash=self.blueprint.sha256, actor=self.owner)
@@ -190,11 +192,15 @@ class ProductDraftPreviewTests(PortalTestCase):
             preview = (artifact.render_evidence["office_render_evidence"] if family == "presentation"
                        else artifact.render_evidence["word_field_cache"]["preview"])
             path = Path(self.storage.name) / (artifact.path if number == 0 else preview["pages"][0]["path"])
-            path.write_bytes(b"tampered")
-            response = self.owner_client.get(self.url(artifact))
-            self.assertEqual(response.status_code, 409)
-            self.assertEqual(response.json()["code"], "artifact_hash_mismatch")
-            self.assertFalse(response.streaming)
+            original = path.read_bytes()
+            try:
+                path.write_bytes(b"tampered")
+                response = self.owner_client.get(self.url(artifact))
+                self.assertEqual(response.status_code, 409)
+                self.assertEqual(response.json()["code"], "artifact_hash_mismatch")
+                self.assertFalse(response.streaming)
+            finally:
+                path.write_bytes(original)
 
     def test_snapshot_hash_mismatch_and_unsafe_page_records_are_unavailable(self):
         artifact = self.artifacts["technical-solution"]
@@ -256,4 +262,3 @@ class ProductDraftPreviewTests(PortalTestCase):
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.json()["code"], "stale_output")
         self.assertFalse(response.streaming)
-

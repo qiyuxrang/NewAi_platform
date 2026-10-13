@@ -18,9 +18,9 @@ from .product_docx_layout import normalize_docx_layout
 from .product_formal import has_repeated_filler, unsupported_financial_conclusion
 from .product_render_cache import StageCache, atomic_write, canonical_hash, confined, file_hash
 from .product_diagrams import (
-    SUBSECTION_TITLES,
     add_structural_blocks,
     apply_diagram_descriptions,
+    apply_diagram_layout,
     diagram_contract_hash,
     validate_diagram_batch,
     inspect_docx_requirements,
@@ -75,6 +75,43 @@ def frozen_pack(family="technical-solution"):
         raise DocumentError("template_unavailable") from None
 
 
+_BODY_FIELD = re.compile(r'^\s*[\[{,]*\s*["\']?(?:source_ids|requirement_ids|chapter_id|paragraphs|title)["\']?\s*(?::.*)?\s*$', re.I)
+_BODY_PLACEHOLDER = re.compile(r"^(?:待生成正文|正文待生成|待补充正文|章节正文占位|TODO|TBD|PLACEHOLDER|<[^<>]*placeholder[^<>]*>)$", re.I)
+
+
+def clean_report_paragraph(paragraph):
+    """Remove standalone model-contract residue without rewriting authored prose."""
+    lines = []
+    for line in paragraph.splitlines():
+        value = line.strip()
+        if (_BODY_FIELD.fullmatch(value.strip("`")) or _BODY_PLACEHOLDER.fullmatch(value.strip("`"))
+                or re.fullmatch(r'[\[\]{}",\s]+|```(?:json)?', value, re.I)
+                or re.fullmatch(r'["\']?[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}["\']?,?', value, re.I)
+                or re.fullmatch(r'["\'][A-Za-z0-9_-]+["\'],?', value)):
+            continue
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
+def assembly_quality_issues(chapters):
+    """Keep original fragments and chapter locations in platform diagnostics."""
+    issues = []
+    for chapter in chapters:
+        payload = chapter.payload
+        paragraphs = payload.get("paragraphs", [])
+        cleaned = [clean_report_paragraph(paragraph) for paragraph in paragraphs]
+        for index, (original, body) in enumerate(zip(paragraphs, cleaned)):
+            if original.strip() != body:
+                issues.append({"code": "internal_body_fragment", "chapter_id": payload["chapter_id"],
+                               "paragraph_index": index, "claim": original,
+                               "correction": "内部字段或占位片段不作为客户正文；保留原始证据并修正本段。"})
+        if not any(cleaned):
+            issues.append({"code": "chapter_body_missing", "chapter_id": payload["chapter_id"],
+                           "title": payload["title"], "claim": "\n".join(paragraphs),
+                           "correction": "本章缺少有效正文；仅补充该章设计内容，保留其他已有效章节。"})
+    return issues
+
+
 def content_document(task, input_revision, blueprint, chapters, family="technical-solution", *, draft=False, review_issues=()):
     if family not in {"technical-solution", "feasibility"}:
         raise DocumentError("template_unavailable")
@@ -94,22 +131,32 @@ def content_document(task, input_revision, blueprint, chapters, family="technica
         requirements.append({"id": "RINPUT", "text": facts["requirements"]})
     requirement_ids = [item["id"] for item in requirements]
     blocks = []
-    chapter_count = len(chapters)
+    bodies = [[clean_report_paragraph(paragraph) for paragraph in chapter.payload["paragraphs"]] for chapter in chapters]
+    chapter_count = sum(any(body) for body in bodies)
+    chapter_index = 0
+    missing_chapters = []
     financial_claims_found = False
-    for chapter_index, chapter in enumerate(chapters):
+    for chapter, body in zip(chapters, bodies):
         payload = chapter.payload
         stable = "C" + hashlib.sha256(payload["chapter_id"].encode()).hexdigest()[:24]
         cited = [mapped for original in payload["source_ids"] for mapped in source_map.get(original, [])] or ["SINPUT"]
         heading_title = re.sub(r"^第[一二三四五六七八九十0-9]+[章节]\s*", "", payload["title"])
         blocks.append({"id": stable, "type": "heading", "level": 1, "text": heading_title, "source_ids": cited, "requirement_ids": requirement_ids})
-        for index, paragraph in enumerate(payload["paragraphs"], start=1):
+        if not any(body):
+            missing_chapters.append(payload["chapter_id"])
+            if not draft:
+                continue
+            blocks.append({"id": stable + "MISSING", "type": "paragraph",
+                           "text": f"本章“{heading_title}”缺少有效设计正文，需由编制负责人补充本章内容后复核。",
+                           "source_ids": cited, "requirement_ids": requirement_ids})
+            continue
+        for index, paragraph in enumerate(body, start=1):
+            if not paragraph:
+                continue
             if family == "feasibility" and unsupported_financial_conclusion(paragraph):
                 financial_claims_found = True
                 if not draft:
                     continue
-            subsection = SUBSECTION_TITLES[family][(index - 1) % len(SUBSECTION_TITLES[family])]
-            blocks.append({"id": f"{stable}S{index}", "type": "heading", "level": 2, "text": subsection,
-                           "source_ids": cited, "requirement_ids": requirement_ids})
             blocks.append({"id": f"{stable}P{index}", "type": "paragraph", "text": paragraph, "source_ids": cited, "requirement_ids": requirement_ids})
         add_structural_blocks(
             blocks,
@@ -120,17 +167,9 @@ def content_document(task, input_revision, blueprint, chapters, family="technica
             chapter_count=chapter_count,
             chapter_title=payload["title"],
         )
-    if facts.get("items"):
-        rows = [[str(item.get(key, "")).strip() or "待确认" for key in ("row_id", "name", "quantity", "unit")]
-                + [str(item.get("source_id", "人工录入"))] for item in facts["items"]]
-        if family == "feasibility":
-            for index, row in enumerate(rows, start=1):
-                blocks.append({"id": f"INPUT_ITEM{index}", "type": "paragraph",
-                               "text": f"输入清单：{row[1]}，数量 {row[2]} {row[3]}；原行号 {row[0]}；来源 {row[4]}。",
-                               "source_ids": ["SINPUT"], "requirement_ids": requirement_ids})
-        else:
-            blocks.append({"id": "INPUT_TABLE", "type": "table", "prototype": "table6", "columns": ["原行号", "设备名称", "数量", "单位", "来源"],
-                           "units": ["不适用"] * 5, "rows": rows, "caption": "表1 输入设备清单", "source_ids": ["SINPUT"], "requirement_ids": requirement_ids})
+        chapter_index += 1
+    if missing_chapters and not draft:
+        raise DocumentError("chapter_body_missing", diagnostic={"stage": "content_assembly", "chapter_ids": missing_chapters})
     pending = []
     if family == "feasibility":
         pending.append("未提供经核实的成本与收益依据，不形成经济成本、收益或回报结论。")
@@ -141,16 +180,14 @@ def content_document(task, input_revision, blueprint, chapters, family="technica
     pending.extend(blueprint.payload.get("conflicts", []))
     if facts.get("issues"):
         pending.append("输入资料存在缺项或冲突，请在平台逐项复核，不得按无问题发布。")
-    if draft:
-        positions = {chapter.payload["chapter_id"]: index for index, chapter in enumerate(chapters, start=1)}
-        for issue in review_issues:
-            if issue.get("code") == "quantity_source_ambiguous":
-                chapter = positions.get(issue.get("chapter_id"))
-                paragraph = issue.get("paragraph_index")
-                pending.append(f"正文第{chapter}章第{paragraph + 1}段“{issue.get('claim', '')}”的数量来源无法唯一归属，"
-                               "数值未经确认；不得用于选型、采购、投资或正式发布结论。"
-                               if chapter is not None and type(paragraph) is int else
-                               "正文存在数量来源无法唯一归属的问题，数值未经确认；不得用于选型、采购、投资或正式发布结论。")
+    # Review findings retain their original evidence in platform records.
+    unique_pending = {}
+    for value in pending:
+        value = value.strip()
+        key = re.sub(r"\s+", "", value).rstrip("。；;.")
+        if key:
+            unique_pending.setdefault(key, value)
+    pending = list(unique_pending.values())
     if pending:
         blocks.append({"id": "PENDING_HEADING", "type": "heading", "level": 1, "text": "待确认事项", "source_ids": ["SINPUT"], "requirement_ids": []})
         for index, value in enumerate(pending, start=1):
@@ -206,7 +243,7 @@ def _safe_environment():
     return environment
 
 
-def preflight_document_rendering():
+def preflight_document_rendering(*, draft=False):
     """Check executable dependencies before generating paid content or files.
 
     Child stderr is never propagated: it may contain paths, authored source or
@@ -226,22 +263,27 @@ def preflight_document_rendering():
                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
         if result.returncode:
             raise ValueError
-        reason = "node_unavailable"
-        node = _mermaid_runtime()
-        reason = "chromium_unavailable"
-        chromium = _mermaid_chromium()
-        reason = "mermaid_runtime_invalid"
-        environment = _safe_environment()
-        environment["PORTAL_CHROMIUM_PATH"] = str(chromium)
-        result = subprocess.run([str(node), str(PACK.parent / "mermaid-runtime" / "render.mjs"), "--preflight"],
-                                env=environment, capture_output=True, timeout=30,
-                                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-        if result.returncode:
-            raise ValueError
-        mermaid = json.loads(result.stdout)
-        if any(not isinstance(mermaid.get(name), str) or not re.fullmatch(r"[a-f0-9]{64}", mermaid[name])
-               for name in ("bundleSha256", "manifestSha256", "rendererSha256", "nodeSha256", "chromiumSha256")):
-            raise ValueError
+        try:
+            reason = "node_unavailable"
+            node = _mermaid_runtime()
+            reason = "chromium_unavailable"
+            chromium = _mermaid_chromium()
+            reason = "mermaid_runtime_invalid"
+            environment = _safe_environment()
+            environment["PORTAL_CHROMIUM_PATH"] = str(chromium)
+            result = subprocess.run([str(node), str(PACK.parent / "mermaid-runtime" / "render.mjs"), "--preflight"],
+                                    env=environment, capture_output=True, timeout=30,
+                                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            if result.returncode:
+                raise ValueError
+            mermaid = json.loads(result.stdout)
+            if any(not isinstance(mermaid.get(name), str) or not re.fullmatch(r"[a-f0-9]{64}", mermaid[name])
+                   for name in ("bundleSha256", "manifestSha256", "rendererSha256", "nodeSha256", "chromiumSha256")):
+                raise ValueError
+        except (DocumentError, OSError, ValueError, TypeError, subprocess.TimeoutExpired):
+            if not draft:
+                raise
+            mermaid = {"status": "unavailable", "reason": reason}
         reason = "office_renderer_unavailable"
         office_script = None
         if getattr(settings, "PRODUCT_OFFICE_RENDER_ENABLED", False):
@@ -261,7 +303,7 @@ def preflight_document_rendering():
 
 
 def _diagram_failure_diagnostic(result):
-    allowed = {"runtime_manifest_invalid", "chromium_unavailable", "chromium_launch_failed", "diagram_input_invalid",
+    allowed = {"diagram_layout_unreadable", "runtime_manifest_invalid", "chromium_unavailable", "chromium_launch_failed", "diagram_input_invalid",
                "diagram_path_invalid", "diagram_cache_invalid", "diagram_parse_or_anchor_failed",
                "diagram_bitmap_failed", "diagram_network_blocked"}
     reason = "diagram_renderer_failed"
@@ -306,7 +348,9 @@ def _diagram_evidence(output, figure_count):
             raise ValueError
         figures = result["figures"]
         if (not isinstance(figures, list) or len(figures) != figure_count
-                or any(not isinstance(item, dict) or set(item) != {"figure_id", "sourceSha256", "imageSha256"}
+                or any(not isinstance(item, dict) or not {"figure_id", "sourceSha256", "imageSha256"} <= set(item)
+                       or set(item) - {"figure_id", "sourceSha256", "imageSha256", "layout"}
+                       or ("layout" in item and not isinstance(item["layout"], dict))
                        or not isinstance(item["figure_id"], str)
                        or any(not isinstance(item[key], str) or re.fullmatch(r"[0-9a-f]{64}", item[key]) is None
                               for key in ("sourceSha256", "imageSha256")) for item in figures)
@@ -486,23 +530,175 @@ def _diagram_sources(document, generator, *, draft=False, quality_issues=None):
         raise DocumentError("diagram_generation_required")
     try:
         diagrams = generator(document)
+        if draft:
+            _mark_pending_figures(document)
         findings = []
         diagrams = validate_diagram_batch({"diagrams": diagrams},
                                [block for block in document["blocks"] if block["type"] == "figure"],
                                [block for block in document["blocks"] if block["type"] == "paragraph"
                                 and not block["id"].startswith("DIAGRAM_")], draft=draft, quality_issues=findings)
         apply_diagram_descriptions(document, diagrams)
-        validate_document_requirements(document)
+        validate_document_requirements(document, allow_pending=draft)
         if findings:
-            notice = f"图表正文依据复核发现{len(findings)}项待审问题，图示为草稿，尚未人工批准。"
-            document["pending"].append({"id": "DIAGRAM_REVIEW", "text": notice})
-            document["blocks"].append({"id": "DIAGRAM_REVIEW_NOTICE", "type": "paragraph", "text": notice,
-                                       "source_ids": ["SINPUT"], "requirement_ids": []})
             if quality_issues is not None:
                 quality_issues.extend(findings)
         return diagrams
     except (ValueError, KeyError, TypeError):
         raise DocumentError("diagram_generation_invalid") from None
+
+
+def _mark_pending_figures(document):
+    pending = {item["figure_id"]: item for item in document.get("diagram_pending", [])}
+    for index, block in enumerate(document["blocks"]):
+        if block.get("type") == "figure" and block["id"] in pending:
+            notice = f"图表待补：{block['caption']}。生成或渲染未完成，当前草稿未包含此图，须补图并人工复核。"
+            document["blocks"][index] = {"id": block["id"] + "_PENDING", "type": "paragraph", "text": notice,
+                "source_ids": block.get("source_ids", ["SINPUT"]), "requirement_ids": block.get("requirement_ids", [])}
+            document["pending"].append({"id": "PEND_" + block["id"], "text": notice})
+
+
+def _render_one_diagram(directory, document, figure, source):
+    # The existing renderer owns bitmap reuse and network/syntax checks.
+    with tempfile.TemporaryDirectory(prefix="mermaid-", dir=directory) as temporary:
+        source_path = Path(temporary) / "input.json"
+        content_path = confined(directory, "single-diagram.json")
+        content_path.write_text(json.dumps({**document, "blocks": [figure]}, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+        source_path.write_text(json.dumps({"diagrams": [source]}, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+        environment = _safe_environment()
+        environment["PORTAL_CHROMIUM_PATH"] = str(_mermaid_chromium())
+        try:
+            result = subprocess.run([str(_mermaid_runtime()), str(PACK.parent / "mermaid-runtime" / "render.mjs"),
+                str(content_path), str(source_path)], cwd=directory, env=environment, capture_output=True,
+                timeout=int(getattr(settings, "PRODUCT_DOCUMENT_RENDER_TIMEOUT_SECONDS", 300)),
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            if result.returncode != 0:
+                raise DocumentError("diagram_render_failed", diagnostic=_diagram_failure_diagnostic(result))
+            evidence = _diagram_evidence(result.stdout, 1)
+            actual = evidence["figures"][0]
+            image = confined(directory, figure["path"])
+            if (actual["figure_id"] != figure["id"] or not image.is_file()
+                    or file_hash(image) != actual["imageSha256"]
+                    or hashlib.sha256(source["source"].encode()).hexdigest() != actual["sourceSha256"]):
+                raise DocumentError("diagram_render_failed")
+            return evidence
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise DocumentError("diagram_render_failed", diagnostic={"stage": "diagram_render",
+                "reason": "process_timeout" if isinstance(error, subprocess.TimeoutExpired) else "runtime_io_failed"}) from None
+        finally:
+            content_path.unlink(missing_ok=True)
+
+
+def _render_draft_diagrams(document, generator, directory, step_runner=None):
+    from .product_steps import StepRetryPending
+    planned = len([block for block in document["blocks"] if block["type"] == "figure"])
+    findings = []
+    sources = _diagram_sources(document, generator, draft=True, quality_issues=findings)
+    figures = {block["id"]: block for block in document["blocks"] if block["type"] == "figure"}
+    output = []
+    rendered_count = 0
+    runtime = preflight_document_rendering(draft=True)
+    for source in sources:
+        figure = figures[source["figure_id"]]
+        binding = {"figure": figure, "source_sha256": hashlib.sha256(source["source"].encode()).hexdigest(),
+                   "runtime": runtime, "contract": diagram_contract_hash()}
+        def valid(evidence):
+            try:
+                if len(evidence["figures"]) != 1:
+                    return False
+                record = evidence["figures"][0]
+                if (record["figure_id"] != figure["id"]
+                        or record["sourceSha256"] != binding["source_sha256"]
+                        or file_hash(confined(directory, figure["path"])) != record["imageSha256"]):
+                    return False
+                apply_diagram_layout(deepcopy(document), evidence, directory)
+                return True
+            except (OSError, KeyError, TypeError, ValueError):
+                return False
+        key = f'diagram_render:{document["family"]}:{figure["id"]}'
+        try:
+            def operation():
+                if runtime.get("mermaid", {}).get("status") == "unavailable":
+                    raise DocumentError("diagram_render_failed", diagnostic={"stage": "diagram_render", "reason": runtime["mermaid"]["reason"]})
+                return _render_one_diagram(directory, document, figure, source)
+            evidence = step_runner(key, binding, operation, valid) if step_runner else operation()
+            if not valid(evidence):
+                raise DocumentError("diagram_render_failed", diagnostic={"stage": "diagram_render", "reason": "reading_unit_verification_failed"})
+            units = apply_diagram_layout(document, evidence, directory) or [{"id": figure["id"],
+                "image_sha256": evidence["figures"][0]["imageSha256"]}]
+            output.extend({**unit, "source_sha256": evidence["figures"][0]["sourceSha256"],
+                           "evidence_block_ids": source["evidence_block_ids"]} for unit in units)
+            rendered_count += 1
+        except (DocumentError, StepRetryPending) as error:
+            code = error.cause_code if isinstance(error, StepRetryPending) else error.code
+            if code not in {"diagram_render_failed", "document_validation_failed"}:
+                raise
+            document.setdefault("diagram_pending", []).append({"figure_id": figure["id"], "error_code": code,
+                "stage": "diagram_render", "reason": getattr(error, "diagnostic", {}).get("reason", "render_failed"), "step_key": key})
+    _mark_pending_figures(document)
+    pending = document.get("diagram_pending", [])
+    from .product_worker import _bounded_quality_issues
+    return {"status": "pending" if pending else "completed", "planned_count": planned, "rendered": rendered_count,
+        "figure_count": len(output), "pending_count": len(pending), "pending_figures": pending,
+        "figures": output, "source_persisted": False, "contract_sha256": diagram_contract_hash(),
+        "source_scope": "authored_chapter_blocks", "semantic_review": "human_review_required",
+        "quality_issue_count": len(findings) + len(pending), "quality_issues": _bounded_quality_issues(findings),
+        "full_document_human_review_required": True}
+
+
+def _render_formal_diagrams(document, diagram_generator, directory, content_path, structural, diagram_progress):
+    diagram_issues = []
+    sources = _diagram_sources(document, diagram_generator, draft=False, quality_issues=diagram_issues)
+    content_path.write_text(json.dumps(document, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+    # Source is confined to owned private temporary input, even on renderer failure.
+    with tempfile.TemporaryDirectory(prefix="mermaid-", dir=directory) as temporary:
+        source_path = Path(temporary) / "input.json"
+        source_path.write_text(json.dumps({"diagrams": sources}, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+        diagram_environment = _safe_environment()
+        diagram_environment["PORTAL_CHROMIUM_PATH"] = str(_mermaid_chromium())
+        diagrams = subprocess.run([str(_mermaid_runtime()), str(PACK.parent / "mermaid-runtime" / "render.mjs"),
+                                  str(content_path), str(source_path)],
+                                 cwd=directory, env=diagram_environment, capture_output=True,
+                                 timeout=int(getattr(settings, "PRODUCT_DOCUMENT_RENDER_TIMEOUT_SECONDS", 300)),
+                                 creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if diagrams.returncode != 0:
+        raise DocumentError("diagram_render_failed", diagnostic=_diagram_failure_diagnostic(diagrams))
+    diagram_evidence = _diagram_evidence(diagrams.stdout, structural["figure_count"])
+    rendered = {item["figure_id"]: item for item in diagram_evidence["figures"]}
+    planned = {block["id"]: block for block in document["blocks"] if block["type"] == "figure"}
+    if set(rendered) != set(planned):
+        raise DocumentError("diagram_render_failed")
+    for item in sources:
+        actual = rendered[item["figure_id"]]
+        image_path = (directory / planned[item["figure_id"]]["path"]).resolve()
+        if (not image_path.is_relative_to(directory) or not image_path.is_file()
+                or hashlib.sha256(image_path.read_bytes()).hexdigest() != actual["imageSha256"]
+                or hashlib.sha256(item["source"].encode()).hexdigest() != actual["sourceSha256"]):
+            raise DocumentError("diagram_render_failed")
+    try:
+        units = apply_diagram_layout(document, diagram_evidence, directory)
+    except (OSError, ValueError, KeyError, TypeError):
+        raise DocumentError("diagram_render_failed", diagnostic={"stage": "diagram_render", "reason": "reading_unit_verification_failed"}) from None
+    source_records = {item["figure_id"]: item for item in sources}
+    unit_records = {item["id"]: item for item in units}
+    records = []
+    for figure in (block for block in document["blocks"] if block["type"] == "figure"):
+        original_id = re.sub(r"_PANEL_\d+$", "", figure["id"])
+        source = source_records[original_id]
+        records.append({**unit_records.get(figure["id"], {"id": figure["id"], "image_sha256": rendered[original_id]["imageSha256"]}),
+                        "source_sha256": rendered[original_id]["sourceSha256"],
+                        "evidence_block_ids": source["evidence_block_ids"]})
+    content_path.write_text(json.dumps(document, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+    diagram_evidence = {**diagram_evidence,
+                        "contract_sha256": diagram_contract_hash(), "source_scope": "authored_chapter_blocks",
+                        "semantic_review": "human_review_required",
+                        "figure_count": len(records), "figures": records}
+    if diagram_issues:
+        from .product_worker import _bounded_quality_issues
+        diagram_evidence.update(quality_issues=_bounded_quality_issues(diagram_issues),
+                                quality_issue_count=len(diagram_issues), full_document_human_review_required=True)
+    if diagram_progress:
+        diagram_progress("completed", figure_count=structural["figure_count"])
+    return diagram_evidence
 
 
 def _publish_render_snapshot(root, directory, task, filename, document, evidence):
@@ -549,8 +745,8 @@ def _publish_render_snapshot(root, directory, task, filename, document, evidence
 
 
 def _render_document(task, chapters, manifest, runtime, document, filename, status, business_approval, extra_evidence=None,
-                     *, draft=False, diagram_generator=None, diagram_progress=None, workspace_key=None):
-    preflight = preflight_document_rendering()
+                     *, draft=False, diagram_generator=None, diagram_progress=None, workspace_key=None, diagram_step=None):
+    preflight = preflight_document_rendering(draft=draft)
     document = deepcopy(document)
     root = private_root().resolve()
     # A caller key identifies the job, while a second hash binds all inputs and
@@ -576,46 +772,17 @@ def _render_document(task, chapters, manifest, runtime, document, filename, stat
         if diagram_progress:
             diagram_progress("running", figure_count=structural["figure_count"])
         try:
-            diagram_issues = []
-            sources = _diagram_sources(document, diagram_generator, draft=draft, quality_issues=diagram_issues)
-            content_path.write_text(json.dumps(document, ensure_ascii=False, allow_nan=False), encoding="utf-8")
-            # Source is confined to owned private temporary input, even on renderer failure.
-            with tempfile.TemporaryDirectory(prefix="mermaid-", dir=directory) as temporary:
-                source_path = Path(temporary) / "input.json"
-                source_path.write_text(json.dumps({"diagrams": sources}, ensure_ascii=False, allow_nan=False), encoding="utf-8")
-                diagram_environment = _safe_environment()
-                diagram_environment["PORTAL_CHROMIUM_PATH"] = str(_mermaid_chromium())
-                diagrams = subprocess.run([str(_mermaid_runtime()), str(PACK.parent / "mermaid-runtime" / "render.mjs"),
-                                          str(content_path), str(source_path)],
-                                         cwd=directory, env=diagram_environment, capture_output=True,
-                                         timeout=int(getattr(settings, "PRODUCT_DOCUMENT_RENDER_TIMEOUT_SECONDS", 300)),
-                                         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
-            if diagrams.returncode != 0:
-                raise DocumentError("diagram_render_failed", diagnostic=_diagram_failure_diagnostic(diagrams))
-            diagram_evidence = _diagram_evidence(diagrams.stdout, structural["figure_count"])
-            rendered = {item["figure_id"]: item for item in diagram_evidence["figures"]}
-            planned = {block["id"]: block for block in document["blocks"] if block["type"] == "figure"}
-            if set(rendered) != set(planned):
-                raise DocumentError("diagram_render_failed")
-            for item in sources:
-                actual = rendered[item["figure_id"]]
-                image_path = (directory / planned[item["figure_id"]]["path"]).resolve()
-                if (not image_path.is_relative_to(directory) or not image_path.is_file()
-                        or hashlib.sha256(image_path.read_bytes()).hexdigest() != actual["imageSha256"]
-                        or hashlib.sha256(item["source"].encode()).hexdigest() != actual["sourceSha256"]):
-                    raise DocumentError("diagram_render_failed")
-            diagram_evidence = {**diagram_evidence,
-                                "contract_sha256": diagram_contract_hash(), "source_scope": "authored_chapter_blocks",
-                                "semantic_review": "human_review_required",
-                                "figures": [{"id": item["figure_id"], "source_sha256": rendered[item["figure_id"]]["sourceSha256"],
-                                             "image_sha256": rendered[item["figure_id"]]["imageSha256"],
-                                             "evidence_block_ids": item["evidence_block_ids"]} for item in sources]}
-            if diagram_issues:
-                from .product_worker import _bounded_quality_issues
-                diagram_evidence.update(quality_issues=_bounded_quality_issues(diagram_issues),
-                                        quality_issue_count=len(diagram_issues), full_document_human_review_required=True)
-            if diagram_progress:
-                diagram_progress("completed", figure_count=structural["figure_count"])
+            if draft:
+                diagram_evidence = _render_draft_diagrams(document, diagram_generator, directory, diagram_step)
+                structural = validate_document_requirements(document, allow_pending=True)
+                document.pop("diagram_pending", None)
+                content_path.write_text(json.dumps(document, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+                if diagram_progress:
+                    diagram_progress("pending" if diagram_evidence["pending_count"] else "completed",
+                        figure_count=diagram_evidence["rendered"], pending_count=diagram_evidence["pending_count"])
+            else:
+                diagram_evidence = _render_formal_diagrams(document, diagram_generator, directory, content_path, structural, diagram_progress)
+                structural = validate_document_requirements(document)
         except Exception:
             if diagram_progress:
                 diagram_progress("failed", figure_count=structural["figure_count"])
@@ -688,10 +855,10 @@ def _render_document(task, chapters, manifest, runtime, document, filename, stat
             "template_hash": template["sha256"], "render_evidence": evidence}
 
 
-def render_report_draft(task, input_revision, blueprint, chapters, family, *, draft=False, document=None, diagram_generator=None, diagram_progress=None, workspace_key=None):
+def render_report_draft(task, input_revision, blueprint, chapters, family, *, draft=False, document=None, diagram_generator=None, diagram_progress=None, workspace_key=None, diagram_step=None):
     from .product_blueprint_knowledge import blueprint_knowledge_status
     paragraphs = [paragraph for chapter in chapters for paragraph in chapter.payload.get("paragraphs", [])]
-    if has_repeated_filler(paragraphs):
+    if not draft and has_repeated_filler(paragraphs):
         raise DocumentError("repeated_body_filler")
     if not draft and family == "feasibility" and any(unsupported_financial_conclusion(paragraph) for paragraph in paragraphs):
         raise DocumentError("investment_evidence_required")
@@ -700,7 +867,7 @@ def render_report_draft(task, input_revision, blueprint, chapters, family, *, dr
     document = document if document is not None else content_document(task, input_revision, blueprint, chapters, family, draft=draft)
     return _render_document(task, chapters, manifest, runtime, document, "draft.docx", "draft_unverified", "blocked",
                             {"knowledge": blueprint_knowledge_status(input_revision.payload)},
-                            draft=draft, diagram_generator=diagram_generator, diagram_progress=diagram_progress, workspace_key=workspace_key)
+                            draft=draft, diagram_generator=diagram_generator, diagram_progress=diagram_progress, workspace_key=workspace_key, diagram_step=diagram_step)
 
 
 def render_draft(task, input_revision, blueprint, chapters, **diagram_options):

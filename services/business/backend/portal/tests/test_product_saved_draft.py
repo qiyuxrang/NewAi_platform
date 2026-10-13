@@ -50,8 +50,9 @@ class SavedDraftDownloadTests(PortalTestCase):
             response = self.owner_client.get(self.url())
             text = self.text(response)
             for expected in ('已保存技术正文。', '未完成章节：实施计划', '已保存章节：1 / 2',
-                             '生成未完成', '待配图', '待排版', '未审批'):
+                             '正文快照', '未包含完整图文排版', '无需再次审批'):
                 self.assertIn(expected, text)
+            self.assertNotIn('未审批', text)
             self.assertIn('no-store', response['Cache-Control'])
             self.assertEqual(response['X-Content-Type-Options'], 'nosniff')
             self.assertIn('.txt', response['Content-Disposition'])

@@ -157,10 +157,13 @@ class ProductQuantitySourceTests(SimpleTestCase):
             for issue in self.check("35kV开关柜2台。", approved=("1", "2"), items=items)))
 
     def test_ambiguous_same_names_never_guess_or_sum_distinct_objects(self):
-        for text in ("开关柜2台。", "开关柜3台。", "开关柜5台。"):
+        for text in ("开关柜2台。", "开关柜3台。"):
             with self.subTest(text=text):
                 self.assertTrue(any(issue["code"] == "quantity_source_ambiguous"
                     for issue in self.check(text, approved=("1", "2"))))
+        for text in ("开关柜5台。", "开关柜99台。"):
+            self.assertTrue(any(issue["code"] == "quantity_mismatch"
+                for issue in self.check(text, approved=("1", "2"))))
         items = [{"row_id": "1", "name": "10kV开关柜", "quantity": "2", "unit": "台"},
             {"row_id": "2", "name": "35kV开关柜", "quantity": "3", "unit": "台"}]
         self.assertEqual(self.check("10kV开关柜2台；35kV开关柜3台。", approved=("1", "2"), items=items), [])
@@ -243,7 +246,7 @@ class ProductWorkerTests(PortalTestCase):
         self.task.pending_action = "blueprint"
         self.task.stage = "BLUEPRINT"
         self.task.save(update_fields=["pending_action", "stage"])
-        model.return_value = {"content": json.dumps(self.blueprint_payload), "prompt_tokens": 1, "completion_tokens": 1}
+        model.return_value = {"content": json.dumps(self.model_blueprint()), "prompt_tokens": 1, "completion_tokens": 1}
 
         run_once()
 
@@ -254,6 +257,14 @@ class ProductWorkerTests(PortalTestCase):
         self.assertIn(json.dumps(payload["schema"], ensure_ascii=False), model.call_args.args[2][0]["content"])
         self.assertIn("建设目标和待分析议题不能代替项目事实", model.call_args.args[2][0]["content"])
 
+    def model_blueprint(self):
+        payload = deepcopy(self.blueprint_payload)
+        technical = [{**chapter, "family": "technical-solution"} for chapter in payload["chapters"]]
+        feasibility = [{**chapter, "id": "feas-" + chapter["id"], "family": "feasibility",
+                        "title": "可行性论证" + chapter["title"]} for chapter in payload["chapters"]]
+        payload["chapters"] = [*technical, *feasibility]
+        return payload
+
     def queue_blueprint_with_original_conditions(self):
         conditions = ["在现有机房部署", "支持权限控制和审计", "预算和工期待确认"]
         self.input_payload["conditions"] = conditions
@@ -261,7 +272,7 @@ class ProductWorkerTests(PortalTestCase):
         self.task.input_version = self.input_revision.version
         self.task.pending_action, self.task.stage = "blueprint", "BLUEPRINT"
         self.task.save(update_fields=["input_version", "pending_action", "stage"])
-        legal = deepcopy(self.blueprint_payload)
+        legal = self.model_blueprint()
         legal["conditions"] = [{"text": text, "type": "human"} for text in conditions]
         return legal
 
@@ -436,7 +447,7 @@ class ProductWorkerTests(PortalTestCase):
         self.task.pending_action = "blueprint"
         self.task.stage = "BLUEPRINT"
         self.task.save(update_fields=["pending_action", "stage"])
-        model.return_value = {"content": json.dumps(self.blueprint_payload), "prompt_tokens": 10, "completion_tokens": 20}
+        model.return_value = {"content": json.dumps(self.model_blueprint()), "prompt_tokens": 10, "completion_tokens": 20}
 
         run_once()
 
@@ -867,40 +878,41 @@ class ProductWorkerTests(PortalTestCase):
     @patch("portal.product_three_drafts.generate_report_drafts")
     @patch("portal.product_worker.generate_for_use")
     def test_approved_preview_gaps_generate_draft_with_true_review_and_pending(self, model, render):
+        # This content-policy test replaces the renderer and persists no artifact.
+        # Missing rendered output is recoverable generation, not human approval.
         self.queue_outputs(missing=["预算和工期待确认"])
         model.side_effect = self.generation_replies()
         run_once()
         self.task.refresh_from_db()
-        self.assertEqual((self.task.state, self.task.stage, self.task.error_code), ("WAITING_REVIEW", "FINAL_REVIEW", ""))
+        self.assertEqual((self.task.state, self.task.stage, self.task.error_code), ("WAITING_INPUT", "FINAL_REVIEW", "delivery_incomplete"))
         render.assert_called_once()
         request = json.loads(model.call_args.args[2][1]["content"])
-        self.assertEqual(request["action"], "independent_review")
-        self.assertEqual(request["draft_review_boundary"]["approved_pending_items"], ["预算和工期待确认"])
-        self.assertIn("仍须如实列入issues", request["draft_review_boundary"]["instruction"])
+        self.assertEqual(request["action"], "chapter")
+        self.assertEqual(model.call_count, 3)
         review = self.task.revisions.get(kind="review").payload
         self.assertEqual(review["issues"], [{"code": "unresolved_blueprint_items"}])
         self.assertEqual(review["draft_pending"], ["预算和工期待确认"])
-        self.assertEqual({key: review["model_review"][key] for key in
-                          ("status", "issues", "scope", "full_document_human_review_required")},
-                         {"status": "passed", "issues": [], "scope": "full", "full_document_human_review_required": False})
-        self.assertTrue(review["model_review"]["coverage"]["complete"])
+        self.assertEqual(review["model_review"],
+                         {"status": "not_run", "scope": "program_only", "full_document_human_review_required": True})
+        self.assertNotIn("coverage", review["model_review"])
         self.assertFalse(review["passed"])
         self.assertEqual(review["human_review"], "required")
         self.assertTrue(review["full_document_human_review_required"])
-        self.assertTrue(self.task.checkpoint["analysis_progress"]["outputs"]["full_document_human_review_required"])
+        self.assertFalse(self.task.checkpoint["analysis_progress"]["outputs"]["second_approval_required"])
+        self.assertFalse(self.task.artifacts.exists())
         self.assertFalse(self.task.approvals.filter(revision__kind="report").exists())
 
     @override_settings(PRODUCT_BLUEPRINT_KNOWLEDGE_MODE="source_only_preview")
     @patch("portal.product_three_drafts.generate_report_drafts")
     @patch("portal.product_worker.generate_for_use")
-    def test_preview_gaps_never_bypass_input_issues_conflicts_or_reviewer_findings(self, model, render):
+    def test_preview_gaps_keep_input_issues_and_conflicts_visible_in_draft(self, model, render):
         self.queue_outputs(missing=["预算和工期待确认"], input_issues=[{"code": "source_conflict"}],
                            conflicts=["输入资料存在冲突"])
         model.side_effect = self.generation_replies()
         run_once()
         self.task.refresh_from_db()
-        self.assertEqual(self.task.error_code, "content_review_required")
-        render.assert_not_called()
+        self.assertEqual((self.task.state, self.task.error_code), ("WAITING_INPUT", "delivery_incomplete"))
+        render.assert_called_once()
         review = self.task.revisions.get(kind="review").payload
         self.assertEqual({issue["code"] for issue in review["issues"]},
                          {"unresolved_blueprint_items", "unresolved_input_items"})
@@ -909,29 +921,30 @@ class ProductWorkerTests(PortalTestCase):
     @override_settings(PRODUCT_BLUEPRINT_KNOWLEDGE_MODE="source_only_preview")
     @patch("portal.product_three_drafts.generate_report_drafts")
     @patch("portal.product_worker.generate_for_use")
-    def test_preview_gaps_do_not_hide_model_review_findings(self, model, render):
+    def test_preview_draft_truthfully_does_not_claim_unused_model_review_findings(self, model, render):
         self.queue_outputs(missing=["预算和工期待确认"])
         model.side_effect = self.generation_replies(passed=False, issues=["方案依据仍需核实"])
         run_once()
         self.task.refresh_from_db()
-        self.assertEqual((self.task.state, self.task.error_code), ("WAITING_REVIEW", ""))
+        self.assertEqual((self.task.state, self.task.error_code), ("WAITING_INPUT", "delivery_incomplete"))
         render.assert_called_once()
         review = self.task.revisions.get(kind="review").payload
-        self.assertEqual(review["model_review"]["status"], "issues_found")
-        self.assertEqual(review["model_review"]["issues"], ["方案依据仍需核实"])
+        self.assertEqual(review["model_review"]["status"], "not_run")
+        self.assertNotIn("issues", review["model_review"])
+        self.assertEqual(model.call_count, 3)
         self.assertFalse(review["passed"])
         self.assertTrue(review["full_document_human_review_required"])
 
     @override_settings(PRODUCT_BLUEPRINT_KNOWLEDGE_MODE="source_only_preview")
     @patch("portal.product_three_drafts.generate_report_drafts")
     @patch("portal.product_worker.generate_for_use")
-    def test_preview_pending_exception_still_blocks_input_issues_without_conflicts(self, model, render):
+    def test_preview_draft_warns_input_issues_without_conflicts(self, model, render):
         self.queue_outputs(missing=["预算待确认"], input_issues=[{"code": "missing_equipment_quantity"}])
         model.side_effect = self.generation_replies()
         run_once()
         self.task.refresh_from_db()
-        self.assertEqual(self.task.error_code, "content_review_required")
-        render.assert_not_called()
+        self.assertEqual((self.task.state, self.task.error_code), ("WAITING_INPUT", "delivery_incomplete"))
+        render.assert_called_once()
         review = self.task.revisions.get(kind="review").payload
         self.assertIn({"code": "unresolved_input_items"}, review["issues"])
         self.assertEqual(review["draft_pending"], ["预算待确认"])
@@ -939,7 +952,7 @@ class ProductWorkerTests(PortalTestCase):
     @override_settings(PRODUCT_BLUEPRINT_KNOWLEDGE_MODE="ragflow_required")
     @patch("portal.product_three_drafts.generate_report_drafts")
     @patch("portal.product_worker.generate_for_use")
-    def test_formal_review_does_not_receive_preview_pending_exception(self, model, render):
+    def test_draft_content_policy_does_not_depend_on_knowledge_preview_mode(self, model, render):
         # Enter the already-authorized action boundary to isolate the content
         # gate; the graph's separate RAGFlow permission gate remains unchanged.
         from portal.product_worker import _execute_claim_action
@@ -948,8 +961,8 @@ class ProductWorkerTests(PortalTestCase):
         task_id, fence, attempt_id = claim_task()
         _execute_claim_action(task_id, fence, attempt_id)
         self.task.refresh_from_db()
-        self.assertEqual(self.task.error_code, "content_review_required")
-        render.assert_not_called()
+        self.assertEqual((self.task.state, self.task.error_code), ("WAITING_INPUT", "delivery_incomplete"))
+        render.assert_called_once()
         request = json.loads(model.call_args.args[2][1]["content"])
         self.assertNotIn("draft_review_boundary", request)
         self.assertNotIn("draft_pending", self.task.revisions.get(kind="review").payload)
@@ -962,16 +975,16 @@ class ProductWorkerTests(PortalTestCase):
         replies = self.generation_replies()
         chapter = json.loads(replies[0]["content"])
         chapter["paragraphs"] = ["测试设备数量999台。"]
-        replies = [{"content": json.dumps(chapter)}] * 2
+        replies = [{"content": json.dumps(chapter)}, *replies[1:]]
         model.side_effect = replies
         run_once()
         self.task.refresh_from_db()
-        self.assertEqual(self.task.error_code, "invalid_model_output")
-        render.assert_not_called()
-        self.assertEqual(model.call_count, 2)
-        self.assertFalse(self.task.revisions.filter(kind="chapter").exists())
+        self.assertEqual((self.task.state, self.task.error_code), ("WAITING_INPUT", "delivery_incomplete"))
+        render.assert_called_once()
+        self.assertEqual(model.call_count, 3)
+        self.assertEqual(self.task.revisions.filter(kind="chapter").count(), 3)
         self.assertIn("quantity_mismatch", {issue["code"] for issue in
-            self.task.checkpoint["last_failure"]["quality_issues"]})
+            self.task.revisions.get(kind="review").payload["issues"]})
 
     @override_settings(PRODUCT_BLUEPRINT_KNOWLEDGE_MODE="source_only_preview")
     @patch("portal.product_three_drafts.generate_report_drafts")
@@ -984,7 +997,7 @@ class ProductWorkerTests(PortalTestCase):
         model.side_effect = self.generation_replies()
         run_once()
         self.task.refresh_from_db()
-        self.assertEqual((self.task.state, self.task.stage), ("WAITING_REVIEW", "FINAL_REVIEW"))
+        self.assertEqual((self.task.state, self.task.stage, self.task.error_code), ("WAITING_INPUT", "FINAL_REVIEW", "delivery_incomplete"))
         render.assert_called_once()
         review = self.task.revisions.get(kind="review").payload
         self.assertFalse(review["passed"])
@@ -999,7 +1012,7 @@ class ProductWorkerTests(PortalTestCase):
         self.assertFalse(_approved_pending_draft(self.task, self.blueprint))
 
     @patch("portal.product_worker.generate_for_use")
-    def test_explicit_quantity_pending_approval_retains_body_findings_and_blocks_real_mismatch(self, model):
+    def test_explicit_quantity_pending_keeps_draft_findings_and_formal_blocks_mismatch(self, model):
         from portal.product_worker import _DRAFT_QUANTITY_PENDING_CONDITION, _ensure_content_review
         from portal.product_documents import content_document
         self.input_payload["items"].extend([
@@ -1023,8 +1036,9 @@ class ProductWorkerTests(PortalTestCase):
         self.assertEqual(review.payload["approved_pending"]["quantity_issues"][0]["code"], "quantity_source_ambiguous")
         document = content_document(self.task, self.input_revision, self.blueprint, chapters, draft=True,
                                     review_issues=review.payload["issues"])
-        self.assertIn("第1章第1段", document["pending"][0]["text"])
-        self.assertIn("未经确认", document["pending"][0]["text"])
+        self.assertFalse(document["pending"])
+        self.assertTrue(review.payload["approved_pending"]["quantity_issues"])
+        self.assertNotIn("第1章第1段", "\n".join(block.get("text", "") for block in document["blocks"]))
         chapters[0].refresh_from_db()
         self.assertEqual(chapters[0].payload, original)
         self.task.pending_action = "write"
@@ -1034,6 +1048,10 @@ class ProductWorkerTests(PortalTestCase):
         wrong = {**original, "paragraphs": ["变压器999台。"], "source_ids": ["r3"]}
         chapters[0] = append_revision(self.task, "chapter", wrong, input_hash=self.input_revision.sha256,
                                       blueprint_hash=self.blueprint.sha256)
+        review = _ensure_content_review(self.task, fence, attempt_id, self.input_revision, self.blueprint, chapters)
+        self.assertFalse(review.payload["passed"])
+        self.assertIn("quantity_mismatch", {issue["code"] for issue in review.payload["issues"]})
+        self.task.pending_action = "write"
         with self.assertRaises(ExecutionError) as error:
             _ensure_content_review(self.task, fence, attempt_id, self.input_revision, self.blueprint, chapters)
         self.assertIn("quantity_mismatch", {issue["code"] for issue in error.exception.quality_issues})
@@ -1082,18 +1100,18 @@ class ProductWorkerTests(PortalTestCase):
     @override_settings(PRODUCT_BLUEPRINT_KNOWLEDGE_MODE="source_only_preview")
     @patch("portal.product_three_drafts.generate_report_drafts")
     @patch("portal.product_worker.generate_for_use")
-    def test_batched_model_review_cannot_complete_without_full_human_review(self, model, render):
+    def test_long_input_does_not_fabricate_batched_review_or_complete_missing_artifact(self, model, render):
         self.input_payload["requirements"] = "完整约束待确认。" * 3000
         self.queue_outputs()
         model.side_effect = self.generation_replies()
         run_once()
         self.task.refresh_from_db()
-        self.assertEqual(self.task.state, "WAITING_REVIEW")
+        self.assertEqual((self.task.state, self.task.error_code), ("WAITING_INPUT", "delivery_incomplete"))
         render.assert_called_once()
         review = self.task.revisions.get(kind="review").payload
-        self.assertEqual(review["model_review"]["status"], "passed")
-        self.assertEqual(review["model_review"]["scope"], "full_batched")
-        self.assertTrue(review["model_review"]["coverage"]["complete"])
+        self.assertEqual(review["model_review"]["status"], "not_run")
+        self.assertEqual(review["model_review"]["scope"], "program_only")
+        self.assertNotIn("coverage", review["model_review"])
         self.assertFalse(review["passed"])
         self.assertEqual(review["human_review"], "required")
 
@@ -1115,7 +1133,7 @@ class ProductWorkerTests(PortalTestCase):
                 self.assertEqual(contract["family_minimum_characters"], minimum)
                 self.assertEqual(contract["body_characters_by_chapter"], counts)
                 self.assertEqual(contract["chapter_count"], 8)
-                self.assertEqual(contract["length_check_status"], "target_met")
+                self.assertEqual(contract["length_check_status"], "below_target")
                 self.assertTrue(contract["full_document_human_review_required"])
                 self.assertIn("片段末尾不是实际章节结尾", contract["sample_boundary"])
                 self.assertIn("source_ids是合法引用元数据，不属于正文", contract["citation_boundary"])
@@ -1155,7 +1173,7 @@ class ProductWorkerTests(PortalTestCase):
         self.assertEqual(request["conditions"], [])
         self.assertEqual(request["review_contract"]["actual_body_characters"], 64000)
         self.assertEqual(request["review_contract"]["body_characters_by_chapter"], [8000] * 8)
-        self.assertEqual(request["review_contract"]["length_check_status"], "target_met")
+        self.assertEqual(request["review_contract"]["length_check_status"], "below_target")
         self.assertTrue(all(item["sample_truncated"] and len(item["sample"]) <= 500 for item in request["chapters"]))
         self.assertLessEqual(len(json.dumps(request, ensure_ascii=False)), 14500)
 
@@ -1193,19 +1211,21 @@ class ProductWorkerTests(PortalTestCase):
     @override_settings(PRODUCT_BLUEPRINT_KNOWLEDGE_MODE="source_only_preview")
     @patch("portal.product_three_drafts.generate_report_drafts")
     @patch("portal.product_worker.generate_for_use")
-    def test_batched_review_contract_preserves_real_commitment_findings(self, model, render):
+    def test_long_draft_keeps_pending_and_does_not_fabricate_model_findings(self, model, render):
         self.input_payload["requirements"] = "完整约束待确认。" * 3000
         self.queue_outputs(missing=["预算待确认"])
         model.side_effect = self.generation_replies(passed=False, issues=["正文存在未经确认的安全实现承诺"])
         run_once()
         self.task.refresh_from_db()
-        self.assertEqual((self.task.state, self.task.error_code), ("WAITING_REVIEW", ""))
+        self.assertEqual((self.task.state, self.task.error_code), ("WAITING_INPUT", "delivery_incomplete"))
         render.assert_called_once()
         request = json.loads(model.call_args.args[2][1]["content"])
-        self.assertEqual(request["review_contract"]["scope"], "full_batched")
+        self.assertEqual(request["action"], "chapter")
         review = self.task.revisions.get(kind="review").payload
-        self.assertEqual(review["model_review"]["status"], "issues_found")
-        self.assertEqual(review["model_review"]["issues"], ["正文存在未经确认的安全实现承诺"])
+        self.assertEqual(review["model_review"]["status"], "not_run")
+        self.assertNotIn("issues", review["model_review"])
+        self.assertNotIn("coverage", review["model_review"])
+        self.assertIn({"code": "unresolved_blueprint_items"}, review["issues"])
         self.assertFalse(review["passed"])
         self.assertTrue(review["model_review"]["full_document_human_review_required"])
 
@@ -1908,6 +1928,8 @@ class ProductWorkerTests(PortalTestCase):
     def test_split_quote_is_corrected_as_complete_batch_before_save(self, model):
         from portal.product_worker import _generate_family
         self.queue_numbered_outline()
+        self.task.pending_action = "write"
+        self.task.save(update_fields=["pending_action"])
         invalid = json.loads(self.reply("chapter-1")["content"])
         invalid["paragraphs"] = ["建设目标不能由", "统一", "这一目标预设现状能力。"]
         legal = {**invalid, "paragraphs": ["建设目标不能由“统一”这一目标预设现状能力。",
@@ -1956,6 +1978,8 @@ class ProductWorkerTests(PortalTestCase):
     def test_isolated_preposition_cannot_consume_writing_parts_as_saved_body(self, model):
         from portal.product_worker import _generate_family
         self.queue_numbered_outline()
+        self.task.pending_action = "write"
+        self.task.save(update_fields=["pending_action"])
         invalid = json.loads(self.reply("chapter-1")["content"])
         invalid["paragraphs"] = ["关于"]
         model.return_value = {"content": json.dumps(invalid)}

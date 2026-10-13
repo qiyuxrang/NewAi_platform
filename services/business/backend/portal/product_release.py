@@ -12,16 +12,61 @@ def evidence_file(record):
     return verified_artifact(SimpleNamespace(path=record["path"], sha256=record["sha256"]))
 
 
+def public_quality_warnings(evidence, review_issues=()):
+    """Expose bounded draft findings, never renderer paths or authored paragraphs."""
+    quality = evidence.get("draft_quality") or {}
+    diagrams = evidence.get("diagram_generation") or {}
+    codes = list(quality.get("quality_issue_codes") or [])
+    codes.extend(issue.get("code") for issue in review_issues if isinstance(issue, dict))
+    content_count = len(set(code for code in codes if isinstance(code, str)))
+    codes.extend(issue.get("code") for issue in diagrams.get("quality_issues", []) if isinstance(issue, dict))
+    issues = [{"code": code} for code in dict.fromkeys(code for code in codes
+              if isinstance(code, str) and code and len(code) <= 64)][:10]
+    count = quality.get("quality_issue_count", 0)
+    diagram_count = diagrams.get("quality_issue_count", 0)
+    result = {"issue_count": max(count if type(count) is int and count >= 0 else 0,
+                                 len(review_issues), content_count)
+                            + (diagram_count if type(diagram_count) is int and diagram_count >= 0 else 0),
+              "issues": issues}
+    for field in ("actual_characters", "minimum_characters"):
+        value = quality.get(field)
+        if type(value) is int and value >= 0:
+            result[field] = value
+    if "planned_count" in diagrams:
+        pending = [{"figure_id": str(item.get("figure_id", ""))[:100],
+                    "error_code": str(item.get("error_code", "diagram_pending"))[:64]}
+                   for item in diagrams.get("pending_figures", [])[:100] if isinstance(item, dict)]
+        result["figures"] = {"planned": diagrams.get("planned_count", 0),
+                             "rendered": diagrams.get("rendered", 0), "pending": pending,
+                             "pending_count": diagrams.get("pending_count", len(pending))}
+    return result
+
+
+def public_presentation_plan(plan):
+    """Only presentation copy and bindings; renderer paths never leave storage."""
+    if not isinstance(plan, dict) or not isinstance(plan.get("pages"), list):
+        return None
+    result = {key: plan[key] for key in ("schema_version", "locked", "style", "style_label", "goal", "goal_label",
+        "selection_reason", "selection_reasons", "pair_hash", "input_hash", "blueprint_hash") if key in plan}
+    result["sources"] = [{key: source[key] for key in ("family", "id", "version", "sha256") if key in source}
+                         for source in plan.get("sources", []) if isinstance(source, dict)]
+    result["pages"] = [{key: page[key] for key in ("page", "title", "type", "items", "speaker_notes", "source_refs", "layout")
+                        if key in page} for page in plan["pages"] if isinstance(page, dict)]
+    return result
+
+
 def public_evidence(evidence):
     return {key: value for key, value in evidence.items() if key in
             {"kind", "status", "verified", "docx_sha256", "page_count", "visual_review", "template_approval_hash"}} | {
-        "pages": [{"page": page.get("page"), "sha256": page.get("sha256")} for page in evidence.get("pages", [])]
+        "pages": [{"page": page.get("page"), "sha256": page.get("sha256")} for page in evidence.get("pages", [])],
+        "quality_warnings": public_quality_warnings(evidence),
+        "presentation_plan": public_presentation_plan(evidence.get("presentation_plan")),
     }
 
 
 def candidate_current(artifact, *, visual=False):
     from .product_documents import DocumentError, _template_approval, frozen_pack
-    from .product_service import approved_blueprint, digest, input_authorized, approval_authorization
+    from .product_service import approved_blueprint, blueprint_chapters, digest, input_authorized, approval_authorization
 
     task = artifact.task
     evidence = artifact.render_evidence
@@ -45,9 +90,9 @@ def candidate_current(artifact, *, visual=False):
             or task.artifacts.filter(family=artifact.family).order_by("-version").values_list("pk", flat=True).first() != artifact.pk):
         return False
     chapter_hashes = {}
-    for chapter in task.revisions.filter(kind="chapter", input_hash=current_input.sha256, blueprint_hash=blueprint.sha256).order_by("version"):
+    for chapter in task.revisions.filter(kind="chapter", family=artifact.family, input_hash=current_input.sha256, blueprint_hash=blueprint.sha256).order_by("version"):
         chapter_hashes[chapter.payload["chapter_id"]] = chapter.sha256
-    if (set(chapter_hashes) != {chapter["id"] for chapter in blueprint.payload["chapters"]}
+    if (set(chapter_hashes) != {chapter["id"] for chapter in blueprint_chapters(blueprint.payload, artifact.family)}
             or review.payload.get("chapter_hashes") != chapter_hashes):
         return False
     try:

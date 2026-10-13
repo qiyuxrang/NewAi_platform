@@ -219,7 +219,10 @@ _ALERTMANAGER = re.compile(r"(?<![A-Za-z0-9_])Alertmanager(?![A-Za-z0-9_])", re.
 
 def content_quality_policy_hash():
     """Invalidate stored review/cache decisions whenever this policy changes."""
-    return hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    policy = Path(__file__)
+    return hashlib.sha256(b"\0".join(path.read_bytes() for path in (
+        policy, policy.with_name("product_worker.py"), policy.with_name("product_documents.py"),
+    ))).hexdigest()
 
 
 def generation_quality_rules():

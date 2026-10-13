@@ -13,6 +13,7 @@ from .models import User
 from .product_api import product_endpoint, _task_summary
 from .product_models import DocumentArtifact, DocumentRevision, DocumentSource, DocumentTask
 from .product_pair import output_current
+from .product_delivery import artifact_delivery
 from .product_service import (ProductError, input_authorized,
                               product_user_allowed, reviewer_allowed, task_for)
 from .product_storage import StorageError, verified_artifact
@@ -83,7 +84,7 @@ def _recent_outputs(tasks):
         if artifact.family not in OUTPUT_FAMILIES or not input_authorized(task, revision):
             continue
         current = output_current(task, artifact)
-        delivered = bool(current and task.agent_root_id and task.state == "COMPLETED")
+        delivered = artifact_delivery(artifact, current=current)["delivered"]
         result.append({"id": str(artifact.pk), "task_id": str(task.pk), "title": task.title,
                        "family": artifact.family, "version": artifact.version,
                        "created_at": artifact.created_at.isoformat(), "current": current,
@@ -149,7 +150,7 @@ def outputs(request):
                 continue
         except ProductError:
             continue
-        delivered = bool(current and task.agent_root_id and task.state == "COMPLETED")
+        delivered = artifact_delivery(artifact, current=current)["delivered"]
         result.append({"id": str(artifact.pk), "task_id": str(task.pk), "title": task.title,
                        "family": artifact.family, "version": artifact.version,
                        "created_at": artifact.created_at.isoformat(), "current": current,
@@ -207,7 +208,7 @@ def workspace(request):
         "templates": [{"id": "frozen-original-v1", "name": "产品项目文档母版", "version": "frozen-original-v1",
                        "families": ["technical-solution", "feasibility", "presentation"],
                        "approved": bool(settings.PRODUCT_TEMPLATE_APPROVAL),
-                       "description": "确认蓝图后自动生成技术方案、可研报告与汇报 PPT 草稿，保留独立成果版本和来源链。"}],
+                       "description": "本人确认蓝图后自动生成技术方案、可研报告与汇报 PPT，完整有效成果直接交付，保留独立版本和来源链。"}],
     })
     response["Cache-Control"] = "private, no-store"
     audit(request.user, "product_workspace_read", f"workspace:r{request.product_request_id}")

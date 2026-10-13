@@ -16,7 +16,7 @@ from rest_framework.response import Response
 
 from .product_models import (DocumentApproval, DocumentArtifact, DocumentAttempt,
                              DocumentRevision, DocumentTask)
-from .product_service import (ProductError, append_revision, approved_blueprint,
+from .product_service import (ProductError, append_revision, approved_blueprint, blueprint_chapters,
                               artifact_releasable, attach_import_path, attach_source, digest,
                               effective_artifact_approval, eligible_reviewer,
                               invalidate_generation, product_user_allowed,
@@ -24,13 +24,15 @@ from .product_service import (ProductError, append_revision, approved_blueprint,
                               source_ids_belong, task_for, validate_blueprint, resolve_input_issues, input_authorized, approval_authorization, approval_current,
                               validate_chapter, validate_input)
 from .product_storage import StorageError, remove_relative, verified_artifact
-from .product_release import CONTENT_CHECKS, candidate_current, evidence_file, public_evidence
+from .product_release import CONTENT_CHECKS, candidate_current, evidence_file, public_evidence, public_quality_warnings
 from .product_pair import latest_report_content, output_current, pair_snapshot, report_current
 from .security import audit
 from .models import User
 from .product_intake import summary as extraction_summary
 from .product_service import require_project_materials
 from .product_blueprint_knowledge import blueprint_knowledge_status, require_generation_knowledge
+from .product_delivery import artifact_delivery
+from .product_release import public_presentation_plan
 
 
 def product_endpoint(function):
@@ -164,14 +166,30 @@ def _chapters_complete(task, input_revision, blueprint):
     current = {
         chapter.payload.get("chapter_id")
         for chapter in task.revisions.filter(
-            kind=DocumentRevision.Kind.CHAPTER,
+            kind=DocumentRevision.Kind.CHAPTER, family="technical-solution",
             input_hash=input_revision.sha256,
             blueprint_hash=blueprint.sha256,
         )
         if chapter.payload.get("paragraphs")
     }
-    required = {chapter["id"] for chapter in blueprint.payload["chapters"]}
+    required = {chapter["id"] for chapter in blueprint_chapters(blueprint.payload)}
     return bool(required and required <= current)
+
+
+def _pending_diagram_repair(task):
+    return (task.state in {DocumentTask.State.WAITING_REVIEW, DocumentTask.State.WAITING_INPUT}
+            and task.stage == DocumentTask.Stage.FINAL_REVIEW
+            and any(artifact.render_evidence.get("kind") == "draft"
+                    and artifact.render_evidence.get("diagram_generation", {}).get("pending_count", 0) > 0
+                    and output_current(task, artifact) for artifact in task.artifacts.all()))
+
+
+def _require_presentation_sources(task):
+    pair = pair_snapshot(task)
+    reports = pair.get("draft_quality", {}).get("reports", [])
+    if len(reports) != 2 or any(report.get("delivery_status") != "delivered" for report in reports):
+        raise ProductError("source_reports_incomplete", "请先完成两份有效报告，再生成或更换 PPT 风格。", 409)
+    return pair
 
 
 def _task_actions(task, user, input_revision, blueprint):
@@ -189,17 +207,27 @@ def _task_actions(task, user, input_revision, blueprint):
         if queueable and input_revision is not None:
             actions.extend(["queue_retrieve", "queue_blueprint"])
             knowledge_status = blueprint_knowledge_status(input_revision.payload)
-            if knowledge_status["required"] and knowledge_status["status"] != "ready":
+            if knowledge_status["required"] and not knowledge_status.get("evidence_ready"):
                 actions.append("queue_blueprint_knowledge")
         if (queueable and task.state == DocumentTask.State.WAITING_REVIEW
                 and task.stage == DocumentTask.Stage.BLUEPRINT and blueprint is not None):
             actions.append("confirm_blueprint")
-        if (task.state in {DocumentTask.State.FAILED, DocumentTask.State.WAITING_INPUT}
+        if ((task.state in {DocumentTask.State.FAILED, DocumentTask.State.WAITING_INPUT}
+                and task.pending_action in {"knowledge", "blueprint", "generate_outputs", "presentation", "three_drafts"}
+                or _pending_diagram_repair(task))
                 and task.attempt_count < int(getattr(settings, "PRODUCT_MAX_ATTEMPTS", 8))
-                and task.pending_action in {"knowledge", "blueprint", "generate_outputs"}):
+                ):
             actions.append("retry")
         if not (task.state in {DocumentTask.State.QUEUED, DocumentTask.State.RUNNING} or ended):
             actions.append("add_statement")
+        if (not busy and task.state != DocumentTask.State.CANCELLED and approved
+                and (task.state == DocumentTask.State.COMPLETED
+                     or task.attempt_count < int(getattr(settings, "PRODUCT_MAX_ATTEMPTS", 8)))):
+            try:
+                _require_presentation_sources(task)
+                actions.append("queue_presentation")
+            except ProductError:
+                pass
 
     # The owner confirms the blueprint in the single-user workflow. Input/source
     # checks remain explicit; legacy assigned reviewers may still resolve these.
@@ -238,15 +266,15 @@ def _task_blockers(actions, input_revision=None):
             }
     if input_revision is not None:
         knowledge = blueprint_knowledge_status(input_revision.payload)
-        if knowledge["required"] and (knowledge["status"] != "ready" or knowledge["source_count"] == 0):
+        if knowledge["required"] and not knowledge.get("evidence_ready"):
             blocker = {
                 "code": "ragflow_required",
                 "detail": knowledge["detail"],
             }
             if knowledge["status"] == "ready":
                 blocker = {
-                    "code": "web_search_unconfigured",
-                    "detail": "知识库未命中且联网搜索服务尚未接入，请补充知识库资料后重新检索。",
+                    "code": knowledge.get("web_search", {}).get("code", "web_search_unconfigured"),
+                    "detail": knowledge["detail"],
                 }
             for action in ("save_blueprint", "confirm_blueprint", "queue_blueprint"):
                 if action in actions:
@@ -323,14 +351,15 @@ def _task_detail(task, user):
         if not input_access.get(artifact.input_hash, False):
             continue
         approved = effective_artifact_approval(artifact) is not None
-        delivered = bool(task.agent_root_id and task.state == DocumentTask.State.COMPLETED
-                         and output_current(task, artifact))
+        delivery = artifact_delivery(artifact)
+        delivered = delivery["delivered"]
         artifacts.append({
             "id": str(artifact.pk), "family": artifact.family, "version": artifact.version, "sha256": artifact.sha256,
             "blueprint_hash": artifact.blueprint_hash, "input_hash": artifact.input_hash,
             "review_id": str(artifact.review_id) if artifact.review_id else None,
             "render_evidence": public_evidence(artifact.render_evidence), "template_hash": artifact.template_hash,
-            "approved": approved, "delivered": delivered, "draft": not (approved or delivered),
+            "approved": approved, "delivered": delivered, "draft": not approved and not delivered,
+            "delivery_decision": delivery,
             "created_at": artifact.created_at.isoformat(),
         })
     sources = [{
@@ -359,15 +388,35 @@ def _task_detail(task, user):
     if review:
         issues.extend(review.payload.get("issues", []))
         issues.extend({"code": "model_review_issue", "text": value} for value in review.payload.get("model_review", {}).get("issues", []))
-    if not getattr(settings, "PRODUCT_FORMAL_RELEASE_ENABLED", False) and not task.agent_root_id:
-        issues.append({"code": "formal_release_blocked", "text": "D-02 格式与发布基线未批准，成果仅可作为草稿。"})
+    quality_warnings = {}
+    for record in task.revisions.filter(kind=DocumentRevision.Kind.REVIEW,
+            input_hash=input_revision.sha256 if input_revision else "",
+            blueprint_hash=blueprint.sha256 if blueprint else "").order_by("-version"):
+        if record.family not in quality_warnings:
+            quality_warnings[record.family] = public_quality_warnings({}, record.payload.get("issues", []))
+    for artifact in task.artifacts.order_by("version"):
+        if input_access.get(artifact.input_hash, False) and output_current(task, artifact):
+            quality_warnings[artifact.family] = public_quality_warnings(artifact.render_evidence,
+                artifact.review.payload.get("issues", []) if artifact.review else [])
     actions = _task_actions(task, user, input_revision, blueprint)
     revision_count = task.approvals.filter(
         revision__kind=DocumentRevision.Kind.BLUEPRINT,
         decision=DocumentApproval.Decision.REVISE,
     ).count()
     revision_limit = int(getattr(settings, "PRODUCT_BLUEPRINT_MAX_REVISIONS", 3))
+    attempt_limit = int(getattr(settings, "PRODUCT_MAX_ATTEMPTS", 8))
     knowledge = blueprint_knowledge_status(input_revision.payload if input_revision else {})
+    presentation_plan = task.checkpoint.get("presentation_plan")
+    if (not isinstance(presentation_plan, dict) or not input_revision or not blueprint
+            or presentation_plan.get("input_hash") != input_revision.sha256
+            or presentation_plan.get("blueprint_hash") != blueprint.sha256):
+        presentation_plan = None
+    if presentation_plan:
+        try:
+            if presentation_plan.get("pair_hash") != pair_snapshot(task)["sha256"]:
+                presentation_plan = None
+        except ProductError:
+            presentation_plan = None
     return {
         "id": str(task.pk), "title": task.title, "state": task.state, "stage": task.stage,
         "version": task.version, "input_version": task.input_version,
@@ -378,6 +427,8 @@ def _task_detail(task, user):
         "input": input_revision.payload if input_revision else None,
         "blueprint": _revision_data(blueprint), "chapters": chapters, "reports": reports, "artifacts": artifacts,
         "sources": sources, "approvals": approvals, "issues": issues,
+        "quality_warnings": [{"family": family, **warning} for family, warning in quality_warnings.items()
+                             if warning["issue_count"] or warning.get("figures", {}).get("pending")],
         "error_code": task.error_code,
         "content_failure": _content_failure(task),
         "actions": actions, "blockers": _task_blockers(actions, input_revision),
@@ -396,6 +447,11 @@ def _task_detail(task, user):
         "output_generation": task.checkpoint.get("output_generation", {}),
         "generation_steps": public_steps(task),
         "retry_after": task.retry_after.isoformat() if task.retry_after else None,
+        "retry_budget": {
+            "used": task.attempt_count,
+            "limit": attempt_limit,
+            "remaining": max(0, attempt_limit - task.attempt_count),
+        },
         "activity": task.checkpoint.get('analysis_events', []),
         "orchestration": {
             "engine": "langgraph",
@@ -413,6 +469,7 @@ def _task_detail(task, user):
         "impact": task.checkpoint.get("impact", {}),
         "intake_mode": task.checkpoint.get("intake_mode", "manual"),
         "analysis_progress": task.checkpoint.get("analysis_progress", {}),
+        "presentation_plan": public_presentation_plan(presentation_plan),
     }
 
 
@@ -789,7 +846,8 @@ def _queue(task, action):
     start_workflow = action == "start"
     if start_workflow:
         action = "blueprint"
-    if task.state in {DocumentTask.State.QUEUED, DocumentTask.State.RUNNING, DocumentTask.State.CANCELLED, DocumentTask.State.COMPLETED}:
+    if (task.state in {DocumentTask.State.QUEUED, DocumentTask.State.RUNNING, DocumentTask.State.CANCELLED}
+            or task.state == DocumentTask.State.COMPLETED and action != "presentation"):
         raise ProductError("invalid_state", "当前状态不能排队。", 409)
     if action in {"blueprint", "retrieve", "knowledge"}:
         if _input_revision(task) is None:
@@ -816,15 +874,17 @@ def _queue(task, action):
                 raise ProductError("chapters_incomplete", "当前蓝图章节尚未完整保存。", 409)
         if action == "three_drafts":
             current = _input_revision(task)
-            required = {chapter["id"] for chapter in blueprint_revision.payload["chapters"]}
             for family in ("technical-solution", "feasibility"):
+                required = {chapter["id"] for chapter in blueprint_chapters(blueprint_revision.payload, family)}
                 found = {record.payload.get("chapter_id") for record in task.revisions.filter(
                     kind="chapter", family=family, input_hash=current.sha256, blueprint_hash=blueprint_revision.sha256)
                     if record.payload.get("paragraphs")}
                 if not required <= found:
                     raise ProductError("chapters_incomplete", f"{family} 报告章节尚未完整保存。", 409)
         if action == "presentation":
-            pair_snapshot(task)
+            _require_presentation_sources(task)
+            if task.state != DocumentTask.State.COMPLETED and task.attempt_count >= int(getattr(settings, "PRODUCT_MAX_ATTEMPTS", 8)):
+                raise ProductError("attempt_limit", "当前生成周期已达到重试上限。", 409)
     else:
         raise ProductError("invalid_action", "任务动作无效。")
     task.pending_action = action
@@ -839,11 +899,23 @@ def _queue(task, action):
 @api_view(["POST"])
 @product_endpoint
 def queue_task(request, task_id):
-    body = _body(request, {"expected_version", "action"})
+    body = _body(request, {"expected_version", "action"}, {"presentation_style"})
+    if "presentation_style" in body and (body["action"] != "presentation"
+            or not isinstance(body["presentation_style"], str)
+            or body["presentation_style"] not in {"auto", "business", "consulting", "government", "engineering", "dark-tech", "minimal"}):
+        raise ProductError("invalid_presentation_style", "请选择有效的 PPT 风格。")
     with transaction.atomic():
         task = task_for(request.user, task_id, write=True)
         require_owner(task, request.user)
         require_version(task, _expected(body["expected_version"]))
+        if body["action"] == "presentation":
+            # A new, explicit style request has its own bounded attempt budget.
+            # Old artifacts remain untouched until replacement bytes are saved.
+            if task.state == DocumentTask.State.COMPLETED:
+                task.attempt_count = 0
+            task.checkpoint = {**task.checkpoint, "presentation_style": body.get("presentation_style", "auto"),
+                "presentation_plan": None, "analysis_progress": {**task.checkpoint.get("analysis_progress", {}),
+                    "presentation": {"status": "pending", "detail": "等待根据当前两份报告确定风格并制作 PPT"}}}
         blocked = _queue(task, body["action"])
     _audit(request, "product_task_queue", task, result="blocked" if blocked else "success", changes=["state", "pending_action"])
     if blocked:
@@ -1016,10 +1088,14 @@ def retry(request, task_id):
         task = task_for(request.user, task_id, write=True)
         require_owner(task, request.user)
         require_version(task, _expected(body["expected_version"]))
-        if task.state not in {DocumentTask.State.FAILED, DocumentTask.State.WAITING_INPUT}:
+        repair_diagrams = _pending_diagram_repair(task)
+        if task.state not in {DocumentTask.State.FAILED, DocumentTask.State.WAITING_INPUT} and not repair_diagrams:
             raise ProductError("invalid_state", "当前状态不能重试。", 409)
         if task.attempt_count >= int(getattr(settings, "PRODUCT_MAX_ATTEMPTS", 8)):
             raise ProductError("attempt_limit", "已达到隔离环境安全重试上限。", 409)
+        if repair_diagrams:
+            task.pending_action = "generate_outputs"
+            task.checkpoint = {**task.checkpoint, "repair_pending_diagrams": True}
         if task.pending_action not in {"knowledge", "blueprint", "write", "render", "three_drafts", "presentation", "generate_outputs"}:
             raise ProductError("invalid_action", "没有可重试的持久动作。", 409)
         if task.pending_action in {"write", "render", "three_drafts", "presentation", "generate_outputs"}:
@@ -1061,7 +1137,10 @@ def chapters(request, task_id):
         if blueprint_revision is None:
             raise ProductError("blueprint_approval_required", "当前蓝图尚未获有效批准。", 409)
         payload = validate_chapter({key: body[key] for key in ("chapter_id", "title", "paragraphs", "source_ids")})
-        blueprint_chapter = next((chapter for chapter in blueprint_revision.payload["chapters"] if chapter["id"] == payload["chapter_id"]), None)
+        family = body.get("family", "technical-solution")
+        if family not in {"technical-solution", "feasibility"}:
+            raise ProductError("invalid_family", "报告类型无效。")
+        blueprint_chapter = next((chapter for chapter in blueprint_chapters(blueprint_revision.payload, family) if chapter["id"] == payload["chapter_id"]), None)
         if blueprint_chapter is None or blueprint_chapter["title"] != payload["title"]:
             raise ProductError("invalid_chapter", "章节不属于当前批准蓝图。", 409)
         if not source_ids_belong(task, payload["source_ids"]):
@@ -1069,9 +1148,6 @@ def chapters(request, task_id):
         if not set(payload["source_ids"]).issubset(set(blueprint_chapter["source_ids"])):
             raise ProductError("invalid_source_scope", "章节引用超出当前批准蓝图范围。")
         input_revision = _input_revision(task)
-        family = body.get("family", "technical-solution")
-        if family not in {"technical-solution", "feasibility"}:
-            raise ProductError("invalid_family", "报告类型无效。")
         revision = append_revision(
             task, DocumentRevision.Kind.CHAPTER, payload,
             input_hash=input_revision.sha256, blueprint_hash=blueprint_revision.sha256, actor=request.user, family=family,
@@ -1079,7 +1155,7 @@ def chapters(request, task_id):
         )
         task.checkpoint = {**task.checkpoint, "impact": {
             "reason": "chapter_changed", "scope": "all_checks", "edited_chapter": payload["chapter_id"],
-            "chapters": [chapter["id"] for chapter in blueprint_revision.payload["chapters"]],
+            "chapters": [chapter["id"] for chapter in blueprint_chapters(blueprint_revision.payload, family)],
             "tables": ["INPUT_TABLE"], "status": "requires_content_review", "revision_id": str(revision.pk),
         }}
         task.state = DocumentTask.State.DRAFT
@@ -1114,8 +1190,8 @@ def _artifact_download_response(request, artifact):
         raise ProductError("source_permission_changed", "资料授权已变化，成果不可下载。", 404)
     document_title = artifact.render_evidence.get("document_title", task.title)
     safe_title = re.sub(r"[\\/:*?\"<>|\x00-\x1f]", "_", document_title).strip(" .") or "技术方案"
-    delivered = bool(task.agent_root_id and task.state == DocumentTask.State.COMPLETED and current)
-    prefix = "成果-" if delivered else "" if approved else "草稿-"
+    delivered = artifact_delivery(artifact, current=current)["delivered"]
+    prefix = "" if approved else "成果-" if delivered else "草稿-"
     if not current:
         prefix = "历史草稿-已过期-"
     filename = f"{prefix}{safe_title}-v{artifact.version}{target.suffix or '.docx'}"

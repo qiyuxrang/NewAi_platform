@@ -328,11 +328,7 @@ class ProductDocumentTests(SimpleTestCase):
                     self.assertIn("技术方案" if family == "technical-solution" else "可行性研究报告", headers)
                     self.assertIn("PAGE", footers)
                     if family == "technical-solution":
-                        # The input table follows the chapter owning it, so its
-                        # chapter number may change when the approved blueprint
-                        # gains or reorders chapters.  Keep the format contract
-                        # strict without freezing a stale semantic position.
-                        self.assertTrue(any(
+                        self.assertFalse(any(
                             paragraph_text(item).startswith("表 ")
                             and paragraph_text(item).endswith("输入设备清单")
                             for item in paragraphs
@@ -380,7 +376,7 @@ class ProductDocumentTests(SimpleTestCase):
             content = content_document(self.task, self.input_revision, self.blueprint, [self.chapter], family=family)
             structure = validate_document_requirements(content)
             self.assertEqual(structure["figure_count"], expected)
-            self.assertGreaterEqual(structure["heading2_count"], expected + 1)
+            self.assertGreaterEqual(structure["heading2_count"], expected)
             self.assertEqual(structure["toc_depth"], 2)
             serialized = json.dumps(content, ensure_ascii=False)
             self.assertNotIn("flowchart LR", serialized)
@@ -429,7 +425,8 @@ class ProductDocumentTests(SimpleTestCase):
         content = content_document(self.task, self.input_revision, self.blueprint, [self.chapter])
         self.assertEqual(content["metadata"]["status"], "draft")
         self.assertFalse(any("待核草稿" in block.get("text", "") for block in content["blocks"]))
-        self.assertEqual(next(block for block in content["blocks"] if block["type"] == "table")["rows"][0][2], "2")
+        self.assertFalse(any(block["id"] == "INPUT_TABLE" for block in content["blocks"]))
+        self.assertEqual(json.loads(content["sources"][1]["text"])["quantity"], "2")
 
     def test_missing_runtime_is_safe_and_no_external_call(self):
         with override_settings(PRODUCT_DOCUMENT_PYTHON="Z:/nonexistent-runtime/python.exe"):

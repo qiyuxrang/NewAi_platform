@@ -7,6 +7,8 @@ keeps the report block references that support it.
 """
 
 import json
+import hashlib
+import math
 import re
 import sys
 from collections import Counter
@@ -14,9 +16,7 @@ from pathlib import Path
 
 from PIL import Image
 from pptx import Presentation
-from pptx.chart.data import ChartData
 from pptx.dml.color import RGBColor
-from pptx.enum.chart import XL_CHART_TYPE, XL_LEGEND_POSITION
 from pptx.enum.shapes import MSO_CONNECTOR, MSO_SHAPE, MSO_SHAPE_TYPE
 from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.util import Inches, Pt
@@ -46,6 +46,196 @@ PROHIBITED_COPY = (
     "平台自动生成的商务科技风待审草稿",
     "只使用当前报告来源；正式发布需要人工审核。",
 )
+
+# One content planner, six visual grammars. Style selection never changes facts.
+STYLES = {
+    "business": {"label": "商务汇报", "background": "F5F8FC", "ink": "152C48", "muted": "495C73", "accent": "174EA6", "panel": "E6EDF6", "cover": "split", "body": "columns"},
+    "consulting": {"label": "决策咨询", "background": "FFFFFF", "ink": "172536", "muted": "4C5868", "accent": "A63E26", "panel": "F4EDE9", "cover": "statement", "body": "evidence-table"},
+    "government": {"label": "政务立项", "background": "FFFCF7", "ink": "302C28", "muted": "5B514A", "accent": "913A30", "panel": "F1E9DE", "cover": "formal", "body": "numbered"},
+    "engineering": {"label": "工程技术", "background": "F1F6FA", "ink": "102A43", "muted": "455C70", "accent": "126178", "panel": "DDEAF0", "cover": "technical", "body": "layers"},
+    "dark-tech": {"label": "深色科技", "background": "071426", "ink": "EAF2FF", "muted": "B3C3DA", "accent": "22D3EE", "panel": "102A46", "cover": "dark", "body": "spotlight"},
+    "minimal": {"label": "极简品牌", "background": "FAFAF8", "ink": "252923", "muted": "535A50", "accent": "416040", "panel": "ECEFE8", "cover": "minimal", "body": "single-point"},
+}
+GOALS = {"customer": "客户沟通", "department": "部门汇报", "decision": "立项决策"}
+
+
+def select_style(data):
+    context = data.get("planning_context", {})
+    requested = context.get("style", "auto")
+    if requested in STYLES:
+        style, reason = requested, "沿用本次生成明确指定的视觉风格；报告事实与版本保持绑定。"
+    else:
+        # Purpose comes from project context, not generic equipment/report words.
+        purpose = clean(" ".join(context.get(key, "") for key in ("purpose", "audience", "requirements")))
+        rules = (
+            ("government", ("政府立项", "政务立项", "正式评审", "政府评审")),
+            ("consulting", ("投资决策", "管理层决策", "立项决策", "董事会", "备选决策")),
+            ("engineering", ("技术评审", "方案评审", "技术交流", "工程评审")),
+            ("dark-tech", ("深色成果演示", "深色科技演示", "深色产品展示")),
+            ("minimal", ("品牌简明演示", "极简品牌", "品牌汇报")),
+        )
+        match = next(((name, token) for name, tokens in rules for token in tokens if token in purpose), None)
+        style, reason = (match[0], f"项目汇报用途明确包含“{match[1]}”，匹配{STYLES[match[0]]['label']}。") if match else (
+            "business", "用途未明确匹配专用风格，采用默认商务汇报。" if requested == "auto" else "风格设置不可识别，回退默认商务汇报。")
+    goal = context.get("goal")
+    if goal not in GOALS:
+        purpose = context.get("purpose", "") + context.get("audience", "")
+        goal = "decision" if any(word in purpose for word in ("决策", "立项", "评审", "董事会")) else "customer" if "客户" in purpose else "department"
+    return style, goal, reason
+
+
+def planning_warnings(data, selected_figures=None):
+    warnings = []
+    for family in FAMILY_LABELS:
+        refs = [item["ref"] for item in source_blocks(data["blocks"], family, {"paragraph", "table"})[:1]]
+        missing = [item for item in data.get("diagram_pending", []) if item["family"] == family]
+        if missing:
+            warnings.append({"text": f"{FAMILY_LABELS[family]}有 {len(missing)} 张图表待补；当前PPT未包含这些图。", "refs": refs})
+        report = next((item for item in data.get("draft_quality", {}).get("reports", []) if item["family"] == family), {})
+        if report.get("quality_issue_count"):
+            text = f"{FAMILY_LABELS[family]}存在 {report['quality_issue_count']} 项质量提示，数量、来源与正文需复核。"
+            if "output_length_below_target" in report.get("quality_issue_codes", []):
+                text += "正文篇幅尚未达到要求。"
+            warnings.append({"text": text, "refs": refs})
+    if not any(item["type"] == "figure" for item in data["blocks"]):
+        warnings.append({"text": "汇报PPT存在图文或布局质量提示：当前PPT未包含报告图表，图表待补。", "refs": []})
+    elif any(figure_views(item)[0]["font_check"] == "not_verified" for item in data["blocks"] if item["type"] == "figure"
+             and (selected_figures is None or item["ref"] in selected_figures)):
+        warnings.append({"text": "报告原图标签字号缺少测量依据，图内18pt尚未核验；请对照原报告查看。", "refs": []})
+    if any(copy in block_text(item) for item in data["blocks"] for copy in PROHIBITED_COPY):
+        warnings.append({"text": "汇报PPT存在图文或布局质量提示：报告中的状态文案需核对。", "refs": []})
+    return warnings
+
+
+def figure_views(figure):
+    with Image.open(figure["asset_path"]) as image:
+        width, height = image.size
+    evidence = figure.get("presentation_image_evidence", figure)
+    word_width = evidence.get("width_mm")
+    source_pt = evidence.get("min_font_pt")
+    measured = (type(word_width) in (int, float) and 0 < word_width <= 1000
+                and type(source_pt) in (int, float) and 0 < source_pt <= 100)
+    display_width = min(11.65, 4.78 * width / height)
+    if measured:
+        required_width = 18 * word_width / source_pt / 25.4
+        display_width = max(display_width, required_width)
+    display_height = display_width * height / width
+    # Overlapping windows retain every source pixel and connectors. The window
+    # is a view of the same image bytes, never a fabricated re-drawn graph.
+    columns = max(1, math.ceil(max(0, display_width - .35 - 1e-8) / (11.65 - .35)))
+    rows = max(1, math.ceil(max(0, display_height - .35 - 1e-8) / (4.78 - .35)))
+    if columns * rows > 60:
+        raise ValueError("presentation source limit exceeded")
+    views = []
+    for row in range(rows):
+        for column in range(columns):
+            x = min(column * (11.65 - .35), max(0, display_width - 11.65))
+            y = min(row * (4.78 - .35), max(0, display_height - 4.78))
+            views.append({"x": x, "y": y, "width": min(display_width, 11.65), "height": min(display_height, 4.78),
+                "display_width": display_width, "display_height": display_height,
+                "minimum_label_pt": source_pt * display_width * 25.4 / word_width if measured else None,
+                "font_check": "measured" if measured else "not_verified"})
+    return views
+
+
+def build_plan(data):
+    style, goal, reason = select_style(data)
+    theme = STYLES[style]
+    chapters = build_chapters(data["blocks"])
+    if not all(any(item["family"] == family for item in chapters) for family in FAMILY_LABELS):
+        raise ValueError("both report families must contribute chapters")
+    pages = []
+
+    def page(title, kind, blocks=(), items=None, **extra):
+        pages.append({"page": len(pages) + 1, "title": excerpt(title, 33), "type": kind,
+            "core_message": excerpt(title, 100), "source_refs": list(dict.fromkeys(item["ref"] for item in blocks)),
+            "items": items if items is not None else [excerpt(block_text(item), 106) for item in blocks],
+            "speaker_notes": "\n\n".join(block_text(item) for item in blocks), **extra})
+
+    def figure_page(figure):
+        views = figure_views(figure)
+        for index, view in enumerate(views, 1):
+            suffix = f"（阅读窗 {index}/{len(views)}）" if len(views) > 1 else ""
+            page(block_text(figure) + suffix, "source-figure", [figure], asset_ref=figure["ref"], image_view=view,
+                 reading_window=index, reading_window_count=len(views),
+                 edit_boundary="报告原图为图片，图内标签不能逐项编辑；页标题、来源与备注可编辑。")
+
+    page(display_title(data.get("title", "项目方案汇报")), "cover")
+    summary = [item for family in FAMILY_LABELS for item in select_summary_blocks(
+        data["blocks"], family, 1, types={"paragraph", "table"})]
+    if summary:
+        capacity = 1 if style == "minimal" else 2
+        for start in range(0, len(summary), capacity):
+            page("核心判断与报告依据" if goal == "decision" else "项目方案的核心要点", "summary", summary[start:start + capacity])
+    # Preserve the same core content when only style changes. Minimal style may
+    # split it into more pages; audience/goal alone controls narrative ordering.
+    if goal == "decision":
+        chapters.sort(key=lambda item: (item["family"] != "feasibility", not any(
+            token in item["title"] for token in ("结论", "建议", "风险", "可行性"))))
+    figures = [item for item in data["blocks"] if eligible_block(item) and item["type"] == "figure"]
+    chosen_figures = []
+    for family in FAMILY_LABELS:
+        chosen_figures.extend([item for item in figures if item["ref"].startswith(family + ":")][:2])
+    for chapter in chapters:
+        body = [item for item in chapter["blocks"] if item["type"] in {"paragraph", "table"} and block_text(item)]
+        selected = body[:4]
+        risk = next((item for item in body[4:] if any(token in block_text(item) for token in ("风险", "待确认", "缺少", "未落实"))), None)
+        if risk:
+            selected.append(risk)
+        if not selected:
+            continue
+        title = chapter["title"]
+        kind = "analysis"
+        if any(token in title for token in ("风险", "安全", "不确定")):
+            kind = "risk"
+        elif any(token in title for token in ("对比", "比较", "备选", "选择")):
+            kind = "comparison"
+        elif any(token in title for token in ("实施", "阶段", "流程", "验收")):
+            kind = "process"
+        elif any(token in title for token in ("架构", "接口", "部署", "配置", "技术路线")):
+            kind = "architecture"
+        capacity = 1 if style == "minimal" else 2 if style in {"business", "dark-tech"} else 3
+        for start in range(0, len(selected), capacity):
+            chunk = selected[start:start + capacity]
+            suffix = f"（{start // capacity + 1}）" if len(selected) > capacity else ""
+            page(title + suffix, kind, [chunk[0], *chunk[1:]], section=FAMILY_LABELS[chapter["family"]], chapter_ref=chapter["ref"])
+        # Figure copies remain exact source images, on their own broad canvas.
+        family_figures = [item for item in chosen_figures if item["ref"].startswith(chapter["family"] + ":")]
+        if family_figures:
+            figure = family_figures[0]
+            chosen_figures.remove(figure)
+            figure_page(figure)
+    for figure in chosen_figures:
+        figure_page(figure)
+    warnings = planning_warnings(data, {item["asset_ref"] for item in pages if item["type"] == "source-figure"})
+    known = {item["ref"] for item in data["blocks"]}
+    pending = [*warnings, *data.get("pending", [])]
+    pending_capacity = 1 if style == "minimal" else 2 if style in {"business", "dark-tech"} else 3
+    for start in range(0, len(pending), pending_capacity):
+        values = pending[start:start + pending_capacity]
+        refs = {ref for item in values for ref in item.get("refs", []) if ref in known}
+        blocks = [item for item in data["blocks"] if item["ref"] in refs]
+        page("风险与未落实事项", "pending", blocks, items=[excerpt(item.get("text", ""), 106) for item in values])
+    conclusion = [item for item in data["blocks"] if eligible_block(item) and item["type"] == "paragraph"
+                  and any(token in block_text(item) for token in ("建议", "结论", "下一步"))][:2]
+    if conclusion:
+        capacity = 1 if style == "minimal" else 2
+        for start in range(0, len(conclusion), capacity):
+            page("报告结论与下一步", "conclusion", conclusion[start:start + capacity])
+    context = data.get("planning_context", {})
+    return {"schema_version": 1, "style": style, "style_label": theme["label"], "selection_reason": reason,
+        "goal": goal, "goal_label": GOALS[goal], "audience": context.get("audience", "") or "未明确指定",
+        "purpose": context.get("purpose", "") or GOALS[goal], "sources": data["sources"],
+        "pair_hash": data.get("sha256", ""), "input_hash": data.get("input_hash", ""), "blueprint_hash": data.get("blueprint_hash", ""),
+        "pipeline": ["报告依据", "汇报叙事", "逐页大纲", "视觉规范", "逐页生成", "程序检查", "可编辑导出"],
+        "design": {"canvas": "16:9", "colors": {key: theme[key] for key in ("background", "ink", "muted", "accent", "panel")},
+            "font": FONT, "title_pt": 34, "body_pt": 24, "minimum_body_pt": 20, "minimum_node_pt": 18,
+            "minimum_source_pt": 12, "margin_inches": 0.7, "icon_style": "native-geometric", "brand": "平台通用视觉",
+            "images": [{"ref": item["ref"], "sha256": hashlib.sha256(Path(item["asset_path"]).read_bytes()).hexdigest()} for item in figures]},
+        "constraints": {"max_points_per_page": 3, "overflow": "split_page", "editable": "正文、图形、来源和备注；报告原图为图片",
+            "model_review": "not_run", "correction_budget": 1, "optional_images_block_generation": False},
+        "suggested_pages": "20—30；依据论证范围与可读性确定，不为凑页增加内容", "pages": pages,
+        "warnings": warnings, "locked": True}
 
 
 def rgb(value):
@@ -133,40 +323,6 @@ def excerpt(value, limit=120):
     if boundary >= start:
         return text[: boundary + 1]
     return text[:limit].rstrip("，。、；：,. ") + "…"
-
-
-def phrases(value, maximum=5, limit=52):
-    text = clean(value)
-    values = []
-    for part in re.split(r"(?<=[。！？；])|\n+", text):
-        part = clean(part).strip("；。 ")
-        if not part:
-            continue
-        short = excerpt(part, limit)
-        if short not in values:
-            values.append(short)
-        if len(values) >= maximum:
-            break
-    if not values and text:
-        values.append(excerpt(text, limit))
-    return values
-
-
-def choose_layout(title, text, position):
-    # Seed every sufficiently rich deck with the complete visual vocabulary.
-    # The layouts only reorganize source excerpts; they do not add facts.
-    if position < 5:
-        return ("architecture", "process", "comparison", "control-loop", "spotlight")[position]
-    value = title + " " + text
-    if any(word in value for word in ("架构", "系统", "平台", "网络", "部署", "接口", "数据", "接入")):
-        return "architecture"
-    if any(word in value for word in ("流程", "实施", "阶段", "步骤", "迁移", "验收", "运维")):
-        return "process"
-    if any(word in value for word in ("风险", "故障", "异常", "回退", "处置", "安全")):
-        return "control-loop"
-    if any(word in value for word in ("对比", "路线", "选择", "替代", "可行性", "方案")):
-        return "comparison"
-    return ("architecture", "process", "comparison", "spotlight")[position % 4]
 
 
 def set_text(shape, text, size, color, *, bold=False, align=PP_ALIGN.LEFT,
@@ -264,57 +420,6 @@ def cover(prs, data, hero=None):
     return slide
 
 
-def agenda_slide(prs, chapters, page):
-    slide = add_slide(prs, "汇报结构", "总体导览", page, "agenda", [item["ref"] for item in chapters[:8]])
-    for family_index, family in enumerate(("technical-solution", "feasibility")):
-        x = (0.75, 6.85)[family_index]
-        color = COLORS["cyan"] if family_index == 0 else COLORS["azure"]
-        text_box(slide, x, 1.33, 5.55, 0.42, FAMILY_LABELS[family], 17, color, bold=True)
-        selected = [item for item in chapters if item["family"] == family]
-        for index, item in enumerate(selected[:6], start=1):
-            y = 1.95 + (index - 1) * 0.75
-            text_box(slide, x, y, 0.42, 0.36, f"{index:02d}", 10.5, color, bold=True)
-            text_box(slide, x + 0.52, y - 0.03, 4.8, 0.46, excerpt(item["title"], 30), 13, COLORS["ink"], bold=True)
-            add_line(slide, x + 0.52, y + 0.46, x + 5.25, y + 0.46, COLORS["panel_2"], 0.8)
-    return slide
-
-
-def evidence_slide(prs, data, page, content_counts):
-    refs = [f"{item['family']}:{item['sha256'][:12]}" for item in data.get("sources", [])]
-    slide = add_slide(prs, "内容来源与边界", "证据边界", page, "evidence", refs)
-    text_box(slide, 0.75, 1.18, 5.2, 0.55, "当前汇报只压缩已持久化报告内容", 18, COLORS["white"], bold=True)
-    text_box(slide, 0.75, 1.86, 5.15, 1.35,
-             "所有方案事实、数量和判断均应回到原始资料复核。报告中的缺项、冲突和待确认事项不会在汇报中自动补全。",
-             14, COLORS["muted"])
-    for index, source in enumerate(data.get("sources", [])[:2]):
-        y = 3.58 + index * 1.0
-        color = COLORS["cyan"] if index == 0 else COLORS["azure"]
-        text_box(slide, 0.75, y, 1.5, 0.3, FAMILY_LABELS.get(source["family"], source["family"]), 11, color, bold=True)
-        text_box(slide, 2.3, y, 3.6, 0.54, f"版本 v{source['version']}\nSHA256 {source['sha256']}", 8.5, COLORS["muted"])
-    # Native shapes keep this evidence editable without adding an embedded
-    # workbook, which the isolated Office renderer correctly rejects.
-    text_box(slide, 6.55, 1.42, 5.55, 0.45, "来源内容块覆盖", 15, COLORS["ink"], bold=True)
-    maximum = max(1, *(content_counts.values() or [1]))
-    for index, family in enumerate(("technical-solution", "feasibility")):
-        count = content_counts.get(family, 0)
-        y = 2.35 + index * 1.55
-        color = COLORS["cyan"] if index == 0 else COLORS["azure"]
-        text_box(slide, 6.55, y, 2.25, 0.35, FAMILY_LABELS[family], 11.5, COLORS["ink"], bold=True)
-        rect(slide, 6.55, y + 0.52, 5.25, 0.32, COLORS["panel_2"], radius=True)
-        rect(slide, 6.55, y + 0.52, max(0.18, 5.25 * count / maximum), 0.32, color, radius=True)
-        text_box(slide, 11.78, y + 0.46, 0.48, 0.4, str(count), 11, color, bold=True, align=PP_ALIGN.RIGHT)
-    return slide
-
-
-def figure_assets(blocks, family):
-    return [block for block in blocks
-            if block["ref"].startswith(family + ":")
-            and eligible_block(block)
-            and block.get("type") == "figure"
-            and block.get("asset_path")
-            and Path(block["asset_path"]).is_file()]
-
-
 def add_visual_panel(slide, block, x, y, w, h, title=None):
     panel = rect(slide, x, y, w, h, "FFFFFF", line=COLORS["panel_2"], radius=True)
     panel.fill.transparency = 2
@@ -322,232 +427,6 @@ def add_visual_panel(slide, block, x, y, w, h, title=None):
     text_box(slide, x + 0.22, y + 0.08, w - 0.44, 0.28,
              title or block.get("caption") or "方案图示", 10.5, COLORS["navy"],
              bold=True, align=PP_ALIGN.CENTER)
-
-
-def panorama_slide(prs, data, blocks, page):
-    technical = select_summary_blocks(blocks, "technical-solution", 2,
-                                      types={"heading", "paragraph", "table"})
-    feasibility = select_summary_blocks(blocks, "feasibility", 2,
-                                        types={"heading", "paragraph", "table"})
-    stages = select_summary_blocks(blocks, None, 5, types={"heading"})
-    figures = [block for block in blocks if eligible_block(block) and block.get("type") == "figure"]
-    refs = [block["ref"] for block in [*technical, *feasibility, *stages, *figures]]
-    slide = add_slide(prs, "项目成果全景", "总体导览", page, "panorama", refs)
-    text_box(slide, 0.72, 1.22, 5.05, 0.52,
-             excerpt(block_text(technical[0]) if technical else "技术方案摘要", 30),
-             20, COLORS["white"], bold=True)
-    text_box(slide, 0.72, 1.88, 4.95, 0.85,
-             excerpt(block_text(feasibility[0]) if feasibility else "可行性研究摘要", 92),
-             13, COLORS["muted"])
-    colors = (COLORS["cyan"], COLORS["azure"], COLORS["blue"], COLORS["green"], COLORS["amber"])
-    for index, block in enumerate(stages):
-        x = 0.76 + index * 1.04
-        if index < len(stages) - 1:
-            add_line(slide, x + 0.82, 4.3, x + 1.02, 4.3, COLORS["muted"], 1.6)
-        node = rect(slide, x, 3.72, 0.84, 1.16, COLORS["panel"], line=colors[index], radius=True)
-        set_text(node, excerpt(block_text(block), 16), 9.5, COLORS["ink"], bold=True,
-                 align=PP_ALIGN.CENTER, valign=MSO_ANCHOR.MIDDLE)
-    figure_counts = {family: len([block for block in figures
-                                  if block["ref"].startswith(family + ":")])
-                     for family in FAMILY_LABELS}
-    chart_data = ChartData()
-    chart_data.categories = ["技术方案", "可行性研究"]
-    chart_data.add_series("图示数量", tuple(figure_counts.values()))
-    chart = slide.shapes.add_chart(XL_CHART_TYPE.DOUGHNUT, Inches(6.55), Inches(1.35), Inches(3.1), Inches(3.1), chart_data).chart
-    chart.has_title = False
-    chart.has_legend = True; chart.legend.position = XL_LEGEND_POSITION.BOTTOM
-    chart.legend.font.name = FONT; chart.legend.font.size = Pt(10); chart.legend.font.color.rgb = rgb(COLORS["ink"])
-    chart.plots[0].has_data_labels = True
-    chart.plots[0].data_labels.show_value = True
-    chart.plots[0].data_labels.font.name = FONT; chart.plots[0].data_labels.font.size = Pt(12)
-    chart.series[0].points[0].format.fill.solid(); chart.series[0].points[0].format.fill.fore_color.rgb = rgb(COLORS["cyan"])
-    chart.series[0].points[1].format.fill.solid(); chart.series[0].points[1].format.fill.fore_color.rgb = rgb(COLORS["azure"])
-    text_box(slide, 9.82, 1.52, 2.2, 0.4, f"{sum(figure_counts.values())} 张", 28, COLORS["white"], bold=True)
-    text_box(slide, 9.82, 2.08, 2.4, 0.55, "当前两份报告中的\n图示内容块", 12, COLORS["muted"])
-    text_box(slide, 6.72, 5.15, 5.15, 0.55,
-             "本页只呈现选定摘要，未选内容仍保留在原报告中。",
-             11.5, COLORS["ink"], bold=True)
-    return slide
-
-
-def technical_visual_slide(prs, blocks, page, preferred=None):
-    summaries = select_summary_blocks(blocks, "technical-solution", 4,
-                                      types={"heading", "paragraph", "table"})
-    refs = [block["ref"] for block in summaries]
-    if preferred:
-        refs.append(preferred["ref"])
-    slide = add_slide(prs, "技术方案总体架构", "技术方案", page, "architecture", refs)
-    if preferred:
-        add_visual_panel(slide, preferred, 0.7, 1.25, 7.7, 5.35)
-    else:
-        summary_panel(slide, summaries, 0.7, 1.25, 7.7, 5.35)
-    for index, block in enumerate(summaries):
-        y = 1.38 + index * 1.28
-        color = (COLORS["cyan"], COLORS["azure"], COLORS["green"], COLORS["amber"])[index]
-        rect(slide, 8.78, y, 0.08, 0.92, color)
-        label = {"heading": "报告标题", "paragraph": "正文摘录", "table": "表格摘要"}.get(block["type"], "报告摘录")
-        text_box(slide, 9.08, y - 0.02, 3.15, 0.32, label, 12.5, color, bold=True)
-        text_box(slide, 9.08, y + 0.36, 3.15, 0.55, excerpt(block_text(block), 46), 10.5, COLORS["ink"])
-    return slide
-
-
-def workflow_visual_slide(prs, blocks, page, preferred=None):
-    steps = select_summary_blocks(blocks, None, 6, types={"heading"})
-    details = select_summary_blocks(blocks, None, 3, types={"paragraph", "table"},
-                                    excluded=[block["ref"] for block in steps])
-    refs = [block["ref"] for block in [*steps, *details]]
-    if preferred:
-        refs.append(preferred["ref"])
-    slide = add_slide(prs, "方案重点脉络", "报告摘要", page, "workflow", refs)
-    colors = (COLORS["cyan"], COLORS["azure"], COLORS["blue"], COLORS["amber"], COLORS["green"], COLORS["cyan"])
-    for index, block in enumerate(steps):
-        x = 0.72 + index * 2.02
-        if index < len(steps) - 1:
-            add_line(slide, x + 1.55, 2.42, x + 1.95, 2.42, colors[index], 2.2)
-        node = rect(slide, x, 1.84, 1.58, 1.16, COLORS["panel"], line=colors[index], radius=True)
-        set_text(node, excerpt(block_text(block), 24), 10.5, COLORS["ink"], bold=True,
-                 align=PP_ALIGN.CENTER, valign=MSO_ANCHOR.MIDDLE)
-        text_box(slide, x + 0.05, 1.45, 0.36, 0.26, f"{index + 1:02d}", 9, colors[index], bold=True)
-    if preferred:
-        add_visual_panel(slide, preferred, 0.82, 4.12, 5.1, 2.18)
-    text_box(slide, 6.45, 4.18, 5.55, 0.42, "当前报告摘录", 16, COLORS["white"], bold=True)
-    for index, block in enumerate(details):
-        y = 4.82 + index * 0.58
-        text_box(slide, 6.46, y, 0.35, 0.28, f"{index + 1:02d}", 9.5,
-                 (COLORS["cyan"], COLORS["azure"], COLORS["amber"])[index], bold=True)
-        text_box(slide, 6.9, y - 0.03, 5.0, 0.45, excerpt(block_text(block), 70), 10.2, COLORS["ink"])
-    return slide
-
-
-def feasibility_visual_slide(prs, data, blocks, page, preferred=None):
-    summaries = select_summary_blocks(blocks, "feasibility", 5,
-                                      types={"heading", "paragraph", "table"})
-    refs = [block["ref"] for block in summaries]
-    if preferred:
-        refs.append(preferred["ref"])
-    slide = add_slide(prs, "可行性判断与实施控制", "可行性研究", page, "feasibility", refs)
-    text_box(slide, 0.72, 1.22, 5.0, 0.42, "当前报告要点", 16, COLORS["white"], bold=True)
-    for index, block in enumerate(summaries[:4]):
-        y = 1.82 + index * 1.08
-        color = (COLORS["blue"], COLORS["cyan"], COLORS["azure"], COLORS["green"])[index]
-        text_box(slide, 0.78, y, 0.42, 0.32, f"{index + 1:02d}", 10, color, bold=True)
-        text_box(slide, 1.32, y - 0.04, 4.18, 0.72, excerpt(block_text(block), 72),
-                 11.2, COLORS["ink"], bold=block.get("type") == "heading")
-        add_line(slide, 1.32, y + 0.72, 5.42, y + 0.72, COLORS["panel_2"], 0.8)
-    if preferred:
-        add_visual_panel(slide, preferred, 6.1, 1.25, 6.1, 4.55)
-    elif summaries:
-        summary_panel(slide, summaries[:4], 6.1, 1.25, 6.1, 4.55)
-    text_box(slide, 6.22, 6.02, 5.75, 0.38,
-             excerpt(block_text(summaries[4]) if len(summaries) > 4 else block_text(summaries[-1]), 82),
-             12.5, COLORS["ink"], bold=True, align=PP_ALIGN.CENTER)
-    return slide
-
-
-def summary_panel(slide, blocks, x, y, width, height):
-    """Render excerpts inside the reserved image area without inventing relations."""
-    rect(slide, x, y, width, height, COLORS["panel"], radius=True)
-    count = max(1, len(blocks))
-    step = (height - 0.5) / count
-    for index, block in enumerate(blocks):
-        text_box(slide, x + 0.24, y + 0.25 + index * step, width - 0.48,
-                 step - 0.12, excerpt(block_text(block), 70), 12, COLORS["ink"])
-
-
-def section_slide(prs, family, chapters, page):
-    slide = prs.slides.add_slide(prs.slide_layouts[6])
-    slide.background.fill.solid()
-    slide.background.fill.fore_color.rgb = rgb(COLORS["navy_2"])
-    color = COLORS["cyan"] if family == "technical-solution" else COLORS["azure"]
-    rect(slide, 0.65, 0.72, 0.12, 5.95, color)
-    text_box(slide, 1.1, 1.2, 2.2, 0.4, "SECTION", 11, color, bold=True)
-    text_box(slide, 1.1, 2.0, 8.9, 0.9, FAMILY_LABELS[family], 34, COLORS["white"], bold=True)
-    text_box(slide, 1.1, 3.14, 10.2, 0.62, f"{len(chapters)} 个章节 · 内容来源于当前报告版本", 14, COLORS["muted"])
-    for index, chapter in enumerate(chapters[:5]):
-        x = 1.1 + index * 2.27
-        text_box(slide, x, 5.12, 1.85, 0.72, excerpt(chapter["title"], 18), 10.5, COLORS["ink"], bold=True)
-        add_line(slide, x, 4.82, x + 1.85, 4.82, color, 2.2)
-    text_box(slide, 11.8, 6.75, 0.75, 0.3, f"{page:02d}", 11, color, bold=True, align=PP_ALIGN.RIGHT)
-    return slide
-
-
-def architecture_layout(slide, items):
-    items = (items + ["待确认"] * 4)[:4]
-    center = rect(slide, 5.12, 2.65, 3.1, 1.34, COLORS["blue"], radius=True)
-    set_text(center, excerpt(items[0], 34), 15, COLORS["white"], bold=True, align=PP_ALIGN.CENTER, valign=MSO_ANCHOR.MIDDLE)
-    positions = ((0.75, 1.55), (9.35, 1.55), (0.75, 4.75), (9.35, 4.75))
-    for index, (x, y) in enumerate(positions):
-        color = (COLORS["cyan"], COLORS["azure"], COLORS["green"], COLORS["amber"])[index]
-        node = rect(slide, x, y, 3.25, 1.12, COLORS["panel"], line=color, radius=True)
-        set_text(node, excerpt(items[index], 42), 11.5, COLORS["ink"], bold=index == 0, align=PP_ALIGN.CENTER, valign=MSO_ANCHOR.MIDDLE)
-        x2 = 5.12 if x < 5 else 8.22
-        add_line(slide, x + (3.25 if x < 5 else 0), y + 0.56, x2, 3.32, color, 1.6)
-
-
-def process_layout(slide, items):
-    items = (items + ["待确认"] * 4)[:4]
-    colors = (COLORS["blue"], COLORS["cyan"], COLORS["azure"], COLORS["green"])
-    for index, item in enumerate(items):
-        x = 0.78 + index * 3.05
-        if index < 3:
-            add_line(slide, x + 2.58, 3.18, x + 3.0, 3.18, COLORS["muted"], 2)
-        circle = slide.shapes.add_shape(MSO_SHAPE.OVAL, Inches(x), Inches(1.6), Inches(0.62), Inches(0.62))
-        circle.fill.solid(); circle.fill.fore_color.rgb = rgb(colors[index]); circle.line.color.rgb = rgb(colors[index])
-        set_text(circle, str(index + 1), 12, COLORS["navy"], bold=True, align=PP_ALIGN.CENTER, valign=MSO_ANCHOR.MIDDLE)
-        text_box(slide, x, 2.48, 2.55, 0.42, f"阶段 {index + 1}", 11, colors[index], bold=True)
-        text_box(slide, x, 3.03, 2.55, 2.25, excerpt(item, 64), 13, COLORS["ink"], bold=True)
-
-
-def comparison_layout(slide, items):
-    items = (items + ["待确认"] * 4)[:4]
-    for index, (x, color, label) in enumerate(((0.75, COLORS["cyan"], "路径 A"), (6.85, COLORS["azure"], "路径 B"))):
-        rect(slide, x, 1.42, 5.72, 0.12, color)
-        text_box(slide, x, 1.76, 2.0, 0.42, label, 13, color, bold=True)
-        text_box(slide, x, 2.42, 5.35, 1.15, excerpt(items[index * 2], 92), 16, COLORS["white"], bold=True)
-        text_box(slide, x, 4.08, 5.25, 1.3, excerpt(items[index * 2 + 1], 100), 12.5, COLORS["muted"])
-    text_box(slide, 6.22, 2.85, 0.9, 0.8, "VS", 18, COLORS["amber"], bold=True, align=PP_ALIGN.CENTER, valign=MSO_ANCHOR.MIDDLE)
-
-
-def control_loop_layout(slide, items):
-    items = (items + ["待确认"] * 4)[:4]
-    positions = ((5.2, 1.38), (8.8, 3.1), (5.2, 4.82), (1.58, 3.1))
-    colors = (COLORS["cyan"], COLORS["amber"], COLORS["red"], COLORS["green"])
-    center = slide.shapes.add_shape(MSO_SHAPE.OVAL, Inches(5.3), Inches(2.82), Inches(2.72), Inches(1.45))
-    center.fill.solid(); center.fill.fore_color.rgb = rgb(COLORS["blue"]); center.line.color.rgb = rgb(COLORS["blue"])
-    set_text(center, "治理闭环", 17, COLORS["white"], bold=True, align=PP_ALIGN.CENTER, valign=MSO_ANCHOR.MIDDLE)
-    for index, (x, y) in enumerate(positions):
-        node = rect(slide, x, y, 2.55, 0.95, COLORS["panel"], line=colors[index], radius=True)
-        set_text(node, excerpt(items[index], 38), 10.5, COLORS["ink"], bold=True, align=PP_ALIGN.CENTER, valign=MSO_ANCHOR.MIDDLE)
-
-
-def spotlight_layout(slide, items):
-    items = (items + ["待确认"] * 4)[:4]
-    text_box(slide, 0.8, 1.47, 7.55, 1.75, excerpt(items[0], 110), 23, COLORS["white"], bold=True)
-    rect(slide, 0.82, 3.62, 7.4, 0.08, COLORS["cyan"])
-    text_box(slide, 0.82, 4.08, 7.35, 1.65, excerpt(items[1], 130), 14, COLORS["muted"])
-    for index, item in enumerate(items[2:4]):
-        y = 1.62 + index * 2.15
-        shape = rect(slide, 9.1, y, 3.15, 1.55, COLORS["panel"], line=(COLORS["azure"], COLORS["green"])[index], radius=True)
-        set_text(shape, excerpt(item, 58), 11.5, COLORS["ink"], bold=True, align=PP_ALIGN.CENTER, valign=MSO_ANCHOR.MIDDLE)
-
-
-LAYOUT_BUILDERS = {"architecture": architecture_layout, "process": process_layout,
-                   "comparison": comparison_layout, "control-loop": control_loop_layout,
-                   "spotlight": spotlight_layout}
-
-
-def pending_slide(prs, pending, page):
-    refs = [ref for item in pending for ref in item.get("refs", [])]
-    slide = add_slide(prs, "待确认事项", "决策门槛", page, "pending", refs)
-    text_box(slide, 0.77, 1.24, 10.9, 0.5, "以下事项未被平台自动补全，正式使用前必须逐项确认", 18, COLORS["amber"], bold=True)
-    for index, item in enumerate(pending[:6], start=1):
-        y = 2.0 + (index - 1) * 0.76
-        text_box(slide, 0.8, y, 0.42, 0.35, f"{index:02d}", 10.5, COLORS["amber"], bold=True)
-        text_box(slide, 1.34, y - 0.02, 10.7, 0.52, excerpt(item.get("text", item), 102), 12.2, COLORS["ink"], bold=index <= 2)
-        text_box(slide, 10.65, y + 0.32, 1.5, 0.2, excerpt("、".join(item.get("refs", [])), 36), 7.5, COLORS["muted"], align=PP_ALIGN.RIGHT)
-    if len(pending) > 6:
-        text_box(slide, 0.8, 6.55, 11.2, 0.3, f"其余 {len(pending) - 6} 项请回到平台报告正文查看", 10.5, COLORS["muted"])
-    return slide
 
 
 def build_chapters(blocks):
@@ -573,19 +452,6 @@ def build_chapters(blocks):
                     active[family] = chapter
                 active[family]["blocks"].append(block)
     return chapters
-
-
-def chunk_chapter(chapter, max_slides=6):
-    blocks = chapter["blocks"]
-    if not blocks:
-        return []
-    target = max(1, min(2, (len(blocks) + max_slides - 1) // max_slides))
-    chunks = [blocks[index:index + target] for index in range(0, len(blocks), target)]
-    if len(chunks) > max_slides:
-        head = chunks[: max_slides - 1]
-        head.append([item for chunk in chunks[max_slides - 1:] for item in chunk])
-        return head
-    return chunks
 
 
 def load_source(source):
@@ -645,8 +511,41 @@ def load_source(source):
                                      or not item["asset_path"] or len(item["asset_path"]) > 4096
                                      or "\x00" in item["asset_path"]):
             raise ValueError("invalid slide source")
+        if "presentation_image_evidence" in item:
+            evidence = item["presentation_image_evidence"]
+            if (not isinstance(evidence, dict) or any(type(evidence.get(key)) not in (int, float)
+                    or not math.isfinite(evidence[key]) or not 0 < evidence[key] <= 1000 for key in ("width_mm", "min_font_pt"))):
+                raise ValueError("invalid slide source")
         refs.append(ref)
     if len(refs) != len(set(refs)):
+        raise ValueError("invalid slide source")
+    if type(data.get("draft_mode", False)) is not bool:
+        raise ValueError("invalid slide source")
+    context = data.get("planning_context", {})
+    if (not isinstance(context, dict) or any(not isinstance(context.get(key, ""), str)
+            or len(context.get(key, "")) > 20000 for key in ("style", "goal", "audience", "purpose", "requirements"))):
+        raise ValueError("invalid slide source")
+    for block in blocks:
+        if block["type"] == "figure" and not (block.get("asset_path") and Path(block["asset_path"]).is_file()):
+            raise ValueError("invalid slide source")
+    pending = data.get("diagram_pending", [])
+    reports = data.get("draft_quality", {}).get("reports", []) if isinstance(data.get("draft_quality", {}), dict) else None
+    if not isinstance(pending, list) or len(pending) > BLOCK_MAX_COUNT or not isinstance(reports, list) or len(reports) > 2:
+        raise ValueError("invalid slide source")
+    for item in pending:
+        if (not isinstance(item, dict) or item.get("family") not in FAMILY_LABELS
+                or not isinstance(item.get("figure_id"), str) or not 1 <= len(item["figure_id"]) <= 100):
+            raise ValueError("invalid slide source")
+    if len({(item["family"], item["figure_id"]) for item in pending}) != len(pending):
+        raise ValueError("invalid slide source")
+    for item in reports:
+        if (not isinstance(item, dict) or item.get("family") not in FAMILY_LABELS
+                or type(item.get("quality_issue_count", 0)) is not int or not 0 <= item.get("quality_issue_count", 0) <= BLOCK_MAX_COUNT
+                or not isinstance(item.get("quality_issue_codes", []), list)
+                or len(item.get("quality_issue_codes", [])) > 100
+                or any(not isinstance(code, str) or not 1 <= len(code) <= 100 for code in item.get("quality_issue_codes", []))):
+            raise ValueError("invalid slide source")
+    if len({item["family"] for item in reports}) != len(reports):
         raise ValueError("invalid slide source")
     return data
 
@@ -658,7 +557,10 @@ def source_mapping(prs, eligible_refs, all_refs):
             continue
         lines = slide.notes_slide.notes_text_frame.text.splitlines()
         if lines and lines[0] == "source_refs":
-            declared.update(line for line in lines[1:] if line)
+            for line in lines[1:]:
+                if not line:
+                    break
+                declared.add(line)
     eligible_refs = set(eligible_refs)
     all_refs = set(all_refs)
     return {
@@ -668,98 +570,318 @@ def source_mapping(prs, eligible_refs, all_refs):
     }
 
 
+def planned_text(slide, x, y, w, h, value, theme, *, role="body", size=24, bold=False, color=None):
+    # Fonts are actual exported pt; no Office/autofit shrinking is enabled.
+    shape = text_box(slide, x, y, w, h, value, size, color or theme["ink"], bold=bold, margin=0.025)
+    shape.name = "ppt:" + role
+    return shape
+
+
+def render_planned_page(prs, page, plan, blocks):
+    theme = STYLES[plan["style"]]
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    slide.background.fill.solid()
+    slide.background.fill.fore_color.rgb = rgb(theme["background"])
+    style = plan["style"]
+    kind = page["type"]
+    refs = page["source_refs"]
+    set_source_notes(slide, refs)
+    if page["speaker_notes"]:
+        slide.notes_slide.notes_text_frame.text += "\n\n讲解备注\n" + page["speaker_notes"]
+    # The raw block identifiers stay in notes/manifest, never in audience copy.
+    source_labels = [FAMILY_LABELS[source["family"]] + f" v{source['version']}" for source in plan["sources"]
+                     if not refs or any(ref.startswith(source["family"] + ":") for ref in refs)]
+    planned_text(slide, .7, 7.0, 11.25, .3, "来源：" + "、".join(source_labels), theme, role="source", size=12, color=theme["muted"])
+    planned_text(slide, 12.05, 7.0, .55, .3, str(page["page"]), theme, role="source", size=12)
+    if kind == "cover":
+        cover_mode = theme["cover"]
+        if cover_mode in {"split", "dark"}:
+            rect(slide, 9.1, .6, 3.55, 5.9, theme["panel"])
+            for index in range(3):
+                rect(slide, 9.7, 1.55 + index * 1.25, 2.4 - index * .4, .15, theme["accent"])
+            title_box = (.8, 1.7, 7.7, 2.45)
+        elif cover_mode == "formal":
+            rect(slide, .7, 1.3, 11.9, .08, theme["accent"])
+            rect(slide, .7, 5.9, 11.9, .08, theme["accent"])
+            title_box = (1.1, 2.0, 11.05, 2.1)
+        elif cover_mode == "technical":
+            for index in range(3):
+                rect(slide, 9.2, 1.45 + index * 1.45, 3.3, 1.0, theme["panel"], line=theme["accent"])
+            title_box = (.8, 1.7, 7.85, 2.4)
+        elif cover_mode == "statement":
+            rect(slide, .8, 1.0, 1.3, .13, theme["accent"])
+            title_box = (.8, 1.7, 11.6, 2.4)
+        else:
+            title_box = (1.0, 2.0, 11.3, 2.3)
+        planned_text(slide, *title_box, page["title"], theme, role="title", size=40, bold=True)
+        planned_text(slide, .95, 4.65, 10.8, .6, plan["goal_label"] + " · " + plan["style_label"], theme, size=24, color=theme["accent"])
+        return slide, "cover:" + cover_mode
+    if style == "government":
+        planned_text(slide, .75, .28, 11.5, .28, "项目建设汇报", theme, role="source", size=12, color=theme["muted"])
+        rect(slide, .7, 1.32, 11.9, .04, theme["accent"])
+    else:
+        rect(slide, .7, .53, .12, .7, theme["accent"])
+    planned_text(slide, .98, .5, 11.45, 1.1, page["title"], theme, role="title", size=34, bold=True)
+    if kind == "source-figure":
+        block = blocks[page["asset_ref"]]
+        view = page["image_view"]
+        picture = slide.shapes.add_picture(block["asset_path"], Inches(.85 + (11.65 - view["width"]) / 2),
+            Inches(1.65 + (4.78 - view["height"]) / 2), width=Inches(view["width"]), height=Inches(view["height"]))
+        picture.crop_left, picture.crop_top = view["x"] / view["display_width"], view["y"] / view["display_height"]
+        picture.crop_right = max(0, 1 - (view["x"] + view["width"]) / view["display_width"])
+        picture.crop_bottom = max(0, 1 - (view["y"] + view["height"]) / view["display_height"])
+        copy = "报告原图；图内文字为图片。"
+        if view["font_check"] == "not_verified":
+            copy += "原图标签字号缺少测量依据，阅读时请对照报告。"
+        elif page["reading_window_count"] > 1:
+            copy += f"连续阅读窗 {page['reading_window']}/{page['reading_window_count']}，相邻窗保留重叠关系。"
+        planned_text(slide, .85, 6.53, 11.6, .32, copy, theme, role="source", size=12, color=theme["muted"])
+        return slide, "source-figure:wide"
+    values = page["items"]
+    if kind == "architecture":
+        # Report excerpts form evidence layers. No speculative dependency edges.
+        for index, value in enumerate(values):
+            y = 1.72 + index * 1.48
+            rect(slide, .85, y, 11.65, 1.27, theme["panel"], line=theme["accent"])
+            planned_text(slide, 1.12, y + .13, 11.05, 1.0, value, theme, role="node", size=20, bold=True)
+        return slide, "architecture:evidence-layers"
+    if kind in {"comparison", "risk"} or theme["body"] == "evidence-table":
+        # Keep quoted alternatives/risks, without fabricating scores or axes.
+        table_shape = slide.shapes.add_table(len(values) + 1, 2, Inches(.85), Inches(1.72), Inches(11.65), Inches(4.82))
+        table_shape.name = "ppt:table"
+        table = table_shape.table
+        table.columns[0].width, table.columns[1].width = Inches(1.8), Inches(9.85)
+        table.rows[0].height = Inches(.58)
+        rows = [("条目", "报告依据"), *[(str(index + 1), value) for index, value in enumerate(values)]]
+        for row_index, row in enumerate(rows):
+            if row_index:
+                table.rows[row_index].height = Inches(4.24 / max(1, len(values)))
+            for col_index, value in enumerate(row):
+                cell = table.cell(row_index, col_index)
+                cell.fill.solid()
+                cell.fill.fore_color.rgb = rgb(theme["panel"] if row_index % 2 == 0 else theme["background"])
+                cell.margin_left = cell.margin_right = Inches(.12)
+                cell.margin_top = cell.margin_bottom = Inches(.08)
+                cell.text = value
+                for paragraph in cell.text_frame.paragraphs:
+                    for run in paragraph.runs:
+                        run.font.name, run.font.size = FONT, Pt(20 if row_index else 18)
+                        run.font.color.rgb = rgb(theme["ink"])
+                        run.font.bold = row_index == 0
+        return slide, kind + ":evidence-table"
+    if kind == "process" or theme["body"] == "numbered":
+        for index, value in enumerate(values):
+            y = 1.75 + index * 1.57
+            planned_text(slide, .92, y, .7, .65, f"{index + 1:02d}", theme, role="node", size=24, color=theme["accent"], bold=True)
+            planned_text(slide, 1.85, y, 10.5, 1.35, value, theme, size=24)
+            add_line(slide, 1.85, y + 1.43, 12.35, y + 1.43, theme["panel"], 1)
+        return slide, kind + ":numbered-route"
+    if theme["body"] == "layers":
+        for index, value in enumerate(values):
+            y = 1.75 + index * 1.48
+            rect(slide, .85, y, .12, 1.2, theme["accent"])
+            rect(slide, 1.15, y, 11.2, 1.23, theme["panel"])
+            planned_text(slide, 1.42, y + .12, 10.65, 1.0, value, theme, size=20)
+        return slide, kind + ":technical-layers"
+    if theme["body"] == "single-point":
+        planned_text(slide, 1.15, 2.1, 10.9, 3.95, values[0] if values else "", theme, size=30)
+        return slide, kind + ":single-point"
+    if theme["body"] == "spotlight":
+        if values:
+            planned_text(slide, .95, 1.8, 11.4, 1.8, values[0], theme, size=28, bold=True)
+        rect(slide, .95, 3.92, 11.35, .06, theme["accent"])
+        if len(values) > 1:
+            planned_text(slide, .95, 4.42, 11.4, 1.78, values[1], theme, size=24, color=theme["muted"])
+        return slide, kind + ":spotlight"
+    for index, value in enumerate(values):
+        x = .85 + index * 6.0
+        rect(slide, x, 1.72, 5.6, .12, theme["accent"])
+        planned_text(slide, x + .07, 2.02, 5.43, 4.32, value, theme, size=24)
+    return slide, kind + ":columns"
+
+
+def exported_checks(prs, plan):
+    issues = []
+    native_shapes = 0
+    for page_number, slide in enumerate(prs.slides, 1):
+        for shape in slide.shapes:
+            if shape.left < 0 or shape.top < 0 or shape.left + shape.width > prs.slide_width + 20 or shape.top + shape.height > prs.slide_height + 20:
+                issues.append({"page": page_number, "reason": "object_out_of_canvas", "shape": shape.name})
+            if getattr(shape, "has_table", False):
+                native_shapes += 1
+                cells = [cell for row in shape.table.rows for cell in row.cells]
+                frames = [(cell.text_frame, 18, shape.table.columns[index % 2].width, shape.table.rows[index // 2].height)
+                          for index, cell in enumerate(cells)]
+            elif getattr(shape, "has_text_frame", False):
+                native_shapes += 1
+                role = shape.name.split(":", 1)[-1]
+                minimum = 12 if role == "source" else 18 if role == "node" else 20
+                frames = [(shape.text_frame, minimum, shape.width, shape.height)]
+            else:
+                continue
+            for frame, minimum, width, height in frames:
+                runs = [run for paragraph in frame.paragraphs for run in paragraph.runs if run.text]
+                if not runs:
+                    continue
+                if any(run.font.size is None or run.font.size.pt < minimum for run in runs):
+                    issues.append({"page": page_number, "reason": "font_below_minimum", "shape": shape.name})
+                # Conservative CJK width/line estimate, not a claim of Office pixel QA.
+                size = max(run.font.size.pt for run in runs if run.font.size)
+                usable_w = max(1, width / 12700 - (frame.margin_left + frame.margin_right) / 12700)
+                usable_h = max(1, height / 12700 - (frame.margin_top + frame.margin_bottom) / 12700)
+                lines = 0
+                for paragraph in frame.paragraphs:
+                    weight = sum(1 if ord(char) > 255 else .52 for char in paragraph.text)
+                    lines += max(1, math.ceil(weight * size / usable_w))
+                if lines * size * 1.2 > usable_h + size * .3:
+                    issues.append({"page": page_number, "reason": "estimated_text_overflow", "shape": shape.name})
+    image_checks = [{"page": page["page"], "source_ref": page["asset_ref"], **page["image_view"]}
+                    for page in plan["pages"] if page["type"] == "source-figure"]
+    for item in image_checks:
+        if item["minimum_label_pt"] is not None and item["minimum_label_pt"] < 18 - 0.01:
+            issues.append({"page": item["page"], "reason": "source_image_font_below_minimum"})
+    return {"status": "pass" if not issues else "fail", "issues": issues, "editable_text_or_table_objects": native_shapes,
+            "minimum_body_pt": 20, "minimum_node_pt": 18, "minimum_source_pt": 12,
+            "source_image_checks": image_checks, "source_image_fonts": "not_verified" if any(item["font_check"] == "not_verified" for item in image_checks) else "measured",
+            "text_fit_method": "conservative_cjk_estimate", "office_visual_check": "not_run"}
+
+
+def write_progress(source, plan, stage, completed):
+    # One atomic sidecar; the parent reads actual rendered pages, never a timer.
+    plan = {**plan, "pages": [{**page, "page": index} for index, page in enumerate(plan["pages"], 1)]}
+    target = source.with_suffix(".progress.json")
+    temporary = target.with_suffix(".tmp")
+    temporary.write_text(json.dumps({"stage": stage, "completed_count": completed,
+        "total_count": len(plan["pages"]), "plan": plan}, ensure_ascii=False, allow_nan=False), encoding="utf-8")
+    try:
+        temporary.replace(target)
+    except PermissionError:
+        # Windows can briefly lock the sidecar while the parent reads it.
+        # Skip this notification; the next real page and final artifact report progress.
+        temporary.unlink(missing_ok=True)
+
+
 def main():
     source, target = map(Path, sys.argv[1:])
     data = load_source(source)
-    blocks = data["blocks"]
-
+    plan = build_plan(data)
+    # Persist the locked outline before any page generation, beside pair.json.
+    plan_path = source.with_suffix(".plan.json")
+    plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
+    write_progress(source, plan, "planning", 0)
     prs = Presentation()
     prs.slide_width, prs.slide_height = Inches(CANVAS_W), Inches(CANVAS_H)
     prs.core_properties.title = display_title(data.get("title"))
-    prs.core_properties.subject = "项目方案商务科技汇报"
-    prs.core_properties.comments = "内容来源于技术方案与可行性研究报告。"
-    chapters = build_chapters(blocks)
-    if not all(any(item["family"] == family for item in chapters) for family in FAMILY_LABELS):
-        raise ValueError("both report families must contribute chapters")
-
-    # Fixed five-page acceptance deck.  It combines report-derived text with
-    # the coloured Mermaid renders produced for Word, while the chart and
-    # process components remain editable PowerPoint objects.
-    technical_assets = figure_assets(blocks, "technical-solution")
-    hero = next((item for item in technical_assets
-                 if any(keyword in item.get("caption", "") for keyword in ("应用架构", "部署架构"))),
-                technical_assets[-1] if technical_assets else None)
-    technical_visual = next((item for item in technical_assets if "总体架构" in item.get("caption", "")),
-                            technical_assets[0] if technical_assets else None)
-    feasibility_assets = figure_assets(blocks, "feasibility")
-    feasibility_visual = next((item for item in feasibility_assets if "决策门槛" in item.get("caption", "")),
-                              feasibility_assets[-1] if feasibility_assets else None)
-    all_assets = [*technical_assets, *feasibility_assets]
-    workflow_visual = next((item for item in all_assets if "业务闭环" in item.get("caption", "")),
-                           all_assets[0] if all_assets else None)
-    cover(prs, data, hero)
-    panorama_slide(prs, data, blocks, 2)
-    technical_visual_slide(prs, blocks, 3, technical_visual)
-    workflow_visual_slide(prs, blocks, 4, workflow_visual)
-    feasibility_visual_slide(prs, data, blocks, 5, feasibility_visual)
-    layout_inventory = Counter({
-        "cover": 1, "panorama": 1, "architecture": 1,
-        "workflow": 1, "feasibility": 1,
-    })
+    prs.core_properties.subject = plan["style_label"] + " · " + plan["goal_label"]
+    prs.core_properties.comments = "依据当前两份报告生成，文字、表格与普通图形可编辑。"
+    blocks = {item["ref"]: item for item in data["blocks"]}
+    inventory = Counter()
+    for page in plan["pages"]:
+        _, layout = render_planned_page(prs, page, plan, blocks)
+        page["layout"] = layout
+        inventory[layout] += 1
+        write_progress(source, plan, "rendering", page["page"])
+    checks = exported_checks(prs, plan)
+    # A bounded correction splits only overflowing content pages. Valid pages
+    # and source objects remain untouched, never shrink key text to fit.
+    overflowing = {item["page"] for item in checks["issues"] if item["reason"] == "estimated_text_overflow"}
+    repaired = []
+    for page in plan["pages"]:
+        if page["page"] not in overflowing or page["type"] in {"cover", "source-figure"}:
+            repaired.append(page)
+            continue
+        for item in page["items"]:
+            # A long point is split at a real sentence boundary or preserved
+            # exact character boundary; full paragraphs remain in notes.
+            segments = [item[start:start + 72] for start in range(0, len(item), 72)] or [""]
+            for segment in segments:
+                repaired.append({**page, "items": [segment], "continuation_of": page["page"]})
+    if overflowing:
+        write_progress(source, {**plan, "pages": repaired}, "repairing", 0)
+        # Reuse already-rendered page XML for unchanged pages. Only corrected
+        # slides are authored again, then reordered in the existing package.
+        original_ids = list(prs.slides._sldIdLst)
+        original_pages = {page["page"]: index for index, page in enumerate(plan["pages"])}
+        ordered_ids = []
+        inventory.clear()
+        for index, page in enumerate(repaired, 1):
+            original_number = page["page"]
+            page["page"] = index
+            if "continuation_of" in page:
+                _, layout = render_planned_page(prs, page, plan, blocks)
+                ordered_ids.append(prs.slides._sldIdLst[-1])
+            else:
+                slide_id = original_ids[original_pages[original_number]]
+                slide = prs.part.related_slide(slide_id.rId)
+                for shape in slide.shapes:
+                    if shape.name == "ppt:source" and shape.left > Inches(12):
+                        shape.text_frame.paragraphs[0].runs[0].text = str(index)
+                ordered_ids.append(slide_id)
+                layout = page.get("layout", page["type"] + ":" + STYLES[plan["style"]]["body"])
+            page["layout"] = layout
+            inventory[layout] += 1
+            write_progress(source, {**plan, "pages": repaired}, "repairing", index)
+        for slide_id in list(prs.slides._sldIdLst):
+            prs.slides._sldIdLst.remove(slide_id)
+            if slide_id not in ordered_ids:
+                prs.part.drop_rel(slide_id.rId)
+        for slide_id in ordered_ids:
+            prs.slides._sldIdLst.append(slide_id)
+        plan["pages"] = repaired
+    write_progress(source, plan, "validating", len(plan["pages"]))
     prs.save(target)
-
-    # Record only selected excerpts. Omitted content remains in the reports.
-    eligible_refs = {block["ref"] for block in blocks if eligible_block(block)}
-    all_refs = {block["ref"] for block in blocks}
     rendered = Presentation(str(target))
-    mapping = source_mapping(rendered, eligible_refs, all_refs)
-    mapped_refs = mapping["mapped_source_refs"]
-    missing_refs = mapping["missing_source_refs"]
-    mapped_eligible_refs = eligible_refs & set(mapped_refs)
+    checks = exported_checks(rendered, plan)
+    checks["correction_attempts"] = int(bool(overflowing))
+    plan["program_checks"] = checks
+    plan_path.write_text(json.dumps(plan, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
+    write_progress(source, plan, "validating", len(plan["pages"]))
+    eligible = {item["ref"] for item in data["blocks"] if eligible_block(item)}
+    mapping = source_mapping(rendered, eligible, blocks)
+    mapped = set(mapping["mapped_source_refs"])
     body_coverage = {}
     for family in FAMILY_LABELS:
-        available = {block["ref"] for block in source_blocks(blocks, family, {"paragraph", "table"})}
-        body_coverage[family] = {"available": len(available), "mapped": len(available & set(mapped_refs))}
-    editable_data_visuals = 4
-    diagram_slides = 4
-    visual_asset_count = sum(shape.shape_type == MSO_SHAPE_TYPE.PICTURE
-                             for slide in rendered.slides for shape in slide.shapes)
-    native_charts = sum(bool(getattr(shape, "has_chart", False))
-                        for slide in rendered.slides for shape in slide.shapes)
-    dominant_layout_ratio = max(layout_inventory.values()) / len(prs.slides)
-    rendered_text = "\n".join(
-        shape.text for slide in rendered.slides for shape in slide.shapes
-        if getattr(shape, "has_text_frame", False)
-    )
-    prohibited_hits = [item for item in PROHIBITED_COPY if item in rendered_text]
-    quality = {
-        "engine": "business-tech-pptx", "engine_version": "v4",
-        "design_profile": "business-technology-dark", "slides": len(prs.slides),
-        "diagram_slides": diagram_slides, "native_charts": native_charts,
-        "editable_data_visuals": editable_data_visuals,
-        "visual_asset_count": visual_asset_count,
-        "layout_inventory": dict(layout_inventory), "source_blocks": len(eligible_refs),
-        "dominant_layout_ratio": round(dominant_layout_ratio, 3),
-        "source_blocks_mapped": len(mapped_eligible_refs),
-        **mapping,
-        "source_mapping_scope": "selected_summary_blocks",
-        "content_review": "not_run",
-        "body_coverage": body_coverage,
-        "prohibited_copy_hits": prohibited_hits,
-        "fact_boundary": "source-bound; no external facts or invented business metrics",
-    }
-    passed = (len(prs.slides) == 5 and diagram_slides >= 4
-              and len([name for name, count in layout_inventory.items()
-                       if count and name != "cover"]) >= 4
-              and editable_data_visuals >= 4 and visual_asset_count >= 1
-              and dominant_layout_ratio <= 0.25 and mapped_refs and not missing_refs
-              and all(not counts["available"] or counts["mapped"] for counts in body_coverage.values())
-              and not prohibited_hits)
-    quality["quality_gate"] = {"status": "pass" if passed else "fail"}
-    target.with_suffix(".manifest.json").write_text(
-        json.dumps(quality, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8"
-    )
-    if not passed:
+        available = {item["ref"] for item in source_blocks(data["blocks"], family, {"paragraph", "table"})}
+        body_coverage[family] = {"available": len(available), "mapped": len(available & mapped)}
+    image_count = sum(shape.shape_type == MSO_SHAPE_TYPE.PICTURE for slide in rendered.slides for shape in slide.shapes)
+    editable_visuals = (sum(bool(getattr(shape, "has_table", False)) for slide in rendered.slides for shape in slide.shapes)
+                        + sum(page["type"] in {"architecture", "process"} for page in plan["pages"]))
+    text = "\n".join(shape.text for slide in rendered.slides for shape in slide.shapes if getattr(shape, "has_text_frame", False))
+    reasons = []
+    if not image_count:
+        reasons.append("visual_assets_missing")
+    elif checks["source_image_fonts"] == "not_verified":
+        reasons.append("source_image_font_unverified")
+    prohibited = [copy for copy in PROHIBITED_COPY if copy in text]
+    if prohibited:
+        reasons.append("copy_review_required")
+    reports = data.get("draft_quality", {}).get("reports", [])
+    pending = data.get("diagram_pending", [])
+    source_valid = bool(mapped and not mapping["missing_source_refs"] and all(not item["available"] or item["mapped"] for item in body_coverage.values()))
+    warning = bool(reasons or pending or any(item.get("quality_issue_count", 0) for item in reports))
+    passed = source_valid and checks["status"] == "pass" and not warning
+    quality = {"engine": "business-tech-pptx", "engine_version": "v5", "design_profile": plan["style"],
+        "slides": len(rendered.slides), "diagram_slides": sum(page["type"] in {"source-figure", "architecture", "process", "comparison", "risk"} for page in plan["pages"]),
+        "native_charts": 0, "editable_data_visuals": editable_visuals, "visual_asset_count": image_count,
+        "layout_inventory": dict(inventory), "source_blocks": len(eligible), "source_blocks_mapped": len(eligible & mapped),
+        "dominant_layout_ratio": round(max(inventory.values()) / len(rendered.slides), 3), **mapping,
+        "source_mapping_scope": "selected_summary_blocks", "content_review": "not_run", "body_coverage": body_coverage,
+        "prohibited_copy_hits": prohibited, "fact_boundary": "source-bound; no external facts or invented business metrics",
+        "presentation_quality_reasons": reasons, "presentation_plan": plan,
+        "presentation_plan_sha256": hashlib.sha256(plan_path.read_bytes()).hexdigest(), "program_checks": checks,
+        "quality_gate": {"status": "pass" if passed else "fail", "reasons": [*reasons,
+            *(["diagram_pending"] if pending else []), *(["source_quality_findings"] if any(item.get("quality_issue_count") for item in reports) else []),
+            *(["layout_checks_failed"] if checks["status"] != "pass" else [])]}}
+    if warning:
+        quality["draft_quality"] = {"reports": reports, "quality_issue_count": sum(item.get("quality_issue_count", 0) for item in reports) + len(pending) + bool(reasons),
+            "quality_issue_codes": sorted({code for item in reports for code in item.get("quality_issue_codes", [])} | ({"diagram_pending"} if pending else set()) | ({"presentation_quality_warning"} if reasons else set())),
+            "presentation_quality_reasons": reasons, "human_review_required": True}
+        source_figures = sum(item["type"] == "figure" for item in data["blocks"])
+        quality["diagram_generation"] = {"status": "pending" if pending else "completed", "pending_count": len(pending), "pending_figures": pending,
+            "source_image_count": image_count, "source_versions": data["sources"], "planned_count": source_figures + len(pending),
+            "rendered": source_figures, "source_scope": "report_figures"}
+    target.with_suffix(".manifest.json").write_text(json.dumps(quality, ensure_ascii=False, indent=2, allow_nan=False), encoding="utf-8")
+    if not source_valid or checks["status"] != "pass" or (warning and data.get("draft_mode") is not True):
         raise ValueError("presentation quality gate failed")
 
 

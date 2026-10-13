@@ -223,6 +223,11 @@ class ProductDiagramOutputRetryTests(PortalTestCase):
         self.assertEqual(model.call_count, 2)
         correction = json.loads(model.call_args_list[1].args[2][1]["content"])
         self.assertIn("diagram_validation_correction", correction)
+        expected_ids = ["DIAGRAM_01_FIGURE"]
+        for call in model.call_args_list:
+            request = json.loads(call.args[2][1]["content"])
+            self.assertEqual([item["figure_id"] for item in request["schema"]["diagrams"]], expected_ids)
+        self.assertIn(json.dumps(expected_ids), correction["diagram_validation_correction"])
         reason = "diagram is missing its report evidence anchor"
         self.assertIn(reason, correction["diagram_validation_correction"])
         self.assertIn("可见节点标签或消息", correction["diagram_validation_correction"])
@@ -235,6 +240,28 @@ class ProductDiagramOutputRetryTests(PortalTestCase):
         self.assertNotIn("diagram_validation_reason", self.task.checkpoint["calls"][-1])
         self.assertTrue(self.task.checkpoint["calls"][-1]["response_validated"])
         self.assertEqual(self.task.attempts.get(pk=attempt_id).model_calls, 2)
+        self.assertFalse(self.task.artifacts.exists())
+
+    @patch("portal.product_worker.generate_for_use")
+    def test_anchor_correction_cannot_replace_figure_id_or_use_foreign_evidence(self, model):
+        task_id, fence, attempt_id = self.claimed()
+        invalid = json.loads(self.reply(valid=False)["content"])
+        invalid["diagrams"][0]["source"] = 'flowchart LR\nA["无正文依据的节点"] --> B["另一个无依据节点"]'
+        for change, reason in (
+            ({"figure_id": "本批figure_id"}, "diagram identifiers differ from planned figures"),
+            ({"evidence_block_ids": ["OTHER_PROJECT_BLOCK"]}, "diagram evidence outside authored chapter"),
+        ):
+            corrected = json.loads(self.reply()["content"])
+            corrected["diagrams"][0].update(change)
+            model.side_effect = [{"content": json.dumps(invalid, ensure_ascii=False)},
+                                 {"content": json.dumps(corrected, ensure_ascii=False)}]
+            with self.subTest(reason=reason), self.assertRaises(ExecutionError) as error:
+                _generate_diagrams(task_id, fence, attempt_id, self.document(), draft=True)
+            self.assertEqual(error.exception.code, "diagram_generation_invalid")
+            self.assertEqual(error.exception.diagram_validation_reason, reason)
+            self.task.refresh_from_db()
+            self.assertNotIn("diagram_excerpt_fallback", self.task.checkpoint["calls"][-1])
+        self.assertEqual(model.call_count, 4)
         self.assertFalse(self.task.artifacts.exists())
 
     @patch("portal.product_worker.generate_for_use")

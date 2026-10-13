@@ -1,0 +1,136 @@
+/* Product department reference layouts. Keep the existing service contracts. */
+.wb-department .enterprise-business { --ink:#192334; --muted:#8290a6; --line:#e5ebf4; --accent:#246bff; --accent-dark:#175bea; --action:#246bff; --soft:#f5f8fd; --good:#15a568; --good-bg:#edf9f3; --warning:#bd791e; --warning-bg:#fff6e8; --danger:#d74343; --danger-bg:#fff0f0; font-family:"Microsoft YaHei","Segoe UI",sans-serif; }
+.wb-shell.wb-reference { --nav-width:234px; grid-template-columns:var(--nav-width) minmax(0,1fr); min-width:1100px; font-size:14px; background:linear-gradient(120deg,#f7faff,#fff 70%); }
+.wb-reference[data-view=projects] { --nav-width:287px; }
+.wb-reference[data-view=knowledge] { --nav-width:228px; }
+.wb-reference[data-view=opportunities] { --nav-width:246px; }
+.wb-reference .wb-navigation { gap:16px; padding:8px 15px 16px; background:linear-gradient(130deg,#fafcfe,#f1f6fc); border-color:#e5ebf4; }
+.wb-reference .wb-brand { display:flex; height:83px; padding:0; justify-content:center; flex-shrink:0; }
+.wb-reference .wb-brand img { display:block; width:100%; height:82px; object-fit:contain; mix-blend-mode:multiply; }
+.wb-reference .wb-new-task { min-height:42px; font-size:14px; border-color:#dfe6f0; color:#354157; }
+.wb-reference[data-view=projects] .wb-navigation { padding-left:24px; padding-right:23px; }
+.wb-reference[data-view=projects] .wb-new-task { color:white; border-color:#246bff; background:#246bff; box-shadow:0 3px 8px #246bff15; }
+.wb-reference .wb-links { gap:5px; }
+.wb-reference .wb-links a,.wb-reference .wb-navigation-foot a { min-height:40px; gap:12px; padding:9px 11px; font-size:14px; color:#59667b; position:relative; }
+.wb-reference .wb-links a svg,.wb-reference .wb-navigation-foot a svg { width:18px; height:18px; }
+.wb-reference .wb-links a[aria-current=page] { background:#e6efff; color:#246bff; font-weight:600; }
+.wb-reference .wb-links a[aria-current=page]:before,.wb-reference .wb-task-list a[aria-current=page]:before { position:absolute; left:0; top:7px; bottom:7px; width:2px; background:#246bff; content:""; border-radius:2px; }
+.wb-reference .wb-task-label { font-size:13px; margin:14px 8px -8px; color:#7d899e; }
+.wb-reference .wb-search { min-height:39px; padding:7px 10px; border-radius:8px; }
+.wb-reference .wb-search input { font-size:13px; }
+.wb-reference .wb-task-list a { position:relative; gap:12px; padding:12px 7px; }
+.wb-reference .wb-task-list a > div { flex:1; }
+.wb-reference .wb-task-list strong { font-size:13px; color:#48556d; line-height:1.5; }
+.wb-reference .wb-task-list small { display:flex; justify-content:space-between; gap:8px; font-size:12px; line-height:1.5; }
+.wb-reference .wb-task-list time { flex-shrink:0; font-variant-numeric:tabular-nums; }
+.wb-reference .wb-task-dot { width:7px; height:7px; margin-top:7px; }
+.wb-reference .wb-navigation-foot { gap:0; padding-top:10px; }
+.wb-reference .wb-toolbar { height:50px; padding:0 26px; border-color:#e9eef5; }
+.wb-reference .wb-toolbar > span { color:#526077; font-size:14px; font-weight:500; }
+.wb-toolbar-right { display:flex; align-items:center; gap:26px; }
+.wb-reference .wb-toolbar small { font-size:12px; color:#8a95a8; }
+.wb-account { display:flex; align-items:center; gap:8px; font-size:12px; color:#526077; text-decoration:none; }
+.wb-account > span { display:grid; place-items:center; width:30px; height:30px; border-radius:50%; background:#246bff; color:white; }
+.wb-reference[data-view=projects] .wb-account { display:none; }
+.wb-reference[data-view=detail] .wb-toolbar { display:none; }
+.wb-reference .wb-work-content { padding:26px 30px; }
+.wb-reference[data-view=projects] .wb-work-content { padding:10px 29px 16px 32px; }
+.wb-reference[data-view=knowledge] .wb-work-content { padding:18px; overflow:hidden; display:flex; flex-direction:column; }
+.wb-reference[data-view=detail] .wb-work-content { padding:0; overflow:hidden; }
+.wb-reference .pd-workspace { width:100%; max-width:none; }
+.wb-reference .pd-page-title h1 { font-size:30px; font-weight:700; letter-spacing:0; line-height:1.4; }
+.wb-reference .pd-page-title p { color:#8390a5; font-size:14px; }
+.wb-reference .button { border-radius:7px; min-height:38px; font-size:14px; padding:8px 15px; }
+.wb-reference .button.primary { background:#246bff; color:#fff; border-color:#246bff; box-shadow:0 2px 5px #246bff12; }
+.wb-reference .button.secondary { background:#fff; border:1px solid #e0e8f4; color:#3876ed; }
+.wb-reference .button:disabled { opacity:.5; }
+.wb-reference .pd-panel { border-color:#e5ebf4; border-radius:10px; }
+.wb-reference .wb-project-layout { grid-template-columns:minmax(0,1fr) 320px; }
+.wb-reference .wb-project-center { padding:20px 28px 0; scrollbar-width:thin; }
+.wb-reference .wb-project-center .pd-workspace { max-width:none; }
+.wb-reference .wb-project-center .pd-project-detail { display:block; }
+.wb-reference .wb-project-center .pd-project-header { border:0; padding-bottom:16px; align-items:center; }
+.wb-reference .wb-project-center .pd-project-header h1 { display:flex; gap:12px; align-items:center; margin:20px 0 7px; font-size:27px; font-weight:700; color:#0e1a2e; }
+.wb-reference .wb-project-center .pd-back-link { color:#7e899e; font-size:13px; }
+.wb-reference .wb-project-center .pd-project-header p { font-size:12px; line-height:1.7; }
+.wb-reference .wb-project-center .pd-project-header .button { font-size:13px; min-height:36px; padding:7px 13px; }
+.wb-project-version { color:#246bff; font-size:14px; line-height:1.6; padding:2px 8px; border-radius:5px; background:#ecf3ff; font-weight:500; }
+.wb-reference .wb-project-center .pd-project-statusline { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); padding:17px 12px; gap:0; background:#f5f7fa; border:0; border-radius:10px; margin:0 0 14px; }
+.wb-reference .pd-project-statusline > div { display:grid; grid-template-columns:26px minmax(0,1fr); gap:5px 12px; align-content:center; padding:0 12px; border-right:1px solid #e7ebf1; }
+.wb-reference .pd-project-statusline > div:last-child { border:0; }
+.wb-reference .pd-project-statusline > div > svg { grid-row:1 / 3; width:23px; height:23px; align-self:center; color:#6382bc; }
+.wb-reference .pd-project-statusline > div > span { font-size:12px; color:#8591a5; }
+.wb-reference .pd-project-statusline > div > strong { grid-column:2; display:block!important; font-size:13px; font-weight:600; line-height:1.5; overflow-wrap:anywhere; }
+.wb-reference .pd-project-statusline .pd-badge { padding:0; background:transparent; font-size:13px; }
+.wb-reference .pd-visual-steps { display:flex; list-style:none; margin:10px 0 18px; padding:0 4px; }
+.pd-visual-steps li { flex:1; position:relative; text-align:center; min-width:0; color:#8793a7; font-size:12px; }
+.pd-visual-steps li:after { content:""; height:2px; position:absolute; top:11px; left:calc(50% + 18px); right:calc(-50% + 18px); background:#dce4ef; }
+.pd-visual-steps li:last-child:after { display:none; }
+.pd-visual-steps .pd-visual-step-dot { display:grid; place-items:center; width:24px; height:24px; border-radius:50%; border:1px solid #b9c7db; background:#fff; margin:0 auto 9px; font-size:12px; }
+.pd-visual-steps strong,.pd-visual-steps small { display:block; }
+.pd-visual-steps strong { font-size:13px; color:#53617b; margin-bottom:4px; }
+.pd-visual-steps li[data-status=completed] .pd-visual-step-dot,.pd-visual-steps li[data-status=running] .pd-visual-step-dot { background:#246bff; border-color:#246bff; color:#fff; }
+.pd-visual-steps li[data-status=completed]:after { background:#246bff; }
+.pd-visual-steps li[data-status=waiting] strong,.pd-visual-steps li[data-status=running] strong { color:#246bff; }
+.pd-visual-steps li[data-status=failed] .pd-visual-step-dot,.pd-visual-steps li[data-status=blocked] .pd-visual-step-dot { color:#d86615; border-color:#eda663; }
+.pd-visual-step-dot svg { width:16px; height:16px; }
+.wb-reference .pd-project-facts { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; margin-bottom:14px; }
+.pd-project-facts button { display:grid; grid-template-columns:44px minmax(0,1fr) 17px; align-items:center; gap:14px; padding:10px 16px; text-align:left; border:1px solid #dfebff; border-radius:10px; background:#f7faff; color:#246bff; }
+.pd-project-facts button > svg:first-child { width:28px; height:28px; }
+.pd-project-facts button > svg:last-child { width:17px; height:17px; }
+.pd-project-facts button:last-child { color:#e87729; border-color:#ffe6ce; background:#fffbf7; }
+.pd-project-facts b { font-size:26px; font-variant-numeric:tabular-nums; margin-right:12px; }
+.pd-project-facts strong { font-size:14px; color:#243249; }
+.pd-project-facts small { display:block; font-size:12px; color:#8793a6; margin-top:3px; }
+.wb-reference .wb-project-center .pd-compact-progress { margin:0 0 12px; padding:14px 22px; border:1px solid #f6dfbc; background:#fffaf1; border-radius:10px; }
+.pd-current-task-heading { display:flex; align-items:center; gap:13px; margin-bottom:9px; }
+.pd-current-task-heading > svg { color:#e9871e; flex-shrink:0; }
+.wb-reference .pd-current-task-heading h3 { color:#8c5414; font-size:16px; font-weight:600; margin:0; }
+.wb-reference .pd-compact-progress-heading { color:#8c6d47; }
+.wb-reference .pd-compact-progress-heading strong,.wb-reference .pd-compact-progress-heading span { font-size:12px; }
+.wb-reference .wb-project-center .pd-compact-progress > p { font-size:13px; line-height:1.7; }
+.wb-reference .wb-project-center .pd-runtime-details { font-size:12px; border-color:#f1e6d3; margin-top:10px; }
+.wb-reference .pd-runtime-details summary { font-size:12px; }
+.wb-reference .wb-project-center .pd-detail-tabs { gap:26px; border-bottom:1px solid #e6ecf5; margin:0 0 16px; padding:0; background:transparent; }
+.wb-reference .wb-project-center .pd-detail-tabs button { font-size:14px; padding:14px 6px; border-radius:0; min-height:46px; }
+.wb-reference .wb-project-center .pd-detail-tabs button[aria-selected=true] { background:transparent; color:#246bff; border-bottom:2px solid #246bff; }
+.wb-reference .pd-blueprint { border:0; padding:0; background:transparent; }
+.wb-reference .wb-project-center .pd-tab-panel { padding:0 0 20px; }
+.wb-reference .wb-project-center .pd-tab-panel > .pd-blueprint { padding:0; }
+.wb-reference .pd-blueprint .pd-panel-heading h3 { font-size:17px; font-weight:600; }
+.wb-reference .pd-blueprint .pd-panel-heading p { font-size:13px; }
+.wb-reference .pd-blueprint-summary { border:1px solid #e2eaf5; background:linear-gradient(115deg,#fff,#f8faff); border-radius:8px; padding:16px 20px; }
+.wb-reference .pd-blueprint-summary h4 { font-size:16px; margin:0 0 8px; }
+.wb-reference .pd-blueprint-summary p { font-size:14px; line-height:1.75; }
+.wb-reference .pd-blueprint-summary small { font-size:12px; }
+.wb-reference .pd-chapter-plan ol { display:grid; gap:7px; padding:0; list-style:none; }
+.wb-reference .pd-chapter-plan li { margin:0; padding:0; border:0; }
+.pd-chapter-disclosure { border:1px solid #e3e9f3; border-radius:7px; background:#fff; }
+.pd-chapter-disclosure summary { display:flex; align-items:center; gap:10px; padding:13px 15px; list-style:none; cursor:pointer; }
+.pd-chapter-disclosure summary::-webkit-details-marker { display:none; }
+.pd-chapter-disclosure summary:before { content:'›'; color:#7d8ba2; font-size:20px; line-height:1; }
+.pd-chapter-disclosure[open] summary:before { transform:rotate(90deg); }
+.pd-chapter-disclosure summary strong { font-size:14px; flex:1; color:#182b48; }
+.pd-chapter-disclosure summary > span { font-size:12px; color:#8a96a9; }
+.pd-chapter-disclosure > div { padding:0 22px 18px; }
+.wb-reference .wb-project-center .pd-chapter-budgets { display:flex; flex-wrap:wrap; gap:10px; font-size:12px; margin:4px 0 12px; }
+.wb-reference .wb-project-center .pd-chapter-scope { font-size:14px; line-height:1.75; }
+.wb-reference .wb-results { background:#f9fbfe; border-left:1px solid #e1e8f1; overflow-y:auto; }
+.wb-reference .wb-results > header { background:#f9fbfe; height:80px; padding:0 18px; }
+.wb-reference .wb-results > header strong { font-size:16px; color:#162844; font-weight:600; }
+.wb-reference .wb-results-body { padding:10px 18px 24px; }
+.wb-reference .wb-results-hint { font-size:13px; line-height:1.7; margin:0 0 15px; }
+.wb-reference .wb-result-card { padding:18px 16px; border-color:#e5ebf4; border-radius:10px; min-height:136px; }
+.wb-reference .wb-result-name strong { font-size:15px; font-weight:600; color:#152943; }
+.wb-reference .wb-result-name small,.wb-reference .wb-result-card p { font-size:12px; }
+.wb-reference .wb-results .pd-document-symbol { width:43px; height:44px; font-size:27px; }
+.wb-reference .wb-results .text-button,.wb-reference .wb-history-link { font-size:13px; color:#4380f7; }
+.wb-reference .wb-results .button { font-size:12px; min-height:33px; }
+.wb-reference .wb-source-summary h3 { font-size:15px; font-weight:600; }
+.wb-reference .wb-source-summary li { font-size:13px; gap:12px; }
+.wb-reference .wb-source-summary small { font-size:12px; }
+.wb-reference .wb-results-collapsed { grid-template-columns:minmax(0,1fr) 48px; }
+.wb-reference .wb-results-collapsed .wb-results > header { padding:0 9px; }
+.wb-reference .wb-followup { position:static; margin:24px 0; border:1px solid #e1e9f5; border-radius:10px; }
+@media(max-width:1400px) { .wb-shell.wb-reference { --nav-width:218px; }.wb-reference[data-view=projects] { --nav-width:240px; }.wb-reference .wb-project-layout { grid-template-columns:minmax(0,1fr) 284px; }.wb-reference .wb-project-center { padding:20px 22px 0; }.wb-reference .wb-results-collapsed { grid-template-columns:minmax(0,1fr) 48px; }.wb-reference .pd-project-facts button { gap:8px; padding:13px 10px; grid-template-columns:30px minmax(0,1fr) 14px; }.pd-project-facts b { font-size:22px; margin-right:7px; }.wb-reference .wb-project-center .pd-detail-tabs { gap:16px; } }
+@media(max-width:1100px) { .workbuddy-product .wb-page { overflow-x:auto; }.wb-reference .wb-project-center .pd-project-statusline > div:nth-child(n+3) { display:grid; }.wb-reference .wb-task-label,.wb-reference .wb-search { display:flex; }.wb-reference .wb-task-list { display:block; }.wb-reference .wb-links a,.wb-reference .wb-navigation-foot a,.wb-reference .wb-new-task { font-size:14px; justify-content:initial; }.wb-reference .wb-new-task { justify-content:center; } }

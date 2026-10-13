@@ -53,6 +53,32 @@ class ProductApiTests(PortalTestCase):
             "conditions": conditions or ["不得新增清单外设备"],
         }
 
+    @override_settings(PRODUCT_MAX_ATTEMPTS=12)
+    def test_retry_budget_and_limit_leave_exhausted_task_unchanged(self):
+        task = self.create_task()
+        record = DocumentTask.objects.get(pk=task["id"])
+        record.state = DocumentTask.State.FAILED
+        record.pending_action = "generate_outputs"
+        for used in (11, 12, 13):
+            with self.subTest(used=used):
+                record.attempt_count = used
+                record.save()
+                detail = self.owner_client.get(f"/api/product/tasks/{record.pk}/")
+                self.assertEqual(detail.status_code, 200, detail.content)
+                self.assertEqual(detail.json()["retry_budget"], {
+                    "used": used, "limit": 12, "remaining": max(0, 12 - used),
+                })
+                self.assertEqual("retry" in detail.json()["actions"], used < 12)
+                if used >= 12:
+                    before = (record.state, record.version, record.attempt_count)
+                    response = self.owner_client.post(
+                        f"/api/product/tasks/{record.pk}/retry/",
+                        json_body(expected_version=record.version), content_type="application/json")
+                    self.assertEqual(response.status_code, 409, response.content)
+                    self.assertEqual(response.json()["code"], "attempt_limit")
+                    record.refresh_from_db()
+                    self.assertEqual((record.state, record.version, record.attempt_count), before)
+
     def test_product_writes_require_csrf_with_real_session(self):
         client = Client(enforce_csrf_checks=True)
         client.cookies = self.owner_client.cookies

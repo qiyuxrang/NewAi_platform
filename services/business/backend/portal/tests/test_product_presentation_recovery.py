@@ -19,7 +19,7 @@ from portal.product_worker import content_checks, run_once
 
 from .base import PortalTestCase, json_body
 from . import test_product_api as product_api_tests
-from .test_product_pair import report_diagram_evidence
+from . import test_product_three_drafts as draft_fixtures
 
 
 def source_pair(paragraph_count=1):
@@ -146,7 +146,9 @@ class PresentationRuntimeRecoveryTests(SimpleTestCase):
                 pair["pending"] = pending
                 result = render_presentation_draft(SimpleNamespace(pk=uuid.uuid4(), title="合成验收项目"), pair)
                 evidence = result["render_evidence"]
-                self.assertEqual(evidence["quality_gate"]["status"], "pass")
+                self.assertEqual(evidence["quality_gate"]["status"], "fail")
+                self.assertEqual(evidence["visual_asset_count"], 0)
+                self.assertIn("presentation_quality_warning", evidence["draft_quality"]["quality_issue_codes"])
                 self.assertEqual(evidence["source_block_coverage"]["total"], len(pair["blocks"]))
                 self.assertLessEqual(evidence["source_block_coverage"]["mapped"], len(pair["blocks"]))
                 self.assertEqual(evidence["source_mapping_scope"], "selected_summary_blocks")
@@ -209,60 +211,53 @@ class PresentationRetryTests(PortalTestCase):
             return {"content": json.dumps(value), "prompt_tokens": 10, "completion_tokens": 20}
         model.side_effect = model_reply
 
-        def report(task, input_revision, blueprint, chapters, family, **diagram_options):
-            target = Path(self.storage.name) / str(task.pk) / f"{family}.docx"
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_bytes(b"synthetic-report-" + family.encode())
-            return {"path": target.relative_to(self.storage.name).as_posix(),
-                    "sha256": hashlib.sha256(target.read_bytes()).hexdigest(), "template_hash": "a" * 64,
-                    "render_evidence": {"status": "draft_unverified",
-                        "diagram_generation": report_diagram_evidence(diagram_options["document"], target)}}
-
-        def presentation(task, pair):
+        def presentation(task, pair, **planning):
             if render_presentation.call_count == 1:
                 raise DocumentError("presentation_unavailable", diagnostic={"stage": "presentation_render", "reason": "source_limit"})
             target = Path(self.storage.name) / str(task.pk) / "presentation.pptx"
             target.write_bytes(b"synthetic-presentation")
             return {"path": target.relative_to(self.storage.name).as_posix(),
                     "sha256": hashlib.sha256(target.read_bytes()).hexdigest(), "template_hash": "b" * 64,
-                    "render_evidence": {"status": "draft_unverified", "pair_hash": pair["sha256"], "source_versions": pair["sources"]}}
+                    # This is a passing renderer contract for retry control flow;
+                    # real presentation structure/layout is checked separately.
+                    "render_evidence": {"status": "draft_unverified", "pair_hash": pair["sha256"],
+                        "source_versions": pair["sources"], "quality_gate": {"status": "pass"},
+                        "program_checks": {"status": "pass", "issues": []}}}
 
-        render_report.side_effect = report
+        render_report.side_effect = draft_fixtures.assembled_report_result
         render_presentation.side_effect = presentation
         task = self.approve_blueprint(self.save_blueprint(self.create_task(reviewer=False)))["task"]
         self.assertTrue(run_once())
         record = DocumentTask.objects.get(pk=task["id"])
-        self.assertEqual(record.state, "FAILED")
+        self.assertEqual(record.state, "WAITING_INPUT")
         self.assertEqual(record.error_code, "presentation_unavailable")
         self.assertEqual(record.checkpoint["last_failure"]["reason"], "source_limit")
         saved = list(DocumentArtifact.objects.filter(task=record).values_list("pk", "sha256"))
         self.assertEqual(len(saved), 2)
         outputs = self.owner_client.get(f"/api/product/tasks/{record.pk}/outputs/").json()["outputs"]
         self.assertTrue(all(item["current"] for item in outputs))
+        self.assertTrue(all(item["delivered"] for item in outputs))
         calls_before_retry = model.call_count
-        review_calls_before_retry = {tuple(batch[key] for key in ("model_call_attempt_id", "model_call", "model_call_input_sha256"))
-                                    for review in record.revisions.filter(kind="review")
-                                    for batch in review.payload["model_review"]["coverage"]["batches"]}
+        review_bindings_before_retry = {json.dumps(review.payload["program_review_binding"], sort_keys=True)
+                                       for review in record.revisions.filter(kind="review")}
         response = self.owner_client.post(f"/api/product/tasks/{record.pk}/retry/",
                                           json_body(expected_version=record.version), content_type="application/json")
         self.assertEqual(response.status_code, 200, response.content)
         self.assertTrue(run_once())
         record.refresh_from_db()
-        self.assertEqual(record.state, "WAITING_REVIEW", record.error_code)
-        self.assertTrue(record.checkpoint["analysis_progress"]["outputs"]["full_document_human_review_required"])
+        self.assertEqual(record.state, "COMPLETED", record.error_code)
+        self.assertFalse(record.checkpoint["analysis_progress"]["outputs"]["second_approval_required"])
         reviews = record.revisions.filter(kind="review")
-        self.assertTrue(all(review.payload["model_review"]["scope"] == "full_batched" for review in reviews))
+        self.assertTrue(all(review.payload["model_review"]["scope"] == "program_only" for review in reviews))
         self.assertTrue(all(review.payload["human_review"] == "required" and not review.payload["passed"] for review in reviews))
         self.assertFalse(DocumentApproval.objects.filter(task=record, revision__kind="report").exists())
         self.assertFalse(DocumentApproval.objects.filter(task=record, artifact__isnull=False).exists())
         self.assertEqual(render_report.call_count, 2)
-        self.assertTrue(all(review.payload["model_review"]["coverage"]["complete"] for review in reviews))
-        self.assertTrue(all(review.payload["model_review"]["coverage"]["all_batches_passed"] for review in reviews))
-        actual_review_calls = {tuple(batch[key] for key in ("model_call_attempt_id", "model_call", "model_call_input_sha256"))
-                               for review in reviews for batch in review.payload["model_review"]["coverage"]["batches"]}
-        self.assertEqual(actual_review_calls, review_calls_before_retry)
+        self.assertTrue(all(review.payload["model_review"]["status"] == "not_run" for review in reviews))
+        self.assertTrue(all("coverage" not in review.payload["model_review"] for review in reviews))
+        self.assertEqual({json.dumps(review.payload["program_review_binding"], sort_keys=True) for review in reviews}, review_bindings_before_retry)
         self.assertEqual(model.call_count, calls_before_retry)
-        self.assertEqual(model.call_count, 2 + len(actual_review_calls))
+        self.assertEqual(model.call_count, 2)
         self.assertEqual(DocumentArtifact.objects.filter(task=record).count(), 3)
         self.assertEqual(set(DocumentArtifact.objects.filter(pk__in=[identifier for identifier, _ in saved])
                              .values_list("pk", "sha256")), set(saved))

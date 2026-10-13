@@ -73,7 +73,8 @@ class PairDraftTests(PortalTestCase):
                 path=path.relative_to(directory).as_posix(), sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
                 input_hash=current.sha256, blueprint_hash=blueprint.sha256, template_hash="a" * 64,
                 generation_hash=_report_generation_hash(task, family, current, blueprint), review=review,
-                render_evidence={**evidence, "report_id": str(report.pk)})
+                render_evidence={**evidence, "report_id": str(report.pk), "kind": "draft",
+                    "content_review": "human_review_required", "draft_quality": review.payload.get("draft_quality", {})})
             reports.append(report)
         return task, fence, attempt_id, current, blueprint, reports, images
 
@@ -85,7 +86,11 @@ class PairDraftTests(PortalTestCase):
             path=path.relative_to(directory).as_posix(), sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
             input_hash=pair["input_hash"], blueprint_hash=pair["blueprint_hash"], template_hash="a" * 64,
             generation_hash=digest({"kind": "presentation", "pair": pair["sha256"], "title": task.title,
-                                    "renderer": presentation_renderer_hash()}),
+                                    "renderer": presentation_renderer_hash(),
+                                    "planning": {"presentation_style": "auto",
+                                        "audience": task.revisions.get(kind="blueprint", version=task.blueprint_version).payload["audience"],
+                                        "purpose": task.revisions.get(kind="blueprint", version=task.blueprint_version).payload["purpose"],
+                                        "requirements": task.revisions.get(kind="input", version=task.input_version).payload["requirements"]}}),
             render_evidence={"pair_hash": pair["sha256"]})
 
     @override_settings(PRODUCT_MODEL_CALLS_ALLOWED=True)
@@ -154,7 +159,9 @@ class PairDraftTests(PortalTestCase):
             generation_hash = _report_generation_hash(task, family, input_revision, blueprint)
             DocumentArtifact.objects.create(task=task, family=family, version=version, path=f"legacy/{family}.docx",
                 sha256=str(version) * 64, input_hash=input_revision.sha256, blueprint_hash=blueprint.sha256,
-                template_hash="a" * 64, generation_hash=generation_hash, review=review, render_evidence={"report_id": str(report.pk)})
+                template_hash="a" * 64, generation_hash=generation_hash, review=review,
+                render_evidence={"report_id": str(report.pk), "kind": "draft", "content_review": "human_review_required",
+                                 "draft_quality": review.payload.get("draft_quality", {})})
             reports.append(report)
         first, second = reports
         snapshot = pair_snapshot(task)
@@ -165,7 +172,7 @@ class PairDraftTests(PortalTestCase):
                                                 "refs": ["technical-solution:P1", "feasibility:P2"],
                                                 "families": ["technical-solution", "feasibility"]}])
         self.assertNotEqual(first.pk, second.pk)
-        self.assertEqual(model.call_count, 2)
+        model.assert_not_called()
         later = append_revision(task, "input", {**input_revision.payload, "requirements": "已更改"}, actor=self.owner)
         task.input_version = later.version
         task.save(update_fields=["input_version"])

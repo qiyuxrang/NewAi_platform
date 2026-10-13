@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { ArrowRight, Clock3, FileText, Filter, Info, LayoutGrid, List, Plus, Search, ShieldCheck, Star } from "lucide-react";
 import { ApiError } from "../api";
 import {
   getOpportunity,
@@ -263,7 +264,7 @@ function Detail({ state, onBack, onRetry }: { state: DetailState; onBack: () => 
 function StateActions({ item, pending, onChange, includeRead = false }: { item: OpportunitySummary; pending: boolean; onChange: (patch: Partial<OpportunityUserState>) => void; includeRead?: boolean }) {
   return <div className="tender-state-actions" aria-label={`${item.project_name}的标记`}>
     {includeRead && !item.user_state?.is_read && <button type="button" disabled={pending} onClick={() => onChange({ is_read: true })}>标为已看</button>}
-    <button type="button" disabled={pending} aria-pressed={!!item.user_state?.is_favorite} onClick={() => onChange({ is_favorite: !item.user_state?.is_favorite })}>{item.user_state?.is_favorite ? "取消关注" : "重点关注"}</button>
+    <button type="button" disabled={pending} aria-pressed={!!item.user_state?.is_favorite} onClick={() => onChange({ is_favorite: !item.user_state?.is_favorite })}><Star size={14} aria-hidden="true" />{item.user_state?.is_favorite ? "取消关注" : "重点关注"}</button>
     <button type="button" disabled={pending} onClick={() => onChange({ is_irrelevant: !item.user_state?.is_irrelevant })}>{item.user_state?.is_irrelevant ? "恢复相关" : "不相关"}</button>
   </div>;
 }
@@ -318,7 +319,7 @@ export default function TenderOpportunities() {
   useEffect(() => {
     updateUrl(initialFilters(), initialPage(), noticeId(), true);
     const sync = () => {
-      if (!/^\/centers\/(?:product|business)\/opportunities\/?$/.test(window.location.pathname)) return;
+      if (!/^\/(?:centers\/(?:product|business)|departments\/product)\/opportunities\/?$/.test(window.location.pathname)) return;
       const nextFilters = initialFilters(), nextPage = initialPage(), nextNotice = noticeId();
       setFilters(nextFilters); setPage(nextPage); setDetailId(nextNotice);
       updateUrl(nextFilters, nextPage, nextNotice, true);
@@ -581,10 +582,16 @@ export default function TenderOpportunities() {
   const regions = options.regions.some(item => item.value === filters.region) || !filters.region
     ? options.regions : [{ value: filters.region, label: filters.region }, ...options.regions];
   const stats = list.kind === "ready" ? list.data.stats : undefined;
+  const serviceReady = overview?.consumer_online === true && overview.available;
+  const serviceLabel = metadataMessage ? "采集服务状态待确认" : overview?.consumer_online === false ? "采集服务当前离线"
+    : serviceReady ? "采集服务运行正常" : overview?.available === false ? "采集服务暂不可用" : "采集服务状态待确认";
   return <div className="pd-workspace tender-workspace">
     <section className="tender-hero">
-      <div><h2>全国商机看板</h2><p>信息化 · 数字化 · 智能化公开商机</p></div>
-      <button className="button primary" type="button" onClick={() => void startRefresh()} disabled={refreshing || Boolean(active) || overview?.available === false}>{refreshing ? "提交中…" : interrupted ? "执行中断" : active ? "刷新进行中" : "刷新公告"}</button>
+      <div><h1>全国商机看板</h1><p>信息化 · 数字化 · 智能化公开商机，助力招投标机会挖掘与跟踪。</p></div>
+      <div className={`tender-service${serviceReady && !metadataMessage ? " is-ready" : ""}`}>
+        <div><strong><i aria-hidden="true" />{serviceLabel}</strong><small>最后更新：{overview?.last_success_at ? formatDateTime(overview.last_success_at) : "尚未成功更新"}</small></div>
+        <button className="button secondary" type="button" title={overview?.available === false ? readable(overview.unavailable_reason, "暂未开放手动刷新。") : "刷新已接入来源的公告"} onClick={() => void startRefresh()} disabled={refreshing || Boolean(active) || overview?.available === false}>{refreshing ? "提交中…" : interrupted ? "执行中断" : active ? "刷新进行中" : "刷新公告"}</button>
+      </div>
     </section>
 
     {overview?.available === false && <div className="notice info" role="note">刷新当前不可用：{readable(overview.unavailable_reason, "暂未开放手动刷新。")}</div>}
@@ -593,15 +600,28 @@ export default function TenderOpportunities() {
     {staleMessage && <div className="notice error" role="alert">{staleMessage}</div>}
 
 
+    <section className="tender-stats" aria-label="当前筛选统计" aria-busy={listUpdating}>
+      <article className="tender-stat tender-stat-blue"><span className="tender-stat-icon"><ShieldCheck aria-hidden="true" /></span><div><span>符合条件 <Info size={13} aria-hidden="true" /></span><strong>{stats?.total ?? "—"}</strong></div><span className="tender-stat-decoration" aria-hidden="true" /></article>
+      <article className="tender-stat tender-stat-green"><span className="tender-stat-icon"><Plus aria-hidden="true" /></span><div><span>今日新增 <Info size={13} aria-hidden="true" /></span><strong>{stats?.today_new ?? "—"}</strong></div><span className="tender-stat-decoration" aria-hidden="true" /></article>
+      <article className="tender-stat tender-stat-orange"><span className="tender-stat-icon"><FileText aria-hidden="true" /></span><div><span>本轮新增 <Info size={13} aria-hidden="true" /></span><strong>{stats?.latest_batch_new ?? "—"}</strong></div><span className="tender-stat-decoration" aria-hidden="true" /></article>
+      <article className="tender-stat tender-stat-red"><span className="tender-stat-icon"><Clock3 aria-hidden="true" /></span><div><span>即将截止 <Info size={13} aria-hidden="true" /></span><strong>{stats?.closing_soon ?? "—"}</strong></div><span className="tender-stat-decoration" aria-hidden="true" /></article>
+    </section>
+
     <div className="tender-browser">
       <section className="tender-filters" aria-label="商机筛选">
         <div className="tender-filter-grid">
           <IndustrySelect value={filters.industry} entries={industries} onChange={value => changeFilter("industry", value)} />
           <label>公告类型<select value={filters.notice_category} onChange={event => changeFilter("notice_category", event.target.value)}>{categories.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
           <label>地区<select value={filters.region || ""} onChange={event => changeFilter("region", event.target.value)}><option value="">全国</option>{regions.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
-          <button className="button secondary" type="button" onClick={reset}>恢复默认</button>
+          <label>参与状态<select value={filters.participation || ""} onChange={event => changeFilter("participation", event.target.value)}><option value="">全部状态</option>{participationOptions.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
+          <label>标签<select value={filters.user_state || ""} onChange={event => changeFilter("user_state", event.target.value)}><option value="">全部（隐藏不相关）</option>{userStates.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
         </div>
-        <div className="tender-personal-filters"><label>我的标记<select value={filters.user_state || ""} onChange={event => changeFilter("user_state", event.target.value)}><option value="">全部（隐藏不相关）</option>{userStates.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><label>参与状态<select value={filters.participation || ""} onChange={event => changeFilter("participation", event.target.value)}><option value="">全部状态</option>{participationOptions.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label><span>榆林优先 · 优先可参与与核心商机</span></div>
+        <div className="tender-search-row">
+          <label className="tender-search"><Search size={19} aria-hidden="true" /><input aria-label="搜索商机（暂未开放）" disabled placeholder="搜索项目名称、采购单位、关键词（暂未开放）" title="关键词搜索暂未开放，请使用上方筛选" /></label>
+          <button className="text-button" type="button" onClick={reset}>重置</button>
+          <button className="button secondary" type="button" disabled title="高级筛选暂未开放"><Filter size={17} aria-hidden="true" />高级筛选</button>
+          <button className="button primary" type="button" disabled title="关键词搜索暂未开放，请使用上方筛选"><Search size={18} aria-hidden="true" />搜索</button>
+        </div>
       </section>
 
       {listUpdating && list.kind === "ready" && <p className="tender-muted tender-update-status" role="status">正在更新筛选结果，统计与列表暂为上次结果。</p>}
@@ -610,12 +630,19 @@ export default function TenderOpportunities() {
       <section className="tender-list" aria-labelledby="tender-list-title" aria-busy={listUpdating}>
         <div className="tender-list-header">
           <div className="pd-panel-heading"><h3 id="tender-list-title">项目商机列表</h3>{list.kind === "ready" && <span>共 {list.data.total} 条 · 最近更新：{list.data.last_updated_at ? formatDateTime(list.data.last_updated_at) : "尚未成功更新"}</span>}</div>
-          <section className="tender-stats" aria-label="当前筛选统计" aria-busy={listUpdating}><div><span>符合条件</span><strong>{stats?.total ?? "—"}</strong></div><div><span>今日新增</span><strong>{stats?.today_new ?? "—"}</strong></div><div><span>本轮新增</span><strong>{stats?.latest_batch_new ?? "—"}</strong></div><div><span>即将截止</span><strong>{stats?.closing_soon ?? "—"}</strong></div></section>
+          <div className="tender-list-tools"><span title="榆林优先 · 优先可参与与核心商机">排序：默认优先级</span><span className="tender-view-active"><List size={15} aria-hidden="true" />列表</span><button type="button" disabled title="卡片模式暂未开放"><LayoutGrid size={15} aria-hidden="true" />卡片</button></div>
         </div>
         {list.kind === "loading" && <div className="tender-state" role="status">正在加载商机…</div>}
         {list.kind === "error" && <div className="tender-state" role="alert"><strong>商机列表加载失败</strong><p>{list.message}</p><button className="button secondary" onClick={() => setReload(value => value + 1)}>重试</button></div>}
         {list.kind === "ready" && list.data.items.length === 0 && <div className="tender-state"><strong>暂无符合条件的商机</strong><p>已接入来源暂未提供符合当前条件的项目。可调整筛选，并查看下方来源状态。</p></div>}
-        {list.kind === "ready" && list.data.items.length > 0 && <><div className="tender-table-wrap"><table><caption className="sr-only">商机列表</caption><thead><tr><th>项目名称</th><th>地区</th><th>采购单位</th><th>预算</th><th>发布时间</th><th>截止时间</th><th>参与状态</th><th>来源</th><th>我的标记</th></tr></thead><tbody>{list.data.items.map(item => <tr key={item.id}><td><button className="tender-title" type="button" onClick={() => openDetail(item.id)}>{item.project_name || "项目名称未提供"}</button>{item.project_code && <small>编号：{item.project_code}</small>}<ProjectTags item={item} /></td><td>{item.region || "—"}</td><td><span className="tender-purchaser" title={item.purchaser || undefined}>{item.purchaser || "—"}</span></td><td>{formatBudget(item)}</td><td>{publishedAt(item)}</td><td>{formatDateTime(item.bid_deadline)}</td><td><span className={`tender-badge status-${item.status.toLowerCase()}`}>{statusLabel(item)}</span></td><td><span className="tender-source-label">{sourceName(item.source)}</span></td><td><StateActions item={item} pending={pendingStates.has(item.id)} onChange={patch => void saveUserState(item.id, patch)}/></td></tr>)}</tbody></table></div><div className="tender-pager"><span>第 {list.data.page} 页</span><div className="pd-actions"><button className="button secondary" type="button" disabled={page <= 1} onClick={() => changePage(page - 1)}>上一页</button><button className="button secondary" type="button" disabled={!list.data.has_more} onClick={() => changePage(page + 1)}>下一页</button></div></div></>}
+        {list.kind === "ready" && list.data.items.length > 0 && <><div className="tender-table-wrap"><table><caption className="sr-only">商机列表，批量选择暂未开放</caption><thead><tr><th className="tender-select-cell"><input type="checkbox" disabled aria-label="全选（暂未开放）" title="批量选择暂未开放" /></th><th>项目名称</th><th>地区</th><th>采购单位</th><th>预算</th><th>发布时间</th><th>截止时间</th><th>参与状态</th><th>来源</th><th>操作</th></tr></thead><tbody>{list.data.items.map(item => <tr key={item.id}>
+          <td className="tender-select-cell"><input type="checkbox" disabled aria-label={`选择${item.project_name}（暂未开放）`} title="批量选择暂未开放" /></td>
+          <td><button className="tender-title" type="button" onClick={() => openDetail(item.id)}>{item.project_name || "项目名称未提供"}</button>{item.project_code && <small>编号：{item.project_code}</small>}<ProjectTags item={item} /></td>
+          <td>{item.region || "—"}</td><td><span className="tender-purchaser" title={item.purchaser || undefined}>{item.purchaser || "—"}</span></td><td>{formatBudget(item)}</td><td>{publishedAt(item)}</td><td>{item.bid_deadline ? formatDateTime(item.bid_deadline) : "待核实"}</td>
+          <td><span className={`tender-badge status-${(item.participation_status || item.status).toLowerCase()}`}>{statusLabel(item)}</span></td>
+          <td>{safeExternalUrl(item.original_url || undefined) ? <a className="tender-source-label" href={item.original_url!} target="_blank" rel="noopener noreferrer">{sourceName(item.source)}</a> : <span className="tender-source-label">{sourceName(item.source)}</span>}</td>
+          <td><div className="tender-row-actions"><StateActions item={item} pending={pendingStates.has(item.id)} onChange={patch => void saveUserState(item.id, patch)}/><button className="tender-detail-link" type="button" onClick={() => openDetail(item.id)}>查看详情<ArrowRight size={14} aria-hidden="true" /></button></div></td>
+        </tr>)}</tbody></table></div><div className="tender-pager"><span>第 {list.data.page} 页</span><div className="pd-actions"><button className="button secondary" type="button" disabled={page <= 1} onClick={() => changePage(page - 1)}>上一页</button><button className="button secondary" type="button" disabled={!list.data.has_more} onClick={() => changePage(page + 1)}>下一页</button></div></div></>}
       </section>
     </div>
     {((batch && batch.trigger !== "scheduled") || refreshMessage) && <section className="pd-panel tender-refresh" aria-live="polite"><div><strong>刷新状态</strong><span className={`tender-badge batch-${(batch ? batchDisplayState(batch) : "unknown").toLowerCase()}`}>{refreshLabel(refreshMessage || (batch ? batchDisplayState(batch) : undefined))}</span></div>{batch && terminalStates.has(batchDisplayState(batch)) && Object.entries(batch.results).length > 0 && <ul>{Object.entries(batch.results).map(([code, result]) => <li key={code}><strong>{sources.find(source => source.code === code)?.name || "公告来源"}</strong><span>{refreshLabel(result.display_state || result.state)}{typeof result.new_notices === "number" ? ` · 新增 ${result.new_notices} 条` : ""}{typeof result.new_versions === "number" && result.new_versions > 0 ? ` · 更新 ${result.new_versions} 版` : ""}{result.detail || result.error_code || result.error_detail ? ` · ${failureReason(result.error_code, result.detail || result.error_detail)}` : ""}</span></li>)}</ul>}</section>}

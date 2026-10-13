@@ -4,6 +4,7 @@ import tempfile
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from zipfile import ZipFile
+from PIL import Image
 
 from django.conf import settings
 from django.test import SimpleTestCase
@@ -140,14 +141,16 @@ class PresentationSourceManifestTests(PresentationGeneratorTestCase):
                     {"ref": f"{family}:P{index}", "type": "paragraph", "text": f"{family} 正文结论{index}。"},
                 ])
         with tempfile.TemporaryDirectory() as directory:
-            source = self.write_source(directory, source_data(blocks))
+            source = self.write_source(directory, {**source_data(blocks), "draft_mode": True})
             target = Path(directory) / "summary.pptx"
             completed = subprocess.run([str(RUNTIME), "-B", str(SCRIPT), str(source), str(target)],
                                        cwd=BACKEND, capture_output=True, text=True, timeout=60)
             self.assertEqual(completed.returncode, 0, completed.stderr)
             manifest = json.loads(target.with_suffix(".manifest.json").read_text(encoding="utf-8"))
             mapped = set(manifest["mapped_source_refs"])
-            self.assertEqual(manifest["quality_gate"]["status"], "pass")
+            self.assertEqual(manifest["quality_gate"]["status"], "fail")
+            self.assertEqual(manifest["presentation_quality_reasons"], ["visual_assets_missing"])
+            self.assertEqual(manifest["program_checks"]["status"], "pass")
             for family in ("technical-solution", "feasibility"):
                 self.assertIn(f"{family}:P0", mapped)
                 self.assertIn(f"{family}:P3", mapped)
@@ -173,7 +176,7 @@ class PresentationSourceManifestTests(PresentationGeneratorTestCase):
                                              and min(y + h, by + bh) > max(y, by),
                                              f"overlapping text on slide {page}")
 
-    def test_five_page_summary_uses_real_content_counts_and_refs(self):
+    def test_planned_summary_uses_real_source_refs_without_decorative_metrics(self):
         blocks = []
         for family, title, prefix in (
                 ("technical-solution", "客户技术方案总览", "客户技术项目摘录"),
@@ -192,6 +195,12 @@ class PresentationSourceManifestTests(PresentationGeneratorTestCase):
         data = source_data(blocks)
 
         with tempfile.TemporaryDirectory() as directory:
+            image_path = Path(directory) / "source.png"
+            Image.new("RGB", (1200, 700), "white").save(image_path)
+            for block in blocks:
+                if block["type"] == "figure":
+                    block["asset_path"] = str(image_path)
+                    block["presentation_image_evidence"] = {"width_mm": 145, "min_font_pt": 18}
             source = self.write_source(directory, data)
             target = Path(directory) / "summary.pptx"
             completed = subprocess.run(
@@ -230,7 +239,8 @@ class PresentationSourceManifestTests(PresentationGeneratorTestCase):
         eligible = {ref for ref in all_refs
                     if not ref.split(":", 1)[1].startswith(("DRAFT_NOTICE", "PENDING_"))}
         mapped = set(manifest["mapped_source_refs"])
-        self.assertEqual(manifest["slides"], 5)
+        self.assertGreater(manifest["slides"], 5)
+        self.assertEqual(manifest["slides"], len(manifest["presentation_plan"]["pages"]))
         self.assertEqual(manifest["quality_gate"]["status"], "pass")
         self.assertEqual(manifest["source_mapping_scope"], "selected_summary_blocks")
         self.assertEqual(manifest["content_review"], "not_run")
@@ -247,14 +257,14 @@ class PresentationSourceManifestTests(PresentationGeneratorTestCase):
         for field in ("visual_asset_count", "source_blocks", "source_blocks_mapped"):
             self.assertIs(type(manifest[field]), int)
         self.assertEqual(manifest["visual_asset_count"], picture_count)
-        self.assertEqual(manifest["native_charts"], 1)
+        self.assertEqual(manifest["native_charts"], 0)
 
         self.assertIn("客户技术方案总览", slide_text)
         self.assertIn("客户可行性研究总览", slide_text)
-        self.assertIn("3 张", slide_text)
+        self.assertIn("客户网络结构图", slide_text)
         for platform_assumption in ("35 张", "统一登录", "智能体编排", "资料上传", "风险控制矩阵"):
             self.assertNotIn(platform_assumption, slide_text)
-        self.assertEqual(chart_values, [2.0, 1.0])
+        self.assertEqual(chart_values, [])
 
 
 def _xml_text(content):

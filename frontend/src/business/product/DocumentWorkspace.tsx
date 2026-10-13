@@ -6,7 +6,7 @@ import type { BlueprintPayload, DocumentTask, DraftOutput, ReportRevision, Revie
 import "./product-workspace.css";
 import ProjectStages from "./ProjectStages";
 import { SOURCE_ACCEPT, updateSource } from "./product-api";
-import { useUnsavedWarning } from "./workbench-state";
+import { outputStatus, useUnsavedWarning } from "./workbench-state";
 
 const pretty = (value: unknown) => JSON.stringify(value, null, 2);
 const emptyInput = (): TaskInput => ({ project: "", requirements: "", items: [], background: "", conditions: [] });
@@ -23,13 +23,12 @@ const toggleValue = (values: string[], value: string, checked: boolean) => check
 interface ResolutionDraft { category: ReviewCategory | ""; reason: string; source_ids: string[] }
 const labels: Record<string, string> = {
   draft: "草稿", queued: "排队中", running: "后台处理中", blocked: "已阻塞", failed: "失败", cancelled: "已取消",
-  completed: "已完成", succeeded: "已完成", approved: "已批准", pending_review: "待审核", awaiting_review: "待审核",
-  waiting_input: "等待补充输入", waiting_review: "等待审核", intake: "需求录入", writing: "正文写作",
-  content_check: "内容检查", final_review: "最终审核", blueprint: "蓝图", write: "正文", render: "Word 草稿",
-  input: "需求录入", blueprint_review: "蓝图待审核", artifact_review: "文档待审核",
+  completed: "已完成", succeeded: "已完成", approved: "已批准", pending_review: "待完善", awaiting_review: "待完善", delivered: "已交付",
+  waiting_input: "等待补充输入", waiting_review: "等待蓝图确认", intake: "需求录入", writing: "正文写作",
+  content_check: "内容检查", final_review: "成果汇总", blueprint: "蓝图", write: "正文", render: "Word 草稿",
+  input: "需求录入", blueprint_review: "蓝图待审核", artifact_review: "成果待完善",
 };
 const outputLabels = { "technical-solution": "技术方案", feasibility: "可行性研究报告", presentation: "汇报 PPT" } as const;
-const outputReviewLabels = { stale: "已过期", approved: "已生成", pending_review: "已生成" } as const;
 const status = (value: string) => labels[value.toLowerCase()] || `待确认状态（${value || "未提供"}）`;
 const active = (task: TaskSummary) => ["queued", "running"].includes(task.state.toLowerCase());
 function errorMessage(error: unknown) {
@@ -171,7 +170,7 @@ function TaskWorkspace() {
           <button className="button primary" disabled={busy || (!pendingTask && !message.trim() && files.length === 0)}>{busy ? (pendingTask ? "正在上传…" : "正在创建…") : pendingTask ? "继续上传剩余资料" : "发送并创建任务"}</button>
         </div>
       </form>
-      <p className="product-empty-note">支持 PDF、DOCX、XLSX/XLS、CSV/TXT 与常见图片；扫描文字使用本地 OCR 并保留核对提示。路径必须在服务器已授权目录，对话不替代正式审批。</p>
+      <p className="product-empty-note">支持 PDF、DOCX、XLSX/XLS、CSV/TXT 与常见图片；扫描文字使用本地 OCR 并保留核对提示。路径必须在服务器已授权目录，对话不替代蓝图确认。</p>
     </section> : <TaskEditor key={`${selected}-${requestedArtifact}`} id={selected} requestedArtifact={requestedArtifact} deepLinked={!!requestedTask} onFatal={setFatal} />}
   </section>;
 }
@@ -410,8 +409,8 @@ export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, busines
         const latest = outputs.filter(item => item.family === family).at(-1);
         return <article className={`product-output-card ${latest?.current ? "ready" : "locked"}`} key={family}>
           <strong>{outputLabels[family]}</strong>
-          <span>{latest ? `${latest.draft ? "草稿" : "成果"} v${latest.version} · ${outputReviewLabels[latest.review_status]} · ${latest.sha256.slice(0, 12)}` : "尚未生成"}</span>
-          {latest?.current && <a href={family === "technical-solution" ? artifactDownload(latest.id) : draftDownload(latest.id)}>下载当前草稿</a>}
+          <span>{latest ? `${latest.draft ? "草稿" : "成果"} v${latest.version} · ${outputStatus(latest)} · ${latest.sha256.slice(0, 12)}` : "尚未生成"}</span>
+          {latest?.current && <a href={family === "technical-solution" ? artifactDownload(latest.id) : draftDownload(latest.id)}>下载当前文件</a>}
           {latest?.content_version != null && <small>内容 v{latest.content_version} · 已生成</small>}
           {latest?.source_versions.length ? <small>来源：{latest.source_versions.map(source => `${outputLabels[source.family as keyof typeof outputLabels] || source.family} v${source.version}`).join("、")}</small> : null}
         </article>;
@@ -471,19 +470,19 @@ export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, busines
     <Field id="blueprint-json" label="蓝图 JSON"><textarea id="blueprint-json" rows={14} value={blueprint} onChange={event => setBlueprint(event.target.value)} /></Field>
     <button disabled={disabled("save_blueprint")} onClick={() => void saveJson("blueprint/", blueprint, "payload")}>保存蓝图</button>
     <Field id="decision-comment" label="确认说明"><textarea id="decision-comment" value={comment} onChange={event => setComment(event.target.value)} /></Field>
-    <p>确认绑定服务端蓝图版本及 SHA256；确认后系统自动生成技术方案、可研和 PPT 草稿。</p>
+    <p>确认绑定服务端蓝图版本及 SHA256；确认后系统自动生成技术方案、可研和 PPT，并按质量检查结果交付。</p>
     <button disabled={disabled("confirm_blueprint") || !task.blueprint} onClick={() => decision("blueprint", "approve")}>确认蓝图并生成三件套</button>
     <h3>结构化内容版本</h3>
     <ul aria-label="结构化内容版本">{(task.reports || []).map(report => <li key={report.id}>
       {outputLabels[report.family]}内容 v{report.version} · {report.current ? "已生成" : "已过期"} · SHA256：{report.sha256}
     </li>)}</ul>
-    <h3>Word / PPT 草稿与历史版本</h3>
-    <p>生成完成的文件仍为草稿，不代表正式发布。</p>
+    <h3>Word / PPT 成果与历史版本</h3>
+    <p>通过交付检查的文件显示为已交付；存在质量问题的文件保留为草稿，仍可下载。</p>
     {historyError && <p role="alert">版本链读取失败：{historyError}</p>}
     <ul aria-label="成果历史版本">{outputs.map(item => <li key={item.id}>
-      {outputLabels[item.family]} v{item.version} · {item.current ? "当前" : "已过期"} · SHA256：{item.sha256}
+      {outputLabels[item.family]} v{item.version} · {outputStatus(item)} · SHA256：{item.sha256}
       <a href={item.family === "technical-solution" ? item.current ? artifactDownload(item.id) : artifactHistoryDownload(item.id) : item.current ? draftDownload(item.id) : draftHistoryDownload(item.id)} download>
-        下载{item.current ? "当前" : "历史草稿（已过期）"}{outputLabels[item.family]} v{item.version}
+        下载{item.current ? "当前" : "历史文件（已过期）"}{outputLabels[item.family]} v{item.version}
       </a>
     </li>)}</ul>
     <details><summary>查看版本与来源链</summary><p>服务端记录为应用级只读历史，不宣称法证级不可篡改。</p><ul aria-label="版本来源链">{(history?.timeline || []).filter(item => item.event === "revision").map(item => <li key={item.id}>{item.family ? `${outputLabels[item.family] || item.family} · ` : ""}{item.kind} v{item.version} · SHA256：{item.sha256} · 原因：{item.reason || "未提供"} · 操作者：{item.actor?.name || "未提供"} · 来源：{item.source_refs?.join("、") || "无"}</li>)}</ul></details>

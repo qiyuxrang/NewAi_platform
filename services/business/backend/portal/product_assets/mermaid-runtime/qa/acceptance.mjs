@@ -71,11 +71,19 @@ try {
   report.images=[];
   for(const figure of fixture.blocks){
     const bytes=await fs.readFile(path.join(round,figure.path));
+    const layout=report.renderer.figures.find((item)=>item.figure_id===figure.id).layout;
+    assert.equal(layout.version,"word-readable-v1");
+    assert.equal(layout.labelsFullyContained,true);
+    assert.equal(layout.panels.length,1);
+    const panel=layout.panels[0];
+    assert.ok(panel.min_font_pt>=10.5,"Word actual node font is unreadable");
+    assert.ok(panel.width_mm<=145);
     assert.equal(bytes.subarray(0,8).toString("hex"),"89504e470d0a1a0a");
-    assert.equal(bytes.readUInt32BE(16),2400);
-    assert.equal(bytes.readUInt32BE(20),1350);
-    assert.ok(bytes.length>10000,"blank/invalid diagram output");
-    report.images.push({path:figure.path,sha256:sha256(bytes),bytes:bytes.length,width:2400,height:1350});
+    assert.equal(bytes.readUInt32BE(16),Math.round(panel.css_width*1.5));
+    assert.equal(bytes.readUInt32BE(20),Math.round(panel.css_height*1.5));
+    assert.ok(bytes.length>2000,"blank/invalid diagram output");
+    report.images.push({path:figure.path,sha256:sha256(bytes),bytes:bytes.length,
+      width:bytes.readUInt32BE(16),height:bytes.readUInt32BE(20),width_mm:panel.width_mm,min_font_pt:panel.min_font_pt});
   }
   assert.equal((await fs.readdir(path.join(round,"images"))).length,20);
   report.failureProbes=[];

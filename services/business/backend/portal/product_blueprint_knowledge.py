@@ -1,8 +1,9 @@
 """RAGFlow gate and adapters for blueprint generation.
 
 Preview mode is deliberately source-only and records no synthetic retrieval
-hits. Formal mode calls the existing allow-listed RAGFlow retrieval service and
-fails closed on configuration, authorization, transport, or response errors.
+hits. Formal mode calls the existing allow-listed RAGFlow retrieval service,
+then supplements insufficient evidence with bounded public technical queries.
+Authorization and network failures stay explicit, recoverable gates.
 """
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from .product_service import ProductError, digest
+from .product_web_search import ERRORS, evidence_coverage, public_queries, search_public_references
 
 
 PREVIEW = "source_only_preview"
@@ -37,15 +39,23 @@ def blueprint_knowledge_status(input_payload):
     mode = getattr(settings, "PRODUCT_BLUEPRINT_KNOWLEDGE_MODE", PREVIEW)
     snapshot = _ragflow_snapshot(input_payload)
     if snapshot is not None:
+        web = snapshot.get("web_search", {})
+        evidence_ready = snapshot.get("evidence_ready", bool(snapshot["sources"]))
         return {
             "mode": mode,
             "required": mode == RAGFLOW_REQUIRED,
             "status": "ready",
             "ragflow_used": True,
             "source_count": len(snapshot["sources"]),
+            "ragflow_source_count": snapshot.get("ragflow_source_count", len(snapshot["sources"])),
+            "web_source_count": snapshot.get("web_source_count", 0),
+            "web_search": web,
+            "evidence_ready": evidence_ready,
+            "coverage": snapshot.get("coverage", {}),
             "query_hash": snapshot.get("query_hash", ""),
             "retrieval_outcome": snapshot.get("retrieval_outcome", "hits" if snapshot["sources"] else "no_hits"),
-            "detail": "当前输入版本已完成 RAGFlow 授权检索。",
+            "detail": ("授权知识检索与公开资料补充已完成；公开来源仅作技术参考，项目事实仍以项目资料为准。"
+                       if web.get("status") == "completed" else web.get("detail", "当前输入版本已完成 RAGFlow 授权检索。")),
         }
     if mode == RAGFLOW_REQUIRED:
         return {
@@ -54,6 +64,7 @@ def blueprint_knowledge_status(input_payload):
             "status": "waiting_for_ragflow",
             "ragflow_used": False,
             "source_count": 0,
+            "evidence_ready": False,
             "query_hash": "",
             "retrieval_outcome": "not_run",
             "detail": "正式模式必须先完成 RAGFlow 授权检索；服务不可用时不会绕过该步骤。",
@@ -64,6 +75,7 @@ def blueprint_knowledge_status(input_payload):
         "status": "source_only_preview",
         "ragflow_used": False,
         "source_count": 0,
+        "evidence_ready": False,
         "query_hash": "",
         "retrieval_outcome": "not_run",
         "detail": "当前为资料直生成预览，仅使用本项目上传资料；没有伪造 RAGFlow 命中。",
@@ -84,10 +96,12 @@ def require_blueprint_knowledge(input_payload, owner=None):
 
 def require_generation_knowledge(input_payload, owner=None):
     status = require_blueprint_knowledge(input_payload, owner)
-    if status["required"] and status["source_count"] == 0:
+    if status["required"] and not status["evidence_ready"]:
+        web = status.get("web_search", {})
+        code = web.get("code") if web.get("code") in ERRORS else "web_search_unconfigured"
         raise ProductError(
-            "web_search_unconfigured",
-            "知识库未命中且联网搜索服务尚未接入，请补充知识库资料后重新检索。",
+            code,
+            web.get("detail") or ERRORS[code],
             409,
         )
     return status
@@ -150,33 +164,74 @@ def prepare_blueprint_knowledge(task_id, fence):
     existing = _ragflow_snapshot(revision.payload)
     scope = authorize(task.owner)
     scope_hash = digest(scope)
-    if (existing is not None and existing.get("sources") and existing.get("authorization") == scope
-            and existing.get("scope_hash") == scope_hash):
+    query = _query(revision.payload)
+    query_hash = digest({"query": query})
+    reuse = (existing is not None and existing.get("authorization") == scope
+             and existing.get("scope_hash") == scope_hash and existing.get("query_hash") == query_hash)
+    if reuse and existing.get("evidence_ready", bool(existing.get("sources"))):
         return blueprint_knowledge_status(revision.payload)
 
-    config = configuration()
-    query = _query(revision.payload)
-    hits = retrieve(query, [], scope, config)
-    knowledge_sources = [{
-        "id": f"ragflow:{source['id']}",
-        "provider": "ragflow",
-        "chunk_id": source["chunk_id"],
-        "dataset_id": source["dataset_id"],
-        "document_id": source["document_id"],
-        "title": source["title"],
-        "text": source["content"],
-    } for source in hits]
+    if reuse:
+        knowledge_sources = [source for source in revision.payload.get("knowledge_sources", [])
+                             if source.get("provider") == "ragflow"]
+    else:
+        hits = retrieve(query, [], scope, configuration())
+        knowledge_sources = [{
+            "id": f"ragflow:{source['id']}",
+            "provider": "ragflow",
+            "chunk_id": source["chunk_id"],
+            "dataset_id": source["dataset_id"],
+            "document_id": source["document_id"],
+            "title": source["title"],
+            "text": source["content"],
+        } for source in hits]
+    ragflow_source_count = len(knowledge_sources)
+    coverage = evidence_coverage(revision.payload, knowledge_sources)
+    web = {"status": "skipped", "source_count": 0, "queries": [], "missing_domains": [],
+           "detail": "授权知识来源覆盖主要技术领域，本次未触发联网搜索。"}
+    if not coverage["sufficient"]:
+        from .product_worker import _analysis_progress
+
+        queries = public_queries(coverage)
+        web = {"status": "running", "source_count": 0, "queries": queries,
+               "missing_domains": coverage["missing_domains"], "fact_scope": "PUBLIC_REFERENCE",
+               "detail": "知识来源不足，正在以通用技术分类检索公开参考资料。"}
+        _analysis_progress(task_id, fence, "web_search", "running", **{key: value for key, value in web.items() if key != "status"})
+        try:
+            public_sources = search_public_references(queries)
+            combined = [*knowledge_sources, *public_sources]
+            completed_coverage = evidence_coverage(revision.payload, combined)
+            knowledge_sources = combined
+            coverage = completed_coverage
+            web["source_count"] = len(public_sources)
+            if public_sources:
+                web["provider"] = public_sources[0]["provider"]
+            if not public_sources or not completed_coverage["sufficient"]:
+                raise ProductError("web_search_no_hits", ERRORS["web_search_no_hits"], 409)
+            web.update(status="completed", source_count=len(public_sources),
+                       provider=public_sources[0]["provider"],
+                       detail="公开资料检索完成，来源仅作技术参考，不能补造项目事实。")
+        except ProductError as error:
+            if error.code not in ERRORS:
+                raise
+            web.update(status="blocked", code=error.code, detail=ERRORS[error.code])
     snapshot = {
         "provider": "ragflow",
         "status": "completed",
         "ragflow_used": True,
-        "query_hash": digest({"query": query}),
+        "query_hash": query_hash,
         "scope_hash": scope_hash,
-        "retrieval_outcome": "hits" if knowledge_sources else "no_hits",
+        "retrieval_outcome": "hits" if ragflow_source_count else "no_hits",
+        "ragflow_source_count": ragflow_source_count,
+        "web_source_count": web["source_count"],
+        "web_search": web,
+        "coverage": coverage,
+        "evidence_ready": coverage["sufficient"],
         "authorization": scope,
         "sources": [{key: source[key] for key in (
-            "id", "chunk_id", "dataset_id", "document_id", "title"
-        )} for source in knowledge_sources],
+            "id", "provider", "chunk_id", "dataset_id", "document_id", "title", "url",
+            "retrieved_at", "query_hash", "fact_scope", "reference_only", "untrusted", "source_trust", "timeliness"
+        ) if key in source} for source in knowledge_sources],
         "retrieved_at": timezone.now().isoformat(),
     }
     with transaction.atomic():
@@ -205,6 +260,10 @@ def prepare_blueprint_knowledge(task_id, fence):
                 "status": "completed",
                 "ragflow_used": True,
                 "source_count": len(knowledge_sources),
+                "ragflow_source_count": ragflow_source_count,
+                "web_source_count": web["source_count"],
+                "web_search": web,
+                "evidence_ready": coverage["sufficient"],
                 "query_hash": snapshot["query_hash"],
                 "updated_at": snapshot["retrieved_at"],
             },

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { CenterLink } from "../shared";
 import { getProductOutputHistory, type OutputFamily, type ProductOutputHistory } from "./product-api";
 import { DocumentSymbol, EmptyState, LoadState, ProductIcon } from "./workbench-shared";
-import { formatDate, goProduct, outputNames, productError } from "./workbench-state";
+import { formatDate, goProduct, outputNames, outputStatus, productError } from "./workbench-state";
 import "./project-workbench.css";
 import "./product-records.css";
 import "./product-clean-layout.css";
@@ -66,7 +66,7 @@ function OutputHistory({ family, query, page }: { family: "all" | OutputFamily; 
           <td data-label="成果类型"><span className="pr-family-cell"><DocumentSymbol family={output.family}/><span>{outputNames[output.family]}</span></span></td>
           <td data-label="版本"><span className="pr-version">v{output.version}</span></td>
           <td data-label="生成时间">{formatDate(output.created_at)}</td>
-          <td data-label="状态"><span className={`pd-badge ${output.review_status === "approved" ? "good" : "neutral"}`}>{output.review_status === "approved" ? "已批准" : output.current ? "当前版本" : "历史版本"}</span></td>
+          <td data-label="状态"><span className={`pd-badge ${["approved", "delivered"].includes(output.review_status) ? "good" : "neutral"}`}>{outputStatus(output)}</span></td>
           <td data-label="下载"><a href={output.download_url} className="button secondary pr-download" download aria-label={`下载${output.title} ${outputNames[output.family]} v${output.version}`}><ProductIcon name="download"/>下载</a></td>
         </tr>)}</tbody></table></div>
         <div className="pd-pagination"><span>第 {data.pagination.page} / {data.pagination.pages} 页</span><div>{data.pagination.page > 1 && <CenterLink href={link(family, data.pagination.page - 1)} className="button secondary">上一页</CenterLink>}{data.pagination.page < data.pagination.pages && <CenterLink href={link(family, data.pagination.page + 1)} className="button secondary">下一页</CenterLink>}</div></div>

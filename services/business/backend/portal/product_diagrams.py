@@ -379,7 +379,61 @@ def apply_diagram_descriptions(document: dict, diagrams: list[dict]) -> None:
         blocks[prefix + "_NOTE"].update(text=item["description"], source_ids=sources)
 
 
-def validate_document_requirements(document: dict) -> dict:
+def apply_diagram_layout(document: dict, evidence: dict, directory: Path) -> list[dict]:
+    """Insert measured reading units only after validating every image binding.
+
+    The caller verifies original figure/source identities first. This replaces
+    layout, never authored chapter text or Mermaid semantics, and is idempotent
+    when a recovered document already contains the reading units.
+    """
+    from .product_render_cache import confined, file_hash
+
+    figures = {block["id"]: block for block in document["blocks"] if block.get("type") == "figure"}
+    replacements, records = {}, []
+    for item in evidence.get("figures", []):
+        layout = item.get("layout")
+        if layout is None:  # Older/synthetic renderer evidence has no layout contract.
+            continue
+        if not isinstance(layout, dict):
+            raise ValueError("invalid diagram reading units")
+        figure = figures.get(item["figure_id"])
+        panels = layout.get("panels")
+        if (figure is None or layout.get("version") != "word-readable-v1"
+                or not isinstance(panels, list) or not panels or len(panels) > 100
+                or any(not isinstance(panel, dict) for panel in panels)):
+            raise ValueError("invalid diagram reading units")
+        units = []
+        for number, panel in enumerate(panels, 1):
+            expected_path = (figure["path"] if number == 1 else
+                             re.sub(r"\.png$", f"-unit-{number}.png", figure["path"], flags=re.I))
+            width, font = panel.get("width_mm"), panel.get("min_font_pt")
+            if (panel.get("index") != number or panel.get("total") != len(panels)
+                    or panel.get("path") != expected_path
+                    or type(width) not in (int, float) or not 10 <= width <= 145
+                    or type(font) not in (int, float) or not 10.5 <= font <= 100
+                    or not re.fullmatch(r"[0-9a-f]{64}", str(panel.get("imageSha256", "")))
+                    or file_hash(confined(directory, expected_path)) != panel["imageSha256"]
+                    or (number == 1 and panel["imageSha256"] != item["imageSha256"])):
+                raise ValueError("unverified diagram reading unit")
+            identifier = figure["id"] if number == 1 else f'{figure["id"]}_PANEL_{number:02d}'
+            caption = re.sub(r"（阅读单元\d+/\d+）$", "", figure["caption"])
+            alt = re.sub(r"；阅读单元\d+/\d+.*$", "", figure["alt"])
+            if len(panels) > 1:
+                caption += f"（阅读单元{number}/{len(panels)}）"
+                alt += f"；阅读单元{number}/{len(panels)}，相邻单元保留重叠衔接。"
+            units.append({**figure, "id": identifier, "path": expected_path, "caption": caption,
+                          "alt": alt, "width_mm": width})
+            records.append({"id": identifier, "image_sha256": panel["imageSha256"],
+                            "width_mm": width, "min_font_pt": font,
+                            "reading_unit": number, "reading_unit_count": len(panels)})
+        replacements[figure["id"]] = units
+    unit_ids = {unit["id"] for units in replacements.values() for unit in units[1:]}
+    document["blocks"] = [unit for block in document["blocks"] if block["id"] not in unit_ids
+                          for unit in replacements.get(block["id"], [block])]
+    return records
+
+
+def validate_document_requirements(document: dict, *, allow_pending=False) -> dict:
     family = document.get("family")
     if family not in FAMILY_DIAGRAMS:
         raise ValueError("unsupported report family")
@@ -388,7 +442,8 @@ def validate_document_requirements(document: dict) -> dict:
     h1 = [block for block in blocks if block.get("type") == "heading" and block.get("level") == 1]
     h2 = [block for block in blocks if block.get("type") == "heading" and block.get("level") == 2]
     required = minimum_diagrams(family)
-    if len(figures) < required:
+    pending = document.get("diagram_pending", []) if allow_pending else []
+    if len(figures) + len(pending) < required:
         raise ValueError(f"diagram count below requirement: {len(figures)} < {required}")
     if not h1 or not h2:
         raise ValueError("reports require both level-one and level-two headings")

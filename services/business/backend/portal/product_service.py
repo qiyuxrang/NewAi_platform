@@ -204,6 +204,12 @@ def resolve_input_issues(task, user, resolutions):
     return revision
 
 
+def blueprint_chapters(payload, family="technical-solution"):
+    """Legacy plans are shared; new plans keep both families in one approval."""
+    return [chapter for chapter in payload.get("chapters", [])
+            if chapter.get("family", family) == family]
+
+
 def validate_blueprint(payload, input_payload):
     _object(payload, {"purpose", "audience", "chapters", "conditions", "missing", "conflicts", "template_version"})
     conditions = payload["conditions"]
@@ -224,17 +230,29 @@ def validate_blueprint(payload, input_payload):
     normalized_chapters = []
     chapter_ids = set()
     for chapter in chapters:
-        _object(chapter, {"id", "title", "scope", "source_ids"})
+        _object(chapter, {"id", "title", "scope", "source_ids"} | ({"family"} if isinstance(chapter, dict) and "family" in chapter else set()))
+        if "family" in chapter and (not isinstance(chapter["family"], str)
+                                    or chapter["family"] not in {"technical-solution", "feasibility"}):
+            raise ProductError("invalid_blueprint", "章节报告类型无效。")
         chapter_id = _text(chapter["id"], "id", 100, required=True)
         if chapter_id in chapter_ids:
             raise ProductError("invalid_blueprint", "章节标识不得重复。")
         chapter_ids.add(chapter_id)
         normalized_chapters.append({
+            **({"family": chapter["family"]} if "family" in chapter else {}),
             "id": chapter_id,
             "title": _text(chapter["title"], "title", 160, required=True),
             "scope": _text(chapter["scope"], "scope", 5000),
             "source_ids": _text_list(chapter["source_ids"], "source_ids", 500, 64),
         })
+    if any("family" in chapter for chapter in chapters):
+        if (any("family" not in chapter for chapter in chapters)
+                or {chapter["family"] for chapter in chapters} != {"technical-solution", "feasibility"}):
+            raise ProductError("invalid_blueprint", "请同时提供技术方案与可研的独立章节。")
+        technical = [chapter["title"] for chapter in normalized_chapters if chapter["family"] == "technical-solution"]
+        feasibility = [chapter["title"] for chapter in normalized_chapters if chapter["family"] == "feasibility"]
+        if technical == feasibility:
+            raise ProductError("invalid_blueprint", "两份报告不能使用完全相同的目录。")
     return {
         "purpose": _text(payload["purpose"], "purpose", 5000, required=True),
         "audience": _text(payload["audience"], "audience", 1000, required=True),
@@ -370,12 +388,12 @@ def artifact_releasable(artifact):
         return False
     current_hashes = {}
     for chapter in task.revisions.filter(
-        kind=DocumentRevision.Kind.CHAPTER,
+        kind=DocumentRevision.Kind.CHAPTER, family=artifact.family,
         input_hash=input_revision.sha256,
         blueprint_hash=blueprint.sha256,
     ).order_by("version"):
         current_hashes[chapter.payload.get("chapter_id")] = chapter.sha256
-    required = {chapter["id"] for chapter in blueprint.payload.get("chapters", [])}
+    required = {chapter["id"] for chapter in blueprint_chapters(blueprint.payload, artifact.family)}
     return bool(required and set(current_hashes) == required and review.payload.get("chapter_hashes") == current_hashes)
 
 

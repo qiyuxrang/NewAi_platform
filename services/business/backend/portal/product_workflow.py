@@ -95,18 +95,27 @@ def run_product_workflow(
         _analysis_progress(state['task_id'], state['fence'], 'knowledge', 'running', detail='正在核对知识库授权并检索项目相关资料')
         result = prepare_blueprint_knowledge(state["task_id"], state["fence"])
         used = isinstance(result, dict) and result.get('ragflow_used') is True
-        source_count = result.get('source_count', 0) if isinstance(result, dict) else 0
+        source_count = result.get('ragflow_source_count', result.get('source_count', 0)) if isinstance(result, dict) else 0
         _analysis_progress(state['task_id'], state['fence'], 'knowledge', 'completed' if used else 'skipped',
                            source_count=source_count,
                            detail=f'授权知识库检索完成，获得 {source_count} 项来源' if used else '资料直生成预览：未执行知识库检索，仅使用项目上传资料')
-        if used and source_count == 0:
+        web = result.get('web_search', {}) if isinstance(result, dict) else {}
+        sufficient = result.get('evidence_ready', source_count > 0) if isinstance(result, dict) else False
+        if used and not sufficient:
             from .product_service import ProductError
+            from .product_web_search import ERRORS
 
             _analysis_progress(state['task_id'], state['fence'], 'web_search', 'blocked',
-                               detail='知识库未命中；联网搜索服务尚未接入，已暂停生成。请补充知识库资料后重新检索。')
-            raise ProductError('web_search_unconfigured', '知识库未命中且联网搜索服务尚未接入，请补充知识库资料后重新检索。', 409)
-        _analysis_progress(state['task_id'], state['fence'], 'web_search', 'skipped',
-                           detail='本次知识库已有检索来源，未触发联网搜索' if used else '资料直生成预览：未执行联网搜索')
+                               **{key: value for key, value in web.items() if key != 'status'},
+                               **({} if 'detail' in web else {'detail': ERRORS['web_search_unconfigured']}))
+            code = web.get('code') if web.get('code') in ERRORS else 'web_search_unconfigured'
+            raise ProductError(code, web.get('detail') or ERRORS[code], 409)
+        if web.get('status') == 'completed':
+            _analysis_progress(state['task_id'], state['fence'], 'web_search', 'completed',
+                               **{key: value for key, value in web.items() if key != 'status'})
+        else:
+            _analysis_progress(state['task_id'], state['fence'], 'web_search', 'skipped',
+                               detail='本次知识库已有检索来源，未触发联网搜索' if used else '资料直生成预览：未执行联网搜索')
         return {"node": "knowledge"}
 
     def blueprint(state: ProductWorkflowState):

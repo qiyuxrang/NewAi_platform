@@ -4,7 +4,7 @@ import hashlib
 from pathlib import Path
 
 from .product_models import DocumentRevision
-from .product_service import (ProductError, append_revision, approved_blueprint,
+from .product_service import (ProductError, append_revision, approved_blueprint, blueprint_chapters,
                               current_revision, digest, input_authorized)
 from .product_storage import private_root
 
@@ -46,25 +46,27 @@ def _chapter_hashes(task, family, current_input, blueprint):
     for revision in task.revisions.filter(kind=DocumentRevision.Kind.CHAPTER, family=family,
                                           input_hash=current_input.sha256, blueprint_hash=blueprint.sha256).order_by("version"):
         found[revision.payload.get("chapter_id")] = revision.sha256
-    required = [chapter["id"] for chapter in blueprint.payload["chapters"]]
+    required = [chapter["id"] for chapter in blueprint_chapters(blueprint.payload, family)]
     return {chapter_id: found[chapter_id] for chapter_id in required} if set(found) == set(required) else None
 
 
 def _report_generation_hash(task, family, current_input, blueprint):
     from .product_diagrams import diagram_contract_hash
+    from . import product_documents
     from .product_content_quality import content_quality_policy_hash
     from .product_worker import _content_review_current, current_chapters
     chapters = _chapter_hashes(task, family, current_input, blueprint)
     if chapters is None:
         return None
     found = current_chapters(task, current_input.sha256, blueprint.sha256, family)
-    ordered = [found[chapter["id"]] for chapter in blueprint.payload["chapters"]]
+    ordered = [found[chapter["id"]] for chapter in blueprint_chapters(blueprint.payload, family)]
     review = task.revisions.filter(kind=DocumentRevision.Kind.REVIEW, family=family).order_by("-version").first()
     validated_review = ({"id": str(review.pk), "sha256": review.sha256}
                         if _content_review_current(task, review, current_input, blueprint, ordered) else None)
     return digest({"family": family, "input": current_input.sha256, "blueprint": blueprint.sha256,
                    "chapters": list(chapters.values()), "title": task.title, "diagrams": diagram_contract_hash(),
-                   "quality_policy_sha256": content_quality_policy_hash(), "validated_review": validated_review})
+                   "quality_policy_sha256": content_quality_policy_hash(), "validated_review": validated_review,
+                   "assembly_renderer": hashlib.sha256(Path(product_documents.__file__).read_bytes()).hexdigest()})
 
 
 def _report_images_current(report, artifact):
@@ -122,15 +124,12 @@ def report_current(task, report):
     if not _report_images_current(report, artifact):
         return False
     found = current_chapters(task, current_input.sha256, blueprint.sha256, report.family)
-    ordered = [found.get(chapter["id"]) for chapter in blueprint.payload["chapters"]]
+    ordered = [found.get(chapter["id"]) for chapter in blueprint_chapters(blueprint.payload, report.family)]
     if any(chapter is None for chapter in ordered) or not _content_review_current(task, artifact.review, current_input, blueprint, ordered):
         return False
     model = artifact.review.payload.get("model_review", {})
-    pending_draft = (artifact.render_evidence.get("kind") == "draft"
-                     and artifact.render_evidence.get("content_review") == "human_review_required"
-                     and artifact.review.payload.get("full_document_human_review_required") is True
-                     and artifact.review.payload.get("passed") is False)
-    if not pending_draft and (model.get("status") != "passed" or model.get("issues") or model.get("coverage", {}).get("all_batches_passed") is not True):
+    program_only = artifact.review.payload.get("generation_policy") == "draft-first-v1"
+    if not program_only and (model.get("status") != "passed" or model.get("issues") or model.get("coverage", {}).get("all_batches_passed") is not True):
         return False
     expected = _report_generation_hash(task, report.family, current_input, blueprint)
     return bool(expected and artifact and artifact.generation_hash == expected)
@@ -160,7 +159,7 @@ def output_current(task, artifact):
         return bool(report and report_current(task, report))
     chapters = _chapter_hashes(task, artifact.family, current_input, blueprint)
     found = current_chapters(task, current_input.sha256, blueprint.sha256, artifact.family)
-    ordered = [found.get(chapter["id"]) for chapter in blueprint.payload["chapters"]]
+    ordered = [found.get(chapter["id"]) for chapter in blueprint_chapters(blueprint.payload, artifact.family)]
     if not chapters or any(chapter is None for chapter in ordered) or not _content_review_current(task, artifact.review, current_input, blueprint, ordered):
         return False
     model = artifact.review.payload.get("model_review", {})
@@ -170,6 +169,7 @@ def output_current(task, artifact):
 
 
 def pair_snapshot(task):
+    from .product_delivery import artifact_delivery
     current_input = current_revision(task, DocumentRevision.Kind.INPUT)
     blueprint = current_revision(task, DocumentRevision.Kind.BLUEPRINT)
     if current_input is None or blueprint is None or current_input.version != task.input_version or blueprint.version != task.blueprint_version:
@@ -179,11 +179,25 @@ def pair_snapshot(task):
            or not report_current(task, report) for report in reports):
         raise ProductError("stale_pair", "两份报告尚未生成或来源已变化。", 409)
     blocks = []
+    diagram_pending = []
+    draft_quality = []
     storage = private_root().resolve()
     for report in reports:
         artifact = next((item for item in task.artifacts.filter(family=report.family)
                          if item.render_evidence.get("report_id") == str(report.pk)), None)
         asset_root = (storage / Path(artifact.path).parent).resolve() if artifact else None
+        if artifact:
+            quality = artifact.render_evidence.get("draft_quality", {})
+            delivery = artifact_delivery(artifact)
+            blocked = delivery["blocking_issues"]
+            draft_quality.append({"family": report.family, **quality,
+                "review_issue_count": quality.get("quality_issue_count", 0),
+                "quality_issue_count": len(blocked),
+                "quality_issue_codes": sorted({issue["code"] for issue in blocked}),
+                "blocking_issues": blocked, "warnings": delivery["warnings"],
+                "delivery_status": delivery["status"]})
+            diagram_pending.extend({"family": report.family, **item} for item in
+                artifact.render_evidence.get("diagram_generation", {}).get("pending_figures", []))
         for block in report.payload["blocks"]:
             item = {"ref": f"{report.family}:{block['id']}", "text": block.get("text", ""),
                     "type": block.get("type", "paragraph"), "level": block.get("level"),
@@ -193,10 +207,17 @@ def pair_snapshot(task):
                 candidate = (asset_root / block.get("path", "")).resolve()
                 if candidate.is_relative_to(asset_root) and candidate.is_file():
                     item["asset_path"] = str(candidate)
+                    evidence = next((figure for figure in artifact.render_evidence.get("diagram_generation", {}).get("figures", [])
+                                     if figure.get("id") == block["id"]), {})
+                    for key in ("width_mm", "min_font_pt", "reading_unit", "reading_unit_count"):
+                        if key in evidence:
+                            item[key] = evidence[key]
             blocks.append(item)
     sources = [{"family": report.family, "id": str(report.pk), "version": report.version,
                 "sha256": report.sha256, "created_by": report.created_by_id,
                 "created_at": report.created_at.isoformat()} for report in reports]
     return {"input_hash": current_input.sha256, "blueprint_hash": blueprint.sha256,
-            "sources": sources, "blocks": blocks, "pending": _pending_items(reports),
-            "approval_inherited": False, "sha256": digest({"sources": sources, "input_hash": current_input.sha256, "blueprint_hash": blueprint.sha256})}
+            "sources": sources, "blocks": blocks, "pending": _pending_items(reports), "diagram_pending": diagram_pending,
+            "draft_quality": {"reports": draft_quality},
+            "approval_inherited": False, "sha256": digest({"sources": sources, "input_hash": current_input.sha256,
+                "blueprint_hash": blueprint.sha256, "draft_quality": draft_quality, "diagram_pending": diagram_pending})}

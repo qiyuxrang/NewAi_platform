@@ -1,15 +1,19 @@
 import { useEffect, useMemo, useState } from "react";
 import { ApiError } from "../api";
 import { workspaceHref } from "../workspace-navigation";
-import { getProductOverview, type OutputFamily, type ProductOverview } from "./product-api";
+import { getProductOverview, type OutputFamily, type OutputReviewStatus, type ProductOverview } from "./product-api";
 
 export const outputNames: Record<OutputFamily, string> = { "technical-solution": "技术方案", feasibility: "可研报告", presentation: "汇报 PPT" };
+export function outputStatus(output: { current?: boolean; stale?: boolean; delivered?: boolean; approved?: boolean; review_status?: OutputReviewStatus }) {
+  return output.current === false || output.stale || output.review_status === 'stale' ? '历史 · 已过期' : output.delivered || output.review_status === 'delivered' ? '已交付' : output.approved || output.review_status === 'approved' ? '已批准' : '草稿 · 待完善';
+}
 export const stateNames: Record<string, string> = { DRAFT: "待完善资料", WAITING_INPUT: "待处理", QUEUED: "排队中", RUNNING: "生成中", WAITING_REVIEW: "待确认", FAILED: "处理失败", CANCELLED: "已取消", COMPLETED: "已完成" };
 export const stageNames: Record<string, string> = { INTAKE: "资料整理", BLUEPRINT: "项目蓝图", WRITING: "正文编制", CONTENT_CHECK: "内容检查", RENDER: "文档生成", FINAL_REVIEW: "成果汇总" };
 export const projectUrl = (id: string, tab = "overview") => `/centers/product/projects?task=${encodeURIComponent(id)}&tab=${encodeURIComponent(tab)}`;
 export function goProduct(url: string) { window.history.pushState({}, "", workspaceHref(url)); window.dispatchEvent(new PopStateEvent("popstate")); }
 export function projectListUrl() {
   const value = new URLSearchParams(window.location.search).get('returnTo');
+  if (value === '/departments/product') return value;
   if (!value || !/^\/(?:departments\/product\/(?:documents|outputs)(?:[?]|$)|centers\/(?:product\/|business\/(?:projects|history|outputs)(?:[?]|$)))/.test(value)) return workspaceHref('/centers/product/projects');
   const url = new URL(value, window.location.origin);
   return url.searchParams.has('task') ? workspaceHref('/centers/product/projects') : workspaceHref(`${url.pathname}${url.search}`);
