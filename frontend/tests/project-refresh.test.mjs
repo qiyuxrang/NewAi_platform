@@ -5,12 +5,12 @@ import { fileURLToPath } from 'node:url';
 
 test('project refresh preserves safe snapshots, rejects obsolete responses and highlights only changed files', async () => {
   // Isolate component hooks and network responses; no browser, backend or new test dependency.
-  const original = { fetch: globalThis.fetch, window: globalThis.window, document: globalThis.document, localStorage: globalThis.localStorage };
+  const original = { fetch: globalThis.fetch, window: globalThis.window, document: globalThis.document, localStorage: globalThis.localStorage, ResizeObserver: globalThis.ResizeObserver };
   const server = await createServer({ root: fileURLToPath(new URL('../', import.meta.url)), configFile: false, appType: 'custom',
     server: { middlewareMode: true, hmr: false }, optimizeDeps: { noDiscovery: true, include: [] }, esbuild: { jsx: 'automatic' },
     plugins: [{ name: 'isolated-project-hooks', resolveId: id => id === '/@project-test-hooks' ? '\0project-test-hooks' : null,
       load: id => id === '\0project-test-hooks' ? `export { memo } from 'react'; ${['useState', 'useRef', 'useEffect', 'useMemo', 'useCallback'].map(name => `export const ${name} = (...args) => globalThis.projectTestHooks.${name}(...args);`).join(' ')}` : null,
-      transform: (code, id) => /\/(DocumentWorkspace\.tsx|ProjectStages\.tsx|workbench-state\.ts)$/.test(id.replaceAll('\\', '/')) ? code.replaceAll('from "react"', 'from "/@project-test-hooks"') : null }] });
+      transform: (code, id) => /\/(DocumentWorkspace\.tsx|ProjectStages\.tsx|workbench-state\.ts|workbench-resize\.ts)$/.test(id.replaceAll('\\', '/')) ? code.replaceAll('from "react"', 'from "/@project-test-hooks"') : null }] });
   const requests = [];
   const noop = () => {};
   let reducedMotion = false;
@@ -18,6 +18,7 @@ test('project refresh preserves safe snapshots, rejects obsolete responses and h
   globalThis.window = { location: { search: '?tab=technical-solution', origin: 'https://local.invalid' }, addEventListener: noop, removeEventListener: noop,
     setInterval: () => 1, clearInterval: noop, matchMedia: () => ({ matches: reducedMotion }) };
   globalThis.document = { hidden: false, addEventListener: noop, removeEventListener: noop };
+  globalThis.ResizeObserver = class { observe() {} disconnect() {} };
   globalThis.fetch = (path, options) => new Promise(resolve => requests.push({ path, options, resolve }));
   class Hooks {
     slots = []; index = 0; effects = [];

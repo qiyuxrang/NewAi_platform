@@ -13,7 +13,7 @@ export default function TopBar() {
   const { pathname } = useLocation()
   const { user } = useEnterprise()
   const manager = user?.business_role === 'general_manager'
-  const page = availableManagerEntries(user).find(entry => entry.to.split('?')[0] === pathname)?.label ?? (pathname === '/departments/product/outputs' ? '文档生成 / 成果文件' : '工作首页')
+  const page = availableManagerEntries(user).find(entry => entry.to.split('?')[0] === pathname)?.label ?? (pathname === '/departments/business/projects' ? '部门项目汇总' : pathname === '/departments/product/outputs' ? '文档生成 / 成果文件' : '工作首页')
   const [status, setStatus] = useState<ServiceStatus>('initializing')
   const checkIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)

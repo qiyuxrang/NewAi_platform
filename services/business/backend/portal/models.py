@@ -211,14 +211,14 @@ from .product_models import (DocumentApproval, DocumentArtifact, DocumentAttempt
                              DocumentRevision, DocumentSource, DocumentTask, DocumentReviewPolicy)
 from .hr_models import HrJobRevision, HrJobTask, ProbationCase, ProbationTransition
 from .hr_recruitment_models import JDVersion, RecruitmentRequest
-from .hr_screening_models import ResumeArtifact, ResumeScreeningBatch
+from .hr_screening_models import ResumeArtifact, ResumeScreeningBatch, ResumeProcessingStage
 from .business_models import (BusinessLedgerGrant, BusinessLedgerRevision,
                               BusinessLedgerSnapshot, BusinessLedgerWorkbook)
 from .product_knowledge_models import ProductKnowledgeConversation
 from .tender_models import (TenderSource, TenderFetchRun, TenderManualRefresh, TenderConsumerHeartbeat,
                             TenderRecoveryAudit, TenderSnapshot, TenderNotice, TenderNoticeVersion,
                             TenderOpportunity, TenderOpportunityUserState, TenderOpportunityEvent, TenderSourceHealthEvent)
-from .engineering_models import EngineeringJob
+from .engineering_models import EngineeringJob, EngineeringPreparation, EngineeringPreparationStep
 from .agent_models import (AgentProject, AgentAttachment, AgentConversation, AgentMessage, AgentWorkTask,
                            AgentRequirement, AgentRun, AgentRootAction, AgentEvent,
                            AgentBusinessReference, AgentSkillInstallation)

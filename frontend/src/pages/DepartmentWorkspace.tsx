@@ -14,6 +14,7 @@ import LedgerEntry from '../business/ledgers/LedgerEntry'
 import { useEntryAccess } from '../business/entry-access'
 import { useEnterprise } from '../components/enterprise-context'
 import WorkspaceBoundary from '../business/WorkspaceBoundary'
+import DepartmentProjects from '../business/DepartmentProjects'
 
 interface BusinessConnection {
   configured: boolean
@@ -28,6 +29,7 @@ export default function DepartmentWorkspace() {
   const entryAllowed = useEntryAccess()
   const manager = user?.business_role === 'general_manager'
   const finance = departmentCode === 'business' && featureCode === 'finance'
+  const projects = departmentCode === 'business' && featureCode === 'projects'
   const entry = featureCode === 'entry'
   const assistant = featureCode === 'knowledge'
   const department = departments.find(item => item.code === departmentCode)
@@ -47,12 +49,12 @@ export default function DepartmentWorkspace() {
     return () => { active = false }
   }, [revision])
 
-  if (!finance && (!department || (featureCode && !feature))) return <p className="text-dark-text-secondary">该工作页面不存在。</p>
+  if (!finance && !projects && (!department || (featureCode && !feature))) return <p className="text-dark-text-secondary">该工作页面不存在。</p>
 
   return <div className={departmentCode === 'product' ? 'wb-department' : assistant ? 'assistant-department' : 'mx-auto max-w-6xl space-y-6'}>
     <div hidden={(manager || departmentCode === 'product' || entry || assistant) && connection?.available}>
       {feature && <Link to={departmentPath(department!.code)} className="text-sm text-accent-blue">返回{department?.label}</Link>}
-      <h1 className="mt-2 text-2xl font-bold text-dark-text">{feature?.label ?? (finance ? '财务看板' : `${department?.label}工作台`)}</h1>
+      <h1 className="mt-2 text-2xl font-bold text-dark-text">{feature?.label ?? (finance ? '财务看板' : projects ? '部门项目汇总' : `${department?.label}工作台`)}</h1>
       <p className="mt-2 text-sm text-dark-text-secondary">{feature?.description ?? department?.description}</p>
     </div>
     {(!connection?.available || error) && <section className="rounded-xl border border-dark-border bg-dark-card p-6">
@@ -69,13 +71,14 @@ export default function DepartmentWorkspace() {
     <WorkspaceBoundary resetKey={`${departmentCode}/${featureCode}`}>
       {connection?.available && hrFeature && <HrWorkspace feature={featureCode!} />}
       {connection?.available && finance && <BusinessSurface><FinanceBoard /></BusinessSurface>}
+      {connection?.available && projects && <BusinessSurface><DepartmentProjects /></BusinessSurface>}
       {connection?.available && entry && departmentCode === 'finance' && <BusinessSurface><FinanceEntry /></BusinessSurface>}
       {connection?.available && entry && departmentCode === 'engineering' && <BusinessSurface><LedgerEntry department="engineering" /></BusinessSurface>}
       {connection?.available && departmentCode === 'product' && <ProductWorkspace feature={featureCode || 'overview'} />}
       {connection?.available && assistant && departmentCode !== 'product' && <BusinessSurface><ProductKnowledge /></BusinessSurface>}
       {connection?.available && departmentCode === 'engineering' && featureCode && !entry && !assistant && <BusinessSurface><EngineeringWorkspace section="estimate" /></BusinessSurface>}
     </WorkspaceBoundary>
-    {!finance && !feature && departmentCode !== 'product' && <div className="grid grid-cols-2 gap-4">
+    {!finance && !projects && !feature && departmentCode !== 'product' && <div className="grid grid-cols-2 gap-4">
       {department!.functions.filter(item => item.code !== 'entry' || entryAllowed).map(item => <Link key={item.code} to={departmentPath(department!.code, item.code)} className="rounded-xl border border-dark-border bg-dark-card p-5 hover:border-accent-blue">
         <div className="flex items-center justify-between font-semibold text-dark-text">{item.label}<ArrowRight size={16} /></div>
         <p className="mt-2 text-sm text-dark-text-secondary">{item.description}</p>

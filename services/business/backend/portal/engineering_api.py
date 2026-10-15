@@ -167,6 +167,9 @@ def job_detail(request, job_id):
     _require_engineering(request)
     job = _owned_job(request.user, job_id)
     if request.method == "DELETE":
+        from .engineering_models import EngineeringPreparation
+        if EngineeringPreparation.objects.filter(job=job).exists():
+            raise EngineeringError('confirmed_basis_retained', '已确认测算的依据与成果需保留审计记录。', 409)
         deletable = (EngineeringJob.Status.COMPLETED, EngineeringJob.Status.FAILED,
                      EngineeringJob.Status.BLOCKED)
         now = timezone.now()

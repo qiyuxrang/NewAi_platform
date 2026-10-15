@@ -1,0 +1,38 @@
+{
+  "scope": "Isolated real HTTP business/proxy; model responses stubbed; no production data",
+  "results": [
+    {
+      "department": "presales",
+      "published_revision": 4,
+      "visible_seconds": 15.01,
+      "records": 1
+    },
+    {
+      "department": "engineering",
+      "published_revision": 4,
+      "visible_seconds": 14.97,
+      "records": 1
+    },
+    {
+      "department": "finance",
+      "published_revision": 3,
+      "visible_seconds": 15.0,
+      "records": 1
+    },
+    {
+      "engineering_equivalence_files": 1,
+      "numeric_formula_unit_source_cells": "identical"
+    },
+    {
+      "engineering_equivalence_files": 2,
+      "numeric_formula_unit_source_cells": "identical"
+    },
+    {
+      "engineering": "preflight -> confirm -> real CLI -> downloadable draft"
+    },
+    {
+      "hr": "upload draft -> explicit confirmation -> model stub worker -> evidence comparison"
+    }
+  ],
+  "page_errors": []
+}

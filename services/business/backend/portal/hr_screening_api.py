@@ -58,7 +58,8 @@ def _selection_data(selection):
 
 def artifact_data(item):
     return {'id': str(item.pk), 'filename': item.filename, 'size': item.size, 'sha256': item.sha256,
-            'processing_status': item.processing_status, 'error_code': item.error_code, 'version': item.version}
+            'processing_status': item.processing_status, 'error_code': item.error_code, 'version': item.version,
+            'completed_stages': list(item.stages.values_list('name', flat=True))}
 
 
 @api_view(['GET', 'POST'])

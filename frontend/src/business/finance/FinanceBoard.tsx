@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { Banknote, CalendarDays, CircleDollarSign, Clock3, FileText, Info, RefreshCw, Search, ShieldCheck, Wallet } from 'lucide-react'
-import { collectionComposition, financeError, financeMetrics, financeValue, isSourceFinance, loadFinanceBoard } from './finance-board'
+import { collectionComposition, financeMetrics, financeValue, isSourceFinance } from './finance-board'
+import { useBusinessResource } from '../useBusinessResource'
 import type { FinanceBoardPayload } from './finance-board'
 import './finance-board.css'
 
@@ -58,22 +59,15 @@ export function FinanceBoardContent({ data, query }: { data: FinanceBoardPayload
 export default function FinanceBoard() {
   const [params, setParams] = useSearchParams()
   const query = (params.get('q') || '').trim()
-  const [attempt, setAttempt] = useState(0)
-  const requestKey = JSON.stringify([query, attempt])
-  const [result, setResult] = useState<{ key: string; data?: FinanceBoardPayload; error?: string } | null>(null)
-  useEffect(() => {
-    const controller = new AbortController()
-    void loadFinanceBoard(query, controller.signal).then(data => { if (!controller.signal.aborted) setResult({ key: requestKey, data }) }).catch(cause => { if (!controller.signal.aborted) setResult({ key: requestKey, error: financeError(cause) }) })
-    return () => controller.abort()
-  }, [query, requestKey])
-  const current = result?.key === requestKey ? result : null
+  const current = useBusinessResource<FinanceBoardPayload>(`/api/business/boards/finance/?q=${encodeURIComponent(query)}`)
   return <div className="finance-board">
     <header className="finance-heading"><div><p>经营管理</p><h2>财务看板</h2><span>合同、回款与应收的已发布台账</span></div><Banknote size={26} aria-hidden="true" /></header>
     <form className="finance-filters" onSubmit={event => { event.preventDefault(); const value = String(new FormData(event.currentTarget).get('q') || '').trim(); const next = new URLSearchParams(params); if (value) next.set('q', value); else next.delete('q'); setParams(next) }}>
-      <label htmlFor="finance-query"><Search size={17} aria-hidden="true" /><input key={query} id="finance-query" name="q" aria-label="搜索项目、业主、负责人或状态" maxLength={100} defaultValue={query} placeholder="搜索项目、业主、负责人或状态" /></label><button type="submit">筛选</button><button type="button" className="finance-secondary" onClick={() => setAttempt(value => value + 1)} aria-label="刷新财务看板"><RefreshCw size={16} aria-hidden="true" />刷新</button>
+      <label htmlFor="finance-query"><Search size={17} aria-hidden="true" /><input key={query} id="finance-query" name="q" aria-label="搜索项目、业主、负责人或状态" maxLength={100} defaultValue={query} placeholder="搜索项目、业主、负责人或状态" /></label><button type="submit">筛选</button><button type="button" className="finance-secondary" onClick={current.reload} aria-label="刷新财务看板"><RefreshCw size={16} aria-hidden="true" />刷新</button>
     </form>
-    {!current && <p className="finance-empty" role="status">正在读取财务台账…</p>}
+    {!current.data && !current.error && <p className="finance-empty" role="status">正在读取财务台账…</p>}
+    {current.updatedAt && <p className="finance-scope">最近读取：{current.updatedAt} · 页面可见时每15秒刷新{current.error ? ' · 当前保留上次成功数据' : ''}</p>}
     {current?.error && <p className="finance-error" role="alert">{current.error}</p>}
-    {current?.data && <FinanceBoardContent key={current.key} data={current.data} query={query} />}
+    {current?.data && <FinanceBoardContent key={query} data={current.data} query={query} />}
   </div>
 }

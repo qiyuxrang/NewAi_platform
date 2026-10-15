@@ -111,6 +111,7 @@ export default function Sidebar() {
             </div>
           })}
         </div>
+        {manager && hasCapability(user, 'general_manager') && <NavLink to="/departments/business/projects" className="gm-nav-link"><LayoutDashboard size={19} />部门项目汇总</NavLink>}
         {manager && hasCapability(user, 'product') && <RecentProjects key={user?.portal_user_id} />}
         <NavLink to="/settings" className={({ isActive }) => `mt-2 flex items-center gap-3 rounded-lg px-3 py-2 text-sm ${isActive ? 'bg-accent-blue/15 text-accent-blue' : 'text-dark-text-secondary hover:bg-dark-card hover:text-dark-text'}`}>
           <Settings size={18} />设置

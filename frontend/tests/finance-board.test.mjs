@@ -111,7 +111,7 @@ test('filter changes discard stale responses and permission revocation unmounts 
     server: { middlewareMode: true, hmr: false, ws: false }, optimizeDeps: { noDiscovery: true, include: [] }, esbuild: { jsx: 'automatic' },
     plugins: [{ name: 'finance-test-hooks', resolveId: id => id === '/@finance-test-hooks' ? '\0finance-test-hooks' : null,
       load: id => id === '\0finance-test-hooks' ? 'export const useState = (...args) => globalThis.financeTestHooks.useState(...args); export const useEffect = (...args) => globalThis.financeTestHooks.useEffect(...args); export const useSearchParams = () => [globalThis.financeTestHooks.params, () => {}];' : null,
-      transform: (code, id) => id.replaceAll('\\', '/').endsWith('/finance/FinanceBoard.tsx') ? code.replace(/from ["']react["']/g, "from '/@finance-test-hooks'").replace(/from ["']react-router-dom["']/g, "from '/@finance-test-hooks'") : null }] })
+      transform: (code, id) => ['/finance/FinanceBoard.tsx', '/business/useBusinessResource.ts'].some(suffix => id.replaceAll('\\', '/').endsWith(suffix)) ? code.replace(/from ["']react["']/g, "from '/@finance-test-hooks'").replace(/from ["']react-router-dom["']/g, "from '/@finance-test-hooks'") : null }] })
   const requests = [], slots = []
   let index = 0
   const hooks = {
@@ -126,6 +126,10 @@ test('filter changes discard stale responses and permission revocation unmounts 
   }
   const settle = async () => { for (let i = 0; i < 5; i++) await new Promise(resolve => setImmediate(resolve)) }
   globalThis.financeTestHooks = hooks
+  const oldWindow = globalThis.window, oldDocument = globalThis.document
+  const timers = [], listeners = new Map()
+  globalThis.window = { setInterval: fn => { timers.push(fn); return timers.length }, clearInterval: () => {}, addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: name => listeners.delete(name) }
+  globalThis.document = { hidden: false, hasFocus: () => true, addEventListener: (name, fn) => listeners.set(name, fn), removeEventListener: name => listeners.delete(name) }
   globalThis.fetch = (path, options) => new Promise(resolve => requests.push({ path, options, resolve }))
   try {
     const { default: Board, FinanceBoardContent: Content } = await isolated.ssrLoadModule('/src/business/finance/FinanceBoard.tsx')
@@ -146,10 +150,17 @@ test('filter changes discard stale responses and permission revocation unmounts 
     assert.equal(find(tree, node => node.type === Content).props.query, '二期')
     find(tree, node => node.props?.['aria-label'] === '刷新财务看板').props.onClick()
     tree = render()
-    assert.equal(find(tree, node => node.type === Content), undefined)
-    requests[2].resolve(Response.json({ detail: '无总经理看板权限。' }, { status: 403 })); await settle()
+    assert.deepEqual(find(tree, node => node.type === Content).props.data, second, 'manual refresh retains last successful data while pending')
+    requests[2].resolve(Response.json({ detail: '隔离网络故障' }, { status: 503 })); await settle()
+    tree = render()
+    assert.deepEqual(find(tree, node => node.type === Content).props.data, second, 'network failure preserves the last successful publication')
+    globalThis.document.hidden = true; timers.at(-1)(); await settle()
+    assert.equal(requests.length, 3, 'hidden pages do not poll')
+    globalThis.document.hidden = false; listeners.get('focus')(); await settle()
+    assert.equal(requests.length, 4, 'focus reloads the current filter')
+    requests[3].resolve(Response.json({ detail: '无总经理看板权限。' }, { status: 403 })); await settle()
     tree = render()
     assert.equal(find(tree, node => node.type === Content), undefined)
     assert.equal(find(tree, node => node.props?.role === 'alert').props.children, '无总经理看板权限。')
-  } finally { for (const slot of slots) slot?.cleanup?.(); delete globalThis.financeTestHooks; await isolated.close() }
+  } finally { for (const slot of slots) slot?.cleanup?.(); delete globalThis.financeTestHooks; globalThis.window = oldWindow; globalThis.document = oldDocument; await isolated.close() }
 })

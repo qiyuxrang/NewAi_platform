@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import type { ChangeEvent, FormEvent } from "react";
+import type { FormEvent } from "react";
+import EngineeringPreparationPanel from './EngineeringPreparationPanel';
 import { ApiError, apiRequest } from "../api";
 import { CenterLink, SectionHeader, type WorkspaceProps } from "../shared";
 
@@ -206,13 +207,10 @@ function Issues({ label, values }: { label: string; values: string[] | null }) {
 }
 
 export default function EngineeringPendingPage({ section }: WorkspaceProps) {
-  const [files, setFiles] = useState<File[]>([]);
-  const [region, setRegion] = useState("");
   const [jobs, setJobs] = useState<EngineeringJob[]>([]);
   const [capabilities, setCapabilities] = useState<Capabilities>();
   const [loading, setLoading] = useState(section !== "quota");
   const [reloading, setReloading] = useState(false);
-  const [uploading, setUploading] = useState(false);
   const [loadingId, setLoadingId] = useState<string>();
   const [deletingId, setDeletingId] = useState<string>();
   const [error, setError] = useState("");
@@ -268,13 +266,6 @@ export default function EngineeringPendingPage({ section }: WorkspaceProps) {
     };
   }, [section]);
 
-  const chooseFiles = (event: ChangeEvent<HTMLInputElement>) => {
-    const next = Array.from(event.target.files ?? []); event.target.value = "";
-    if (next.length < 1 || next.length > 2 || next.some((file) => !file.name.toLowerCase().endsWith(".xlsx"))) {
-      setFiles([]); setError("仅支持 1 至 2 个 .xlsx 清单文件。"); return;
-    }
-    setError(""); setFiles(next);
-  };
   const openJob = async (id: string) => {
     setLoadingId(id); setError("");
     try {
@@ -293,19 +284,6 @@ export default function EngineeringPendingPage({ section }: WorkspaceProps) {
       setSelected((current) => (current && current.id === id ? undefined : current));
     } catch (reason) { setError(errorMessage(reason)); } finally { setDeletingId(undefined); }
   };
-  const submit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    // 地区为可选字段：留空时不提交该键，由服务端按默认地区「陕西」处理（与后端契约一致）。
-    if (files.length < 1 || files.length > 2) { setError("请选择 1 至 2 个 .xlsx 清单文件。"); return; }
-    const body = new FormData(); files.forEach((file) => body.append("files", file));
-    if (region.trim()) body.set("region", region.trim());
-    setUploading(true); setError("");
-    try {
-      const data = readDetail(await apiRequest<unknown>(root, { method: "POST", body }));
-      if (!data) throw new Error("任务创建返回格式无效，未展示不可信数据。");
-      setFiles([]); setCapabilities(data.capabilities); await openJob(data.job.id);
-    } catch (reason) { setError(errorMessage(reason)); } finally { setUploading(false); }
-  };
 
   if (section === "quota") return <>
     <SectionHeader title={sectionNames.quota} description="套用定额 D-05 尚未实现；本页不导入、不推荐，也不宣称任何定额已审定。" />
@@ -318,7 +296,7 @@ export default function EngineeringPendingPage({ section }: WorkspaceProps) {
     <SectionHeader title={sectionNames[section] ?? sectionNames.overview} description="仅生成内部成本草稿；任务状态和核验信息以工程服务返回为准。" />
     <section className="center-panel" aria-label="内部成本草稿">
       <span className="status warning">内部成本草稿</span><h3>上传清单并查询任务</h3><p>仅接受 1 至 2 个 XLSX 清单文件。结果需要人工复核，不构成报价、定额审定或正式成果。</p>
-      <form onSubmit={submit}><div className="center-field"><label htmlFor="engineering-files">清单文件</label><input id="engineering-files" type="file" multiple accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={chooseFiles} disabled={uploading} /><small>{files.length ? `已选择 ${files.map((file) => file.name).join("、")}` : "选择 1 至 2 个 .xlsx 文件"}</small></div><div className="center-field"><label htmlFor="engineering-region">地区（可选）</label><input id="engineering-region" value={region} maxLength={80} disabled={uploading} onChange={(event) => setRegion(event.target.value)} /><small>留空时按服务端默认地区「陕西」提交。</small></div><button className="button primary" disabled={uploading || files.length === 0}>{uploading ? "正在创建草稿…" : "创建内部成本草稿"}</button></form>
+      <EngineeringPreparationPanel onJob={id => void openJob(id)} />
       <p role="note">成本服务：{capabilities?.cost ? `${statusLabel(capabilities.cost.status)}${capabilities.cost.detail ? ` · ${capabilities.cost.detail}` : ""}` : "服务未返回"}<br />上传清单并预检通过、工程文档解析完成后，知识库才可能解锁；定额推荐和正式报价仍未开放。</p>
       {error && <p role="alert">{error}</p>}
     </section>

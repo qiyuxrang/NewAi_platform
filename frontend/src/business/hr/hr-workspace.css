@@ -39,3 +39,6 @@
 .enterprise-hr .hr-history-message dl > div { margin: 12px 0; }
 .enterprise-hr dd { margin: 6px 0; }
 .enterprise-hr .hr-jd-dialog { margin: auto; padding: 28px; }
+.enterprise-hr .hr-compare-picker { display:flex; flex-wrap:wrap; gap:12px; margin:16px 0; }
+.enterprise-hr .hr-compare-picker label { display:inline-flex; align-items:center; gap:8px; }
+.enterprise-hr .hr-compare-picker input[type=checkbox] { width:auto; margin:0; }

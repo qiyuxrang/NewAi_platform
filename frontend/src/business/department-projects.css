@@ -1,0 +1,14 @@
+.department-projects { font-size:15px; }
+.department-projects > header p { color:var(--muted); margin-top:8px; }
+.department-projects nav button[aria-pressed=true] { background:var(--soft); border-color:var(--accent); font-weight:600; }
+.department-projects form input { min-width:0; flex:1; max-width:420px; padding:10px 12px; background:var(--surface); color:var(--ink); border:1px solid var(--line); border-radius:8px; }
+.department-projects table { margin-top:16px; border-collapse:collapse; }
+.department-projects th { color:var(--muted); background:var(--page); font-weight:500; }
+.department-projects th, .department-projects td { padding:12px; border-bottom:1px solid var(--line); }
+.department-projects h2 { font-size:20px; font-weight:600; margin:16px 0 8px; }
+.department-projects details { margin-top:16px; padding-top:12px; border-top:1px solid var(--line); }
+.department-projects summary { cursor:pointer; margin-bottom:12px; }
+.department-projects dl { grid-template-columns:repeat(2,minmax(0,1fr)); }
+.department-projects dt { color:var(--muted); font-size:13px; margin-top:8px; }
+.department-projects dd { overflow-wrap:anywhere; }
+@media(max-width:800px) { .department-projects dl { grid-template-columns:1fr; } .department-projects form { flex-wrap:wrap; } }

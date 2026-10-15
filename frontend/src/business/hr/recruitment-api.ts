@@ -18,6 +18,7 @@ export interface Batch { id: string; position_name: string; jd_version_id: strin
   progress: number; updated_at: string; created_at?: string; request_id?: string; jd_body?: string; pending?: number; prescreened?: number; status_counts?: Record<string, number>; artifacts?: Resume[];
   model_selection?: { model_id: string; config_version: string; model_name?: string } | null }
 export interface Result extends Resume { score: number | null; unknown_count: number | null; hard_gap_count: number;
+  verification_questions?: { requirement_id: string; question: string; reason: string }[];
   stale: boolean; rule_version: string | null; matrix: { id: string; text: string; verdict: string; evidence: { quote: string; locator: string }[] }[] }
 export const get = <T,>(path: string, signal?: AbortSignal) => apiRequest<T>(root + path, { signal });
 export const mutate = <T,>(path: string, body: object, method = 'POST', headers?: Record<string, string>) =>

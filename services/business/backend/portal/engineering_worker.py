@@ -217,6 +217,13 @@ def _finalize(job_id, fence, *, status, error_code="", error_detail="", inspecti
         error_code = "permission_changed"
         error_detail = "工程成本模块授权已变化。"
         artifact = None
+    preparation = None
+    if status == EngineeringJob.Status.COMPLETED:
+        from .engineering_preparations import guard_confirmed_job
+        try:
+            preparation = guard_confirmed_job(job, runtime_state())
+        except StorageError as error:
+            status, error_code, error_detail, artifact = EngineeringJob.Status.BLOCKED, error.code, error.detail, None
     runtime_blocked = status == EngineeringJob.Status.BLOCKED and error_code in RUNTIME_BLOCK_ERRORS
     if (retry or runtime_blocked) and job.attempt_count < max_attempts():
         if not runtime_blocked:
@@ -242,6 +249,12 @@ def _finalize(job_id, fence, *, status, error_code="", error_detail="", inspecti
     if status in (EngineeringJob.Status.COMPLETED, EngineeringJob.Status.FAILED):
         job.completed_at = now
     job.save()
+    if preparation is not None and status == EngineeringJob.Status.COMPLETED:
+        from .engineering_models import EngineeringPreparationStep
+        from .engineering_preparations import digest
+        output = {'job_id': str(job.pk), 'result_sha256': job.result_sha256, 'summary': job.result}
+        EngineeringPreparationStep.objects.update_or_create(preparation=preparation,
+            version=preparation.version, name='cost', defaults={'output': output, 'sha256': digest(output)})
     audit(job.owner, "engineering_job_process", job.pk,
           result="success" if status == EngineeringJob.Status.COMPLETED else status,
           changes=[error_code] if error_code else ["internal_draft"])
@@ -267,8 +280,14 @@ def process_job(job_id, fence):
         _guard_job(job_id, fence)
         paths = [verified_input(item) for item in job.inputs]
         _guard_job(job_id, fence)
-        inspect_code, inspect_payload = _invoke(config, "inspect", paths)
-        inspection = _inspection(inspect_payload, job.inputs)
+        from .engineering_preparations import guard_confirmed_job
+        preparation = guard_confirmed_job(job, config)
+        if preparation:
+            inspect_code, inspect_payload = 0, {'ok': True}
+            inspection = preparation.inspection
+        else:
+            inspect_code, inspect_payload = _invoke(config, "inspect", paths)
+            inspection = _inspection(inspect_payload, job.inputs)
         if inspect_code == 2 and isinstance(inspect_payload.get("files"), list):
             _finalize(job_id, fence, status=EngineeringJob.Status.FAILED,
                       error_code="preflight_failed", error_detail="工程清单预检未通过，未执行测算。",
@@ -281,7 +300,7 @@ def process_job(job_id, fence):
             return
         _guard_job(job_id, fence)
         work = work_directory(job_id, fence)
-        webprice_key = online_webprice_key()
+        webprice_key = '' if preparation else online_webprice_key()
         allow_online = bool(webprice_key)
         run_options = ("--region", job.region, "--output-dir", str(work))
         if allow_online:
@@ -325,6 +344,7 @@ def process_job(job_id, fence):
         if run_payload["output_hash"] != _combined_hash(output_hashes):
             raise StorageError("invalid_result", "测算程序未返回受控内部草稿成果。")
         _guard_job(job_id, fence)
+        guard_confirmed_job(job, config)
         artifact = persist_result(job_id, fence, outputs)
         _finalize(job_id, fence, status=EngineeringJob.Status.COMPLETED,
                   inspection=inspection, result=result, artifact=artifact)
@@ -361,7 +381,8 @@ def process_job(job_id, fence):
 def run_once():
     claim = claim_job()
     if claim is None:
-        return False
+        from .engineering_preparations import run_once as prepare_once
+        return prepare_once()
     process_job(*claim)
     return True
 

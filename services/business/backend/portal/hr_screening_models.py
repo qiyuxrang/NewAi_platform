@@ -60,3 +60,16 @@ class ResumeArtifact(models.Model):
     class Meta:
         ordering = ['created_at', 'id']
         constraints = [models.UniqueConstraint(fields=['batch', 'sha256'], name='hr_batch_resume_hash_uq')]
+
+
+class ResumeProcessingStage(models.Model):
+    artifact = models.ForeignKey(ResumeArtifact, on_delete=models.CASCADE, related_name='stages')
+    name = models.CharField(max_length=24)
+    cache_key = models.CharField(max_length=64, db_index=True)
+    output = models.JSONField(default=dict)
+    sha256 = models.CharField(max_length=64)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=['artifact', 'name'], name='hr_artifact_stage_uq')]

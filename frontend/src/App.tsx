@@ -35,7 +35,7 @@ function RequirePermission({ children, setting }: { children: React.ReactNode; s
   const { user, loading, error } = useEnterprise()
   const { department, feature } = useParams()
   if (loading || error) return <EnterpriseAccountStatus />
-  const allowed = setting ? canAccessSetting(user, setting) : department === 'business' && feature === 'finance' ? canAccessFinanceBoard(user) : feature === 'entry' ? canAccessEntry(user, department ?? '') : canAccessDepartment(user, department ?? '')
+  const allowed = setting ? canAccessSetting(user, setting) : department === 'business' && ['finance', 'projects'].includes(feature ?? '') ? canAccessFinanceBoard(user) : feature === 'entry' ? canAccessEntry(user, department ?? '') : canAccessDepartment(user, department ?? '')
   if (!allowed) return <div role="alert" className="rounded-xl border border-dark-border bg-dark-card p-6 text-dark-text">
     <h1 className="text-lg font-semibold">没有访问权限</h1>
     <p className="mt-2 text-sm text-dark-text-secondary">当前账号未获此功能授权，请联系管理员。</p>

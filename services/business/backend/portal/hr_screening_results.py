@@ -17,6 +17,7 @@ from .hr_matching import is_age_requirement, score_matrix
 from .product_storage import StorageError
 from .product_service import ProductError
 from .security import audit
+from .hr_processing_stages import verification_questions
 
 
 @api_view(['POST'])
@@ -69,9 +70,9 @@ def public_match(item):
     match = item.match or {}
     matrix = match.get('matrix', [])
     safe = [row for row in matrix if not is_age_requirement(row.get('text', ''))]
-    if len(safe) != len(matrix):
-        return {**match, 'matrix': safe, 'score': score_matrix(safe)}
-    return match
+    return {**match, 'matrix': safe,
+            **({'score': score_matrix(safe)} if len(safe) != len(matrix) else {}),
+            'verification_questions': verification_questions(safe)}
 
 
 def _rows(batch, params):
@@ -83,6 +84,7 @@ def _rows(batch, params):
                      'unknown_count': score.get('unknown_count'),
                      'hard_gap_count': len(score.get('hard_gap', [])),
                      'matrix': match.get('matrix', []), 'stale': batch.stale,
+                     'verification_questions': match['verification_questions'],
                      'rule_version': score.get('rule_version')})
     verdict = params.get('verdict')
     if verdict:
@@ -120,6 +122,7 @@ def detail(request, artifact_id):
             if item is None:
                 raise HrError('not_found', '对象不存在。', 404)
             item.archive_state = 'deleted'
+            item.stages.all().delete()
             item.extracted_text = ''
             item.extraction = item.profile = item.match = {}
             item.fence += 1

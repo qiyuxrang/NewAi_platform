@@ -1,0 +1,9 @@
+.engineering-preparations form { display:grid; grid-template-columns:minmax(0, 2fr) minmax(120px, 1fr) auto; align-items:end; gap:16px; margin-bottom:16px; }
+.engineering-preparations form .button { margin-bottom:16px; }
+.engineering-preparations article { margin-top:20px; padding-top:20px; border-top:1px solid var(--line); }
+.engineering-preparations h4 { font-weight:600; font-size:16px; }
+.engineering-preparations details { margin:12px 0; }
+.engineering-preparations summary { cursor:pointer; color:var(--accent); }
+.engineering-preparations pre, .engineering-preparations li, .engineering-preparations p { overflow-wrap:anywhere; }
+.engineering-preparations pre { padding:12px; background:var(--page); border-radius:8px; }
+@media(max-width:800px) { .engineering-preparations form { grid-template-columns:1fr; gap:0; } }

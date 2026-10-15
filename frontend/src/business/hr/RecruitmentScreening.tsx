@@ -3,6 +3,7 @@ import { CenterLink } from './CenterLink';
 import { get, mutate, uploadSequential, selectResumeFiles, screeningCounts, retentionNotice, uploadJd, root, statusText, message } from './recruitment-api';
 import type { Batch, Jd, Result } from './recruitment-api';
 import { downloadBusinessFile } from '../api';
+import { installLedgerNavigationGuard } from '../ledgers/ledger-navigation';
 
 export default function RecruitmentScreening({ results = false }: { results?: boolean }) {
   const [batches, setBatches] = useState<Batch[]>([]);
@@ -12,8 +13,17 @@ export default function RecruitmentScreening({ results = false }: { results?: bo
   const [sort, setSort] = useState('score'), [verdict, setVerdict] = useState('');
   const [error, setError] = useState(''), [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState('');
+  const [draftJd, setDraftJd] = useState<Jd | null>(null), [confirmedJds, setConfirmedJds] = useState<Jd[]>([]);
+  const [compared, setCompared] = useState<string[]>([]);
+  useEffect(() => { const c = new AbortController(); void get<Jd[]>('confirmed-jds/', c.signal).then(setConfirmedJds).catch(e => { if (!c.signal.aborted) setError(message(e)); }); return () => c.abort(); }, []);
+  useEffect(() => { setCompared([]); setDraftJd(null); }, [selected]);
   const [progressRefresh, setProgressRefresh] = useState(0);
   const lock = useRef(false), createKey = useRef(crypto.randomUUID());
+  const hasLocalWork = !results && (files.length > 0 || !!draftJd);
+  useEffect(() => {
+    if (!hasLocalWork) return;
+    return installLedgerNavigationGuard(window, () => !lock.current && window.confirm('有尚未提交的简历或尚未确认的 JD，确定离开当前页面？'));
+  }, [hasLocalWork]);
   const selectedRef = useRef(selected); selectedRef.current = selected;
   const requestedBatch = new URLSearchParams(window.location.search).get('batch') || '';
   useEffect(() => { setSelected(requestedBatch); setJd(''); setJdFilename(''); setFiles([]); setNotice(''); }, [requestedBatch]);
@@ -78,12 +88,14 @@ export default function RecruitmentScreening({ results = false }: { results?: bo
         if (selectResumeFiles([], [file]).rejected.length) { setError('JD 须为非空 TXT、DOCX、PDF，且不超过2MiB。'); return; }
         setJd(''); setJdFilename(''); void work(async () => {
           const imported = await uploadJd(file);
-          const confirmed = await mutate<Jd>(`requests/${imported.request.id}/jd-versions/${imported.jd.id}/confirm/`, { expected_version: imported.request.input_version });
-          setJd(confirmed.id); setJdFilename(file.name); createKey.current = crypto.randomUUID(); setNotice('JD 已上传并确认，可批量上传简历。');
+          setDraftJd(imported.jd); setJdFilename(file.name); createKey.current = crypto.randomUUID(); setNotice('请先核对 JD 正文及筛选标准，再确认使用。');
         });
       }} /></label>
       {jdFilename && <p>已上传 JD：<strong>{jdFilename}</strong></p>}
-      <p className="hr-muted">上传后自动确认该 JD；年龄只作备注，不参与筛选。</p></div>
+      <p className="hr-muted">确认岗位标准后才能开始筛选；年龄只作备注，不参与筛选。</p>
+      <label>使用已确认 JD<select value={jd} disabled={busy || !!selected} onChange={e => { setJd(e.target.value); setDraftJd(null); setJdFilename(''); createKey.current = crypto.randomUUID(); }}><option value="">请选择正式 JD</option>{confirmedJds.filter(j => !j.stale).map(j => <option key={j.id} value={j.id}>v{j.version} · {j.body.slice(0, 50)}</option>)}</select></label>
+      {(draftJd || confirmedJds.find(j => j.id === jd)) && <details open><summary>岗位正文与筛选标准</summary><pre style={{ whiteSpace: 'pre-wrap' }}>{(draftJd || confirmedJds.find(j => j.id === jd))?.body}</pre><pre style={{ whiteSpace: 'pre-wrap' }}>{JSON.stringify((draftJd || confirmedJds.find(j => j.id === jd))?.requirements, null, 2)}</pre></details>}
+      {draftJd && <button disabled={busy || !!selected} onClick={() => void work(async () => { const confirmed = await mutate<Jd>(`requests/${draftJd.request_id}/jd-versions/${draftJd.id}/confirm/`, { expected_version: draftJd.input_version }); setJd(confirmed.id); setConfirmedJds(previous => [confirmed, ...previous.filter(j => j.id !== confirmed.id)]); setDraftJd(null); setNotice('已确认该版本 JD，可以开始筛选。'); })}>确认该版本 JD 及筛选标准</button>}</div>
       <div><h2>简历</h2><label className="hr-upload">批量上传简历（TXT、DOCX、PDF）<input type="file" multiple accept=".txt,.docx,.pdf" disabled={busy || (!!selected && (!batch || batch.status !== 'pending' || batch.stale))} onChange={e => { addFiles(Array.from(e.target.files || [])); e.target.value = ''; }} /></label>
       <p className="hr-muted">支持 TXT、DOCX、PDF；单份最大2MiB；最多200份。</p>
       <ul className="hr-file-list">{files.map((file, i) => <li key={`${file.webkitRelativePath || file.name}-${i}`}>{file.webkitRelativePath || file.name}</li>)}</ul>
@@ -103,12 +115,14 @@ export default function RecruitmentScreening({ results = false }: { results?: bo
         <label>匹配状态<select value={verdict} onChange={e => setVerdict(e.target.value)}><option value="">全部</option>{['MATCH', 'PARTIAL', 'UNKNOWN', 'NOT_MATCH'].map(v => <option key={v}>{v}</option>)}</select></label>
         <button className="hr-outline" disabled={busy} onClick={() => void work(() => downloadBusinessFile(root + `batches/${batch.id}/export/?${params}`, '筛选结果.csv'), false)}>导出 CSV</button></div>
         <div className="hr-table-wrap"><table><thead><tr><th>简历</th><th>处理状态</th><th>辅助分</th><th>硬缺口</th><th>UNKNOWN</th><th>操作</th></tr></thead><tbody>{rows.map(item => <tr key={item.id}><td>{item.filename}</td><td>{statusText(item.processing_status)}</td><td>{item.score ?? '—'}</td><td>{item.hard_gap_count}</td><td>{item.unknown_count ?? '—'}</td><td><button onClick={() => void work(async () => { setDetail(null); const result = await get<Record<string, unknown>>(`resumes/${item.id}/`); if (selectedRef.current === selected) setDetail(result); }, false)}>查看证据</button> <button disabled={busy} onClick={() => void work(() => downloadBusinessFile(root + `resumes/${item.id}/download/`, item.filename), false)}>下载原件</button></td></tr>)}</tbody></table></div>
-        <p className="hr-muted">辅助匹配不是录用或淘汰决定；缺少证据显示 UNKNOWN。</p></>}
+        <p className="hr-muted">辅助匹配不是录用或淘汰决定；缺少证据显示 UNKNOWN。</p>
+        <fieldset className="hr-compare-picker"><legend>同批候选人对比（最多3份）</legend>{rows.filter(r => r.processing_status === 'completed').map(row => <label key={row.id}><input type="checkbox" checked={compared.includes(row.id)} disabled={!compared.includes(row.id) && compared.length >= 3} onChange={e => setCompared(previous => e.target.checked ? [...previous, row.id] : previous.filter(id => id !== row.id))} />{row.filename}</label>)}</fieldset>
+        {!!compared.length && <div className="hr-table-wrap"><table aria-label="候选人对比"><thead><tr><th>候选人</th><th>辅助分 / 硬缺口 / UNKNOWN</th><th>逐条判断与证据</th><th>待核实问题</th></tr></thead><tbody>{rows.filter(r => compared.includes(r.id)).map(row => <tr key={row.id}><td>{row.filename}</td><td>{row.score ?? '—'} / {row.hard_gap_count} / {row.unknown_count ?? '—'}</td><td style={{ whiteSpace: 'normal' }}>{row.matrix.map(m => <p key={m.id}>{m.text}：{m.verdict} · {m.evidence.map(e => `${e.quote} (${e.locator})`).join('；') || '无有效证据'}</p>)}</td><td style={{ whiteSpace: 'normal' }}>{row.verification_questions?.map(q => <p key={q.requirement_id}>{q.question}</p>)}</td></tr>)}</tbody></table></div>}</>}
       </>}
     </section>}
     {detail && <section className="hr-card"><h2>证据矩阵与解析记录</h2>
       <div className="hr-table-wrap"><table><thead><tr><th>岗位要求</th><th>判断</th><th>引用证据</th><th>来源位置</th></tr></thead><tbody>
         {((detail.match as { matrix?: Result['matrix'] })?.matrix || []).map(item => <tr key={item.id}><td>{item.text}</td><td>{item.verdict}</td><td style={{ whiteSpace: 'normal' }}>{item.evidence.map(e => e.quote).join('；') || '无有效证据'}</td><td>{item.evidence.map(e => e.locator).join('；')}</td></tr>)}
-      </tbody></table></div><details><summary>查看结构化解析和来源记录</summary><pre>{JSON.stringify(detail, null, 2)}</pre></details><button onClick={() => setDetail(null)}>关闭详情</button></section>}
+      </tbody></table></div><h3>待核实问题</h3>{((detail.match as { verification_questions?: { requirement_id: string; question: string }[] })?.verification_questions || []).map(q => <p key={q.requirement_id}>{q.question}</p>)}<details><summary>查看结构化解析和来源记录</summary><pre>{JSON.stringify(detail, null, 2)}</pre></details><button onClick={() => setDetail(null)}>关闭详情</button></section>}
   </>;
 }
