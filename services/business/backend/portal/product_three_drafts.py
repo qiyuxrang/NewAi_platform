@@ -100,6 +100,8 @@ def generate_report_drafts(task, fence, attempt_id, input_revision, blueprint, *
         review = _ensure_content_review(task, fence, attempt_id, input_revision, blueprint, ordered, family)
         content = content_document(task, input_revision, blueprint, ordered, family, draft=draft,
                                    review_issues=review.payload.get("issues", []))
+        required_diagrams = (sum(block["type"] == "figure" for block in content["blocks"])
+            if family == "feasibility" and blueprint.payload.get("feasibility_guide") else None)
         report_hash = _report_generation_hash(task, family, input_revision, blueprint)
         runtime_hash = digest(preflight_document_rendering(draft=draft))
         existing = DocumentArtifact.objects.filter(task=task, generation_hash=report_hash).first()
@@ -130,7 +132,8 @@ def generate_report_drafts(task, fence, attempt_id, input_revision, blueprint, *
                     workspace_key=digest({"family": family, "input": input_revision.sha256,
                         "blueprint": blueprint.sha256, "chapters": [chapter.sha256 for chapter in ordered]}),
                     diagram_generator=lambda document: _generate_diagrams(task.pk, fence, attempt_id, document, draft=draft),
-                    diagram_progress=lambda status, **details: _diagram_progress(task.pk, fence, family, status, **details),
+                    diagram_progress=lambda status, **details: _diagram_progress(task.pk, fence, family, status,
+                        required_count=required_diagrams, **details),
                     diagram_step=lambda key, binding, operation, validate: run_step(task.pk, fence, key,
                         binding, operation, validate=validate)),
                 validate=render_current)
@@ -175,7 +178,7 @@ def generate_report_drafts(task, fence, attempt_id, input_revision, blueprint, *
 
 def generate_presentation_artifact(task, fence, attempt_id, input_revision, blueprint):
     from .product_presentation import presentation_renderer_hash, render_presentation_draft
-    from .product_worker import _analysis_progress, _guard, _renew
+    from .product_worker import _analysis_progress, _guard, _renew, _model
 
     _renew(task.pk, fence)
     _analysis_progress(task.pk, fence, 'presentation', 'running', detail='正在根据两份报告制作汇报PPT')
@@ -198,8 +201,22 @@ def generate_presentation_artifact(task, fence, attempt_id, input_revision, blue
         with transaction.atomic():
             _guard(task.pk, fence)
             DocumentArtifact.objects.filter(pk=existing.pk).update(generation_hash="")
+    def designer(key, payload, validator):
+        from django.conf import settings
+        def cached_valid(result):
+            try:
+                validator(result)
+                return True
+            except ProductError:
+                return False
+        return run_step(task.pk, fence, "presentation:" + key,
+            {"generation_hash": generation_hash, "request": payload},
+            lambda: _model(task.pk, fence, attempt_id, settings.PRODUCT_WRITING_ROUTE, payload,
+                           output_validator=validator), validate=cached_valid)
+
     generated = run_step(task.pk, fence, "render:presentation", {"generation_hash": generation_hash},
                          lambda: render_presentation_draft(task, pair, **planning,
+                             designer=designer,
                              progress=lambda event: _presentation_progress(task.pk, fence, event["plan"], "running", event)),
                          validate=_rendered_result_current)
     with transaction.atomic():

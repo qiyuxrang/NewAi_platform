@@ -10,6 +10,7 @@ from lxml import etree as E
 from ooxml import *
 from contract import read_content
 from prototypes import PrototypeLibrary
+import feasibility_format
 
 POLICY_PATH = ROOT/'assets'/'document-format-policy.json'
 
@@ -265,8 +266,12 @@ def _write_word(data,out,content_dir):
         return proto.get(kind,key)
     emitted=[]; figures=[]; bookmark_map={}; counters=[0,0,0]; table_counts={}; figure_counts={}; current_section=body.find('w:sectPr',NS)
     existing_sections=root.findall('.//w:sectPr',NS)
+    feasibility=data['family']=='feasibility'
+    def apply_paragraph(node,role):
+        return feasibility_format.format_paragraph(node,role) if feasibility else format_paragraph(node,role,policy)
     for section in existing_sections:
-        normalize_page(section,policy); clear_section_headers(section)
+        (feasibility_format.normalize_section(section) if feasibility else normalize_page(section,policy))
+        clear_section_headers(section)
     front_break_needed=False
     def available_width():
         sz=current_section.find('w:pgSz',NS); mar=current_section.find('w:pgMar',NS)
@@ -307,19 +312,20 @@ def _write_word(data,out,content_dir):
                 nodes=[p]
             elif typ=='list':
                 auto=profile['paragraphs'][key]['automatic_numbering']
-                nodes=[paragraph(base,('' if auto else f'（{i+1}）')+t) for i,t in enumerate(b['items'])]
+                nodes=[paragraph(base,(f'{i+1}. ' if feasibility else '' if auto else f'（{i+1}）')+t) for i,t in enumerate(b['items'])]
             else:
                 value=b['text']
                 if typ=='heading':
                     level=b['level']; counters[level-1]+=1
                     for lower in range(level,3): counters[lower]=0
-                    value='.'.join(str(n) for n in counters[:level])+' '+value
+                    if not (feasibility and b['text'].startswith('附录')):
+                        value=(f'第{counters[0]}章 ' if feasibility and level==1 else '.'.join(str(n) for n in counters[:level])+' ')+value
                 nodes=[paragraph(base,value)]
         elif typ=='table':
             t=prototype('table',b['prototype']); tp=profile['tables'][b['prototype']]
             if not tp['variable_rows']: raise ValueError('complex merged form requires fixed topology adapter; expansion refused')
             if len(b['columns'])!=tp['columns']: raise ValueError('table columns differ from actual prototype')
-            fit_table_width(t,tp['width_twips'],available_width())
+            if not feasibility: fit_table_width(t,tp['width_twips'],available_width())
             rows=t.findall('w:tr',NS); header=rows[0]; sample=rows[1] if len(rows)>1 else rows[0]; final_row=rows[-1]
             for row in rows: t.remove(row)
             for i,values in enumerate([b['columns']]+b['rows']):
@@ -330,12 +336,13 @@ def _write_word(data,out,content_dir):
                 for cell,value in zip(row.findall('w:tc',NS),values):
                     cp=cell.find('w:p',NS)
                     for p in list(cell.findall('w:p',NS)): cell.remove(p)
-                    cell.append(format_paragraph(paragraph(cp,value),'body',policy))
+                    cell.append(apply_paragraph(paragraph(cp,value),'body'))
                 t.append(row)
             units=[name+'：'+unit for name,unit in zip(b['columns'],b['units']) if unit not in ('不适用','无','—','-')]
             chapter=max(counters[0],1); table_counts[chapter]=table_counts.get(chapter,0)+1
-            title=re.sub(r'^表\s*\d+(?:\.\d+)?\s*','',b['caption']).strip()
-            caption=ptype('caption',f'表 {chapter}.{table_counts[chapter]} {title}'+('（单位：'+'；'.join(units)+'）' if units else '')); nodes=[caption,t]
+            title=re.sub(r'^表\s*\d+(?:[.-]\d+)?\s*' if feasibility else r'^表\s*\d+(?:\.\d+)?\s*','',b['caption']).strip()
+            label=f'表{chapter}-{table_counts[chapter]}' if feasibility else f'表 {chapter}.{table_counts[chapter]}'
+            caption=ptype('caption',label+' '+title+('（单位：'+'；'.join(units)+'）' if units else '')); nodes=[caption,t]
         elif typ=='form':
             t=prototype('table',b['prototype']); rows=t.findall('w:tr',NS)
             for entry in b['cells']:
@@ -347,21 +354,23 @@ def _write_word(data,out,content_dir):
                 originals=cell.findall('w:p',NS)
                 for p in originals: cell.remove(p)
                 base=originals[0] if originals else E.Element(q('w:p'))
-                for i,value in enumerate(entry['paragraphs']): cell.append(format_paragraph(paragraph(originals[min(i,len(originals)-1)] if originals else base,value),'body',policy))
+                for i,value in enumerate(entry['paragraphs']): cell.append(apply_paragraph(paragraph(originals[min(i,len(originals)-1)] if originals else base,value),'body'))
             chapter=max(counters[0],1); table_counts[chapter]=table_counts.get(chapter,0)+1
-            title=re.sub(r'^表\s*\d+(?:\.\d+)?\s*','',b['caption']).strip()
-            nodes=[ptype('caption',f'表 {chapter}.{table_counts[chapter]} {title}'),t]
+            title=re.sub(r'^表\s*\d+(?:[.-]\d+)?\s*' if feasibility else r'^表\s*\d+(?:\.\d+)?\s*','',b['caption']).strip()
+            label=f'表{chapter}-{table_counts[chapter]}' if feasibility else f'表 {chapter}.{table_counts[chapter]}'
+            nodes=[ptype('caption',label+' '+title),t]
         elif typ=='figure':
             chapter=max(counters[0],1); figure_counts[chapter]=figure_counts.get(chapter,0)+1
-            title=re.sub(r'^图\s*\d+(?:\.\d+)?\s*','',b['caption']).strip()
-            p=ptype('figure',''); nodes=[p,ptype('caption',f'图 {chapter}.{figure_counts[chapter]} {title}')]
+            title=re.sub(r'^图\s*\d+(?:[.-]\d+)?\s*' if feasibility else r'^图\s*\d+(?:\.\d+)?\s*','',b['caption']).strip()
+            label=f'图{chapter}-{figure_counts[chapter]}' if feasibility else f'图 {chapter}.{figure_counts[chapter]}'
+            p=ptype('figure',''); nodes=[p,ptype('caption',label+' '+title)]
             path=(Path(content_dir)/b['path']).resolve()
             if not path.is_relative_to(Path(content_dir).resolve()) or not path.is_file(): raise ValueError('figure not found within content directory')
             if b['width_mm']*1440/25.4>available_width(): raise ValueError('figure overflow')
             figures.append((b['id'],path,b['width_mm'],b['alt']))
         elif typ=='section':
             next_section=prototype('section',b['prototype'])
-            normalize_page(next_section,policy)
+            (feasibility_format.normalize_section(next_section) if feasibility else normalize_page(next_section,policy))
             # End the preceding section using its own geometry, then switch the terminal section.
             p=ptype('paragraph',''); pp=p.find('w:pPr',NS)
             if pp is None: pp=E.SubElement(p,q('w:pPr'))
@@ -397,7 +406,9 @@ def _write_word(data,out,content_dir):
                            else 'figure_and_table_caption' if typ=='figure' and index==1
                            else 'figure' if typ=='figure' and index==0
                            else role)
-                format_paragraph(node,node_role,policy)
+                if feasibility and typ=='heading' and b['text'].startswith('附录'):
+                    node_role='appendix'
+                apply_paragraph(node,node_role)
         for p in nodes:
             if p.tag==q('w:p'): bookmark(p,b['id']); break
         emitted.extend(nodes)
@@ -416,20 +427,25 @@ def _write_word(data,out,content_dir):
     update.set(q('w:val'),'true')
     parts['word/settings.xml']=dump(settings)
     parts['word/document.xml']=dump(root); audit_package(parts); save_package(out,parts)
-    if figures or policy.get('company_identity'):
+    guide_evidence={}
+    if figures or policy.get('company_identity') or feasibility:
         from docx import Document
         from docx.shared import Mm
         doc=Document(out)
-        add_cover_identity(doc,data,policy)
+        if not feasibility: add_cover_identity(doc,data,policy)
         for ident,path,width,alt in figures:
             node=next(p for p in doc.element.body.findall(q('w:p')) if any(x.get(q('w:name'))==bookmark_name(ident) for x in p.findall(q('w:bookmarkStart'))))
             from docx.text.paragraph import Paragraph
             p=Paragraph(node,doc._body); shape=p.add_run().add_picture(str(path),width=Mm(width)); shape._inline.docPr.set('descr',alt)
-        apply_page_contract(doc,data,policy)
+        if feasibility:
+            guide_evidence=feasibility_format.apply_format(doc,data,bookmark_map)
+        else:
+            apply_page_contract(doc,data,policy)
         doc.save(out)
     final_parts=load_package(out); force_word_text_black(final_parts)
     audit_package(final_parts); save_package(out,final_parts)
     report={'structural_pass':True,'rendered':False,'visually_reviewed':False,'unverified_items':['Office pagination/TOC refresh and visual inspection required','Engineering assertions require independent professional review','Formal cover layout and signature area remain pending formal template confirmation'],'family':data['family'],'source_sha256':profile['source_sha256'],'format_policy_sha256':sha(POLICY_PATH),'format_policy_status':policy['status'],'company_identity':{'name':policy['company_identity']['name'],'logo_sha256':policy['company_identity']['logo_sha256']},'toc_depth':max(heading_levels,default=1),'output_sha256':sha(out),'block_ids':[b['id'] for b in data['blocks']],'bookmark_map':bookmark_map}
+    report.update(guide_evidence)
     from handoff import encoded
     report['content_sha256']=hashlib.sha256(encoded(data)).hexdigest()
     report['content_hash_method']='sha256-normalized-content-v1'

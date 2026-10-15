@@ -1,0 +1,44 @@
+.wb-project-layout { position:relative; }
+.wb-reference .wb-project-layout.wb-review-open { grid-template-columns:minmax(0,1fr); }
+.wb-project-layout.wb-review-open > .wb-results { display:none; }
+.wb-review-pane { position:absolute; inset:0 0 0 auto; z-index:5; max-width:100%; min-width:0; display:grid; grid-template-rows:auto auto minmax(0,1fr) auto; background:var(--surface,#fff); border-left:1px solid var(--line,#e1e7f0); box-shadow:-12px 0 30px #142e4914; color:var(--ink); }
+.wb-review-pane .wb-review-separator { position:absolute; left:-5px; top:0; bottom:0; width:10px; z-index:6; cursor:col-resize; touch-action:none; }
+.wb-review-separator::after { content:""; position:absolute; width:4px; height:48px; border-radius:4px; background:#a9bfdf; top:50%; left:3px; }
+.wb-review-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:16px 20px; border-bottom:1px solid var(--line); }
+.wb-review-heading strong { display:block; font-size:17px; }
+.wb-review-heading small { display:block; margin-top:3px; font-size:12px; color:var(--muted); }
+.wb-review-heading button { display:grid; place-items:center; width:34px; height:34px; border-radius:6px; color:var(--muted); }
+.wb-review-heading button:hover { background:var(--soft); }
+.wb-review-tabs { display:flex; gap:20px; padding:0 20px; border-bottom:1px solid var(--line); }
+.wb-review-tabs button { padding:13px 0 11px; border-bottom:2px solid transparent; font-size:14px; color:var(--muted); }
+.wb-review-tabs button[aria-selected=true] { color:var(--accent); border-bottom-color:var(--accent); }
+.wb-review-content { min-height:0; min-width:0; padding:18px 20px; overflow:auto; overscroll-behavior:contain; scrollbar-width:thin; font-size:14px; }
+.wb-review-content p { line-height:1.7; overflow-wrap:anywhere; }
+.wb-review-content .pd-muted { font-size:13px; }
+.wb-review-content .button { font-size:14px; min-height:36px; }
+.wb-review-content .text-button { color:var(--accent); font-size:13px; }
+.wb-review-content :is(input,select,textarea) { font-size:14px; max-width:100%; }
+.wb-review-content .pd-source-table,.wb-review-content .pd-extraction-blocks p { font-size:14px; }
+.wb-review-content .pd-source-table :is(thead th,tbody th,caption),.wb-review-content .pd-source-blank { font-size:12px; }
+.wb-review-content .pd-source-block-actions .text-button,.wb-review-content .pd-source-tools label,.wb-review-content .pd-source-warnings summary,.wb-review-content .pd-source-review summary { font-size:13px; }
+.wb-review-content .pd-source-heading p { font-size:13px; }
+.wb-review-footer { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 20px; border-top:1px solid var(--line); background:var(--surface,#fff); }
+.wb-review-footer > span { color:var(--muted); font-size:12px; }
+.wb-review-footer .button { font-size:13px; flex:none; }
+.wb-review-group { margin:0 0 22px; }
+.wb-review-group > h3 { display:flex; align-items:center; gap:10px; font-size:16px; margin:0 0 10px; }
+.wb-review-group > h3 small { font-size:12px; font-weight:400; color:var(--muted); }
+.wb-review-issues,.wb-review-conditions { display:grid; gap:0; margin:0; padding:0; list-style:none; }
+.wb-review-issues li,.wb-review-conditions li { padding:13px 0; border-bottom:1px solid var(--line); }
+.wb-review-issues li p,.wb-review-conditions li p { margin:0 0 8px; white-space:pre-wrap; }
+.wb-review-conditions li > span { display:inline-block; margin-bottom:6px; font-size:12px; color:var(--muted); }
+.wb-input-review { border-top:1px solid var(--line); padding:16px 0; }
+.wb-input-review h4 { font-size:15px; margin:0 0 8px; }
+.wb-input-review > label { display:grid; gap:6px; margin:12px 0; font-size:13px; }
+.wb-input-review fieldset { border:1px solid var(--line); border-radius:7px; margin:14px 0; padding:10px 12px; min-width:0; max-height:230px; overflow:auto; }
+.wb-input-review legend { font-size:13px; padding:0 5px; }
+.wb-input-review fieldset > div { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; padding:6px 0; }
+.wb-input-review fieldset label { display:flex; align-items:flex-start; gap:8px; overflow-wrap:anywhere; font-size:13px; min-width:0; }
+.wb-input-review fieldset input { flex:none; margin-top:4px; }
+.wb-input-review fieldset button { flex:none; }
+.pd-sources-workspace .pd-upload-list .pd-actions { flex:none; }

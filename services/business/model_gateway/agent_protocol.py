@@ -173,7 +173,8 @@ def parse_response(body, names):
         raise ValueError("invalid finish")
     message = choice.get("message")
     if (not isinstance(message, dict) or message.get("role", "assistant") != "assistant"
-            or set(message) - {"role", "content", "tool_calls"}):
+            or set(message) - {"role", "content", "tool_calls", "reasoning_content"}
+            or message.get("reasoning_content") is not None and not isinstance(message["reasoning_content"], str)):
         raise ValueError("invalid message")
     calls = message.get("tool_calls", [])
     if bool(calls) != (choice["finish_reason"] == "tool_calls"):
@@ -194,8 +195,10 @@ class StreamAssembler:
         self.finished = False
         self.done = False
         self.usage = {}
+        self.delta = ""
 
     def feed(self, raw):
+        self.delta = ""
         if self.done:
             raise ValueError("event after completed stream")
         if raw == b"[DONE]":
@@ -220,13 +223,18 @@ class StreamAssembler:
             if reason not in (None, "stop", "tool_calls"):
                 raise ValueError("invalid finish")
             delta = choice.get("delta")
-            if not isinstance(delta, dict) or delta.get("role", "assistant") != "assistant" or set(delta) - {"role", "content", "tool_calls"}:
+            if (not isinstance(delta, dict) or delta.get("role", "assistant") != "assistant"
+                    or set(delta) - {"role", "content", "tool_calls", "reasoning_content"}
+                    or delta.get("reasoning_content") is not None and not isinstance(delta["reasoning_content"], str)):
                 raise ValueError("invalid delta")
             content = delta.get("content")
             if content is not None:
                 if not isinstance(content, str):
                     raise ValueError("invalid content")
+                if "**ERROR**" in self.content[-8:] + content:
+                    raise ValueError("provider error marker")
                 self.content += content
+                self.delta = content
             for fragment in delta.get("tool_calls", []):
                 if not isinstance(fragment, dict) or type(fragment.get("index")) is not int or not 0 <= fragment["index"] < 32 or set(fragment) - {"index", "id", "type", "function"}:
                     raise ValueError("invalid fragment")

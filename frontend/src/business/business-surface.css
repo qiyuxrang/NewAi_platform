@@ -15,7 +15,10 @@
 .enterprise-business .engineering-task-list { display: grid; gap: 12px; margin: 16px 0; }
 .enterprise-business .engineering-task-list li, .enterprise-business .engineering-task-head { display: flex; align-items: center; gap: 12px; }
 .enterprise-business .engineering-task-head { justify-content: space-between; }
-.enterprise-business .engineering-task-name { margin-right: 12px; }
+.enterprise-business .engineering-task-list li { flex-wrap:wrap; }
+.enterprise-business .engineering-task-list li > .button { min-width:0; max-width:100%; }
+.enterprise-business .engineering-task-name { min-width:0; overflow-wrap:anywhere; text-align:left; margin-right:12px; }
+.enterprise-business .engineering-task-status,.enterprise-business .engineering-task-remove { flex-shrink:0; }
 .enterprise-business .engineering-task-remove { color: var(--color-accent-red); cursor: pointer; }
 .enterprise-business .engineering-job-id { color: var(--muted); font-size: 12px; }
 .enterprise-business img { max-width: 100%; height: auto; }

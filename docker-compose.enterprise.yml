@@ -1,8 +1,18 @@
 name: aicompany-claw
 
 # Windows runs the gateway/frontend and existing Office workers. Only this
-# project's database and per-user runtime images are managed here.
+# project's database, local public search and per-user runtime images are managed here.
 services:
+  searxng:
+    image: ghcr.io/searxng/searxng@sha256:ad273460b12390ab1ad9c6ea630dafed39045ab0b9096a85ca31f5246517c670
+    ports:
+      - "127.0.0.1:19881:8080"
+    volumes:
+      - ./.runtime/search:/etc/searxng
+    networks:
+      - internal
+    restart: unless-stopped
+
   postgres:
     image: postgres:16-alpine
     environment:

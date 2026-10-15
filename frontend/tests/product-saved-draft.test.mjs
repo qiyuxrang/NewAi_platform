@@ -77,7 +77,10 @@ test('current files remain downloadable during running or failed tasks with hone
     assert.match(html, /正文已生成/);
     assert.match(html, /草稿 · 待完善/);
     assert.match(html, /图表待补：已渲染 13 \/ 15 张，待补 2 张/);
-    assert.match(html, /设备数量需对照项目底稿核对/);
+    assert.match(html, /有 1 项质量问题需人工核对/);
+    assert.match(html, /<summary>查看待核对问题<\/summary>/);
+    // Browser acceptance expands this disclosure and checks the original issue text.
+    assert.doesNotMatch(html, /设备数量需对照项目底稿核对/);
     assert.match(html, /低于当前最低 50,000 字/);
     assert.doesNotMatch(html, />已批准</);
     assert.doesNotMatch(render(fixture({ state }), { outputs: [{ ...output, stale: true }] }), />下载文件</);
@@ -94,7 +97,10 @@ test('quality warning survives before file generation and exhausted recovery rem
   const html = render(fixture({ state: 'FAILED', error_code: 'diagram_render_failed',
     retry_budget: { used: 3, limit: 3, remaining: 0 }, quality_warnings: [{ family: 'technical-solution',
       issue_count: 1, issues: [{ code: 'quantity_mismatch' }] }] }), { disabled: () => false });
-  assert.match(html, /设备数量与项目底稿不一致，需核对原始清单/);
+  assert.match(html, /有 1 项质量问题需人工核对/);
+  assert.match(html, /<summary>查看待核对问题<\/summary>/);
+  // The code-to-text mapping is checked after real browser disclosure expansion.
+  assert.doesNotMatch(html, /设备数量与项目底稿不一致，需核对原始清单/);
   assert.match(html, /正文已保存，文件待生成/);
   assert.match(html, /disabled="" aria-describedby="retry-limit-note">从已保存进度重试/);
   assert.doesNotMatch(html, />下载文件</);

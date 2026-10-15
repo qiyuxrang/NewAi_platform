@@ -22,6 +22,8 @@ from .product_diagrams import (
     apply_diagram_descriptions,
     apply_diagram_layout,
     diagram_contract_hash,
+    diagram_evidence_blocks,
+    heading_display_text,
     validate_diagram_batch,
     inspect_docx_requirements,
     validate_document_requirements,
@@ -131,6 +133,8 @@ def content_document(task, input_revision, blueprint, chapters, family="technica
         requirements.append({"id": "RINPUT", "text": facts["requirements"]})
     requirement_ids = [item["id"] for item in requirements]
     blocks = []
+    guide_aware = family == "feasibility" and bool(blueprint.payload.get("feasibility_guide"))
+    planned_titles = set()
     bodies = [[clean_report_paragraph(paragraph) for paragraph in chapter.payload["paragraphs"]] for chapter in chapters]
     chapter_count = sum(any(body) for body in bodies)
     chapter_index = 0
@@ -140,7 +144,7 @@ def content_document(task, input_revision, blueprint, chapters, family="technica
         payload = chapter.payload
         stable = "C" + hashlib.sha256(payload["chapter_id"].encode()).hexdigest()[:24]
         cited = [mapped for original in payload["source_ids"] for mapped in source_map.get(original, [])] or ["SINPUT"]
-        heading_title = re.sub(r"^第[一二三四五六七八九十0-9]+[章节]\s*", "", payload["title"])
+        heading_title = heading_display_text(payload["title"])
         blocks.append({"id": stable, "type": "heading", "level": 1, "text": heading_title, "source_ids": cited, "requirement_ids": requirement_ids})
         if not any(body):
             missing_chapters.append(payload["chapter_id"])
@@ -150,6 +154,7 @@ def content_document(task, input_revision, blueprint, chapters, family="technica
                            "text": f"本章“{heading_title}”缺少有效设计正文，需由编制负责人补充本章内容后复核。",
                            "source_ids": cited, "requirement_ids": requirement_ids})
             continue
+        accepted_body = []
         for index, paragraph in enumerate(body, start=1):
             if not paragraph:
                 continue
@@ -157,7 +162,18 @@ def content_document(task, input_revision, blueprint, chapters, family="technica
                 financial_claims_found = True
                 if not draft:
                     continue
-            blocks.append({"id": f"{stable}P{index}", "type": "paragraph", "text": paragraph, "source_ids": cited, "requirement_ids": requirement_ids})
+            if guide_aware:
+                accepted_body.append(paragraph)
+                continue
+            for part_index, text in enumerate((part.strip() for part in paragraph.splitlines() if part.strip()), start=1):
+                identifier = f"{stable}P{index}" + (f"_{part_index}" if part_index > 1 else "")
+                blocks.append({"id": identifier, "type": "paragraph", "text": text,
+                               "source_ids": cited, "requirement_ids": requirement_ids})
+        if guide_aware:
+            from .product_feasibility_blocks import authored_blocks, figure_plan
+            blocks.extend(authored_blocks(accepted_body, stable, cited, requirement_ids))
+            titles = [title for title in figure_plan(blueprint.payload, payload["chapter_id"]) if title not in planned_titles]
+            planned_titles.update(titles)
         add_structural_blocks(
             blocks,
             family,
@@ -166,8 +182,13 @@ def content_document(task, input_revision, blueprint, chapters, family="technica
             chapter_index=chapter_index,
             chapter_count=chapter_count,
             chapter_title=payload["title"],
+            **({"diagram_titles": titles} if guide_aware else {}),
         )
         chapter_index += 1
+    if guide_aware:
+        from .product_feasibility import asset_hash
+        requirements.append({"id": "RGUIDEFIGURES", "text": json.dumps({"asset_sha256": asset_hash(),
+            "figure_ids": [block["id"] for block in blocks if block["type"] == "figure"]}, ensure_ascii=False)})
     if missing_chapters and not draft:
         raise DocumentError("chapter_body_missing", diagnostic={"stage": "content_assembly", "chapter_ids": missing_chapters})
     pending = []
@@ -290,6 +311,7 @@ def preflight_document_rendering(*, draft=False):
             command = _office_command(runtime, Path("input.docx"), Path("render"), 300)
             office_script = file_hash(Path(command[2]))
         renderer_files = [Path(__file__), Path(__file__).with_name("product_render_cache.py"),
+                          Path(__file__).with_name("product_feasibility_blocks.py"),
                           Path(__file__).with_name("product_docx_layout.py"),
                           Path(__file__).with_name("product_office_runtime.py")]
         renderer_files.extend(sorted((PACK / "scripts").glob("*.py")))
@@ -535,8 +557,7 @@ def _diagram_sources(document, generator, *, draft=False, quality_issues=None):
         findings = []
         diagrams = validate_diagram_batch({"diagrams": diagrams},
                                [block for block in document["blocks"] if block["type"] == "figure"],
-                               [block for block in document["blocks"] if block["type"] == "paragraph"
-                                and not block["id"].startswith("DIAGRAM_")], draft=draft, quality_issues=findings)
+                               diagram_evidence_blocks(document["blocks"]), draft=draft, quality_issues=findings)
         apply_diagram_descriptions(document, diagrams)
         validate_document_requirements(document, allow_pending=draft)
         if findings:
@@ -597,32 +618,89 @@ def _render_draft_diagrams(document, generator, directory, step_runner=None):
     output = []
     rendered_count = 0
     runtime = preflight_document_rendering(draft=True)
-    for source in sources:
-        figure = figures[source["figure_id"]]
-        binding = {"figure": figure, "source_sha256": hashlib.sha256(source["source"].encode()).hexdigest(),
+    for original_source in sources:
+        figure = figures[original_source["figure_id"]]
+        evidence_ids = set(original_source["evidence_block_ids"])
+        paragraphs = [block for block in diagram_evidence_blocks(document["blocks"])
+                      if block["id"] in evidence_ids]
+        binding = {"figure": deepcopy(figure), "source": original_source,
                    "runtime": runtime, "contract": diagram_contract_hash()}
-        def valid(evidence):
+        def valid(evidence, selected_source):
             try:
                 if len(evidence["figures"]) != 1:
                     return False
                 record = evidence["figures"][0]
                 if (record["figure_id"] != figure["id"]
-                        or record["sourceSha256"] != binding["source_sha256"]
+                        or record["sourceSha256"] != hashlib.sha256(selected_source["source"].encode()).hexdigest()
                         or file_hash(confined(directory, figure["path"])) != record["imageSha256"]):
                     return False
                 apply_diagram_layout(deepcopy(document), evidence, directory)
                 return True
             except (OSError, KeyError, TypeError, ValueError):
                 return False
-        key = f'diagram_render:{document["family"]}:{figure["id"]}'
-        try:
+        def selected_valid(selected):
+            try:
+                if (set(selected) != {"source", "evidence", "corrected"}
+                        or type(selected["corrected"]) is not bool
+                        or (not selected["corrected"] and selected["source"] != original_source)):
+                    return False
+                if selected["corrected"]:
+                    validate_diagram_batch({"diagrams": [selected["source"]]}, [figure], paragraphs, draft=False)
+                return valid(selected["evidence"], selected["source"])
+            except (ValueError, KeyError, TypeError):
+                return False
+        base_key = f'diagram_render:{document["family"]}:{figure["id"]}'
+        def render_selected():
+            source = original_source
+            key = base_key
+            render_binding = {"figure": deepcopy(figure),
+                "source_sha256": hashlib.sha256(source["source"].encode()).hexdigest(),
+                "runtime": runtime, "contract": binding["contract"]}
             def operation():
                 if runtime.get("mermaid", {}).get("status") == "unavailable":
                     raise DocumentError("diagram_render_failed", diagnostic={"stage": "diagram_render", "reason": runtime["mermaid"]["reason"]})
                 return _render_one_diagram(directory, document, figure, source)
-            evidence = step_runner(key, binding, operation, valid) if step_runner else operation()
-            if not valid(evidence):
+            try:
+                evidence = step_runner(key, render_binding, operation,
+                    lambda value: valid(value, source)) if step_runner else operation()
+                corrected = False
+            except (DocumentError, StepRetryPending) as rejected:
+                failure = getattr(rejected, "diagnostic", {}) or getattr(rejected.__cause__, "diagnostic", {})
+                reason = failure.get("reason", "render_failed")
+                if reason not in {"diagram_layout_unreadable", "diagram_parse_or_anchor_failed"}:
+                    raise
+                # One real-render correction uses the existing guarded model
+                # callback and budget; never shrink fonts or invent a substitute.
+                repair = {"family": document["family"], "metadata": document["metadata"],
+                    "blocks": [*deepcopy(paragraphs), deepcopy(figure)],
+                    "diagram_render_feedback": {"figure_id": figure["id"], "reason": reason,
+                        "previous_source": source["source"]}}
+                try:
+                    revised = validate_diagram_batch({"diagrams": generator(repair)}, [figure], paragraphs,
+                        draft=False)
+                except (ValueError, KeyError, TypeError):
+                    raise DocumentError("diagram_render_failed", diagnostic={"stage": "diagram_render",
+                        "reason": "render_correction_invalid"}) from None
+                source = revised[0]
+                apply_diagram_descriptions(document, revised)
+                render_binding = {"figure": deepcopy(figure), "source_sha256": hashlib.sha256(source["source"].encode()).hexdigest(),
+                           "runtime": runtime, "contract": binding["contract"], "render_correction": reason}
+                key += ":correction"
+                evidence = step_runner(key, render_binding, operation,
+                    lambda value: valid(value, source)) if step_runner else operation()
+                corrected = True
+            return {"source": source, "evidence": evidence, "corrected": corrected}
+        key = base_key + ":selected"
+        try:
+            # Persist the accepted selection as one resumable step. A successful
+            # redraw must not revisit its failed predecessor after Office retries.
+            selected = step_runner(key, binding, render_selected, selected_valid) if step_runner else render_selected()
+            if not selected_valid(selected):
                 raise DocumentError("diagram_render_failed", diagnostic={"stage": "diagram_render", "reason": "reading_unit_verification_failed"})
+            source, evidence = selected["source"], selected["evidence"]
+            apply_diagram_descriptions(document, [source])
+            if selected["corrected"]:
+                findings[:] = [issue for issue in findings if issue.get("figure_id") != figure["id"]]
             units = apply_diagram_layout(document, evidence, directory) or [{"id": figure["id"],
                 "image_sha256": evidence["figures"][0]["imageSha256"]}]
             output.extend({**unit, "source_sha256": evidence["figures"][0]["sourceSha256"],
@@ -772,8 +850,9 @@ def _render_document(task, chapters, manifest, runtime, document, filename, stat
         if diagram_progress:
             diagram_progress("running", figure_count=structural["figure_count"])
         try:
-            if draft:
-                diagram_evidence = _render_draft_diagrams(document, diagram_generator, directory, diagram_step)
+            if draft or structural["figure_count"] == 0:
+                diagram_evidence = _render_draft_diagrams(document,
+                    diagram_generator if structural["figure_count"] else lambda _: [], directory, diagram_step)
                 structural = validate_document_requirements(document, allow_pending=True)
                 document.pop("diagram_pending", None)
                 content_path.write_text(json.dumps(document, ensure_ascii=False, allow_nan=False), encoding="utf-8")

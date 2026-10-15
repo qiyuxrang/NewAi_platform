@@ -1,18 +1,28 @@
+const assistantFeature = { code: 'knowledge', label: '智能助手', description: '对话、检索已授权知识库与公开网页' } as const
+
 export const departments = [
-  { code: 'product', label: '产品事业部', description: '文档生成、商机管理、知识库问答与文档成果', functions: [
+  { code: 'product', label: '产品事业部', description: '文档生成、商机管理、智能助手与文档成果', functions: [
     { code: 'documents', label: '文档生成', description: '生成项目方案与交付文档' },
     { code: 'opportunities', label: '商机管理', description: '处理商机与方案需求' },
-    { code: 'knowledge', label: '知识库问答', description: '围绕部门知识与参考资料提问' },
+    assistantFeature,
     { code: 'outputs', label: '文档成果', description: '查看已生成的方案与交付文档' },
+    { code: 'entry', label: '售前填报', description: '维护授权售前台账、草稿与发布版本' },
   ] },
   { code: 'hr', label: '人事部', description: 'JD 生成、简历筛选与招聘记录', functions: [
     { code: 'jobs', label: 'JD 生成', description: '根据岗位需求生成 JD' },
     { code: 'resumes', label: '简历筛选', description: '处理简历与岗位匹配' },
     { code: 'history', label: '招聘历史', description: '查看已有招聘需求记录' },
+    assistantFeature,
   ] },
   { code: 'engineering', label: '工程部', description: '报价分析与报价任务', functions: [
     { code: 'estimate', label: '报价分析', description: '分析工程报价与成本' },
     { code: 'jobs', label: '报价任务', description: '跟进报价分析任务与结果' },
+    assistantFeature,
+    { code: 'entry', label: '工程填报', description: '维护授权工程台账与实施进度' },
+  ] },
+  { code: 'finance', label: '财务部', description: '维护本人财务记录与发布版本', functions: [
+    { code: 'entry', label: '财务填报', description: '维护本人应收与回款记录，确认精确版本发布' },
+    assistantFeature,
   ] },
 ] as const
 
@@ -41,6 +51,11 @@ export function availableDepartments(user: EnterpriseAccess | null) {
 
 export function departmentPath(department: DepartmentCode, feature?: string) {
   return `/departments/${department}${feature ? `/${feature}` : ''}`
+}
+
+export function enterpriseHomePath(user: EnterpriseAccess | null) {
+  const assigned = availableDepartments(user)
+  return assigned.length === 1 ? departmentPath(assigned[0].code) : '/dashboard'
 }
 
 export const settingEntries = [
@@ -87,4 +102,24 @@ export function readBusinessRows(value: unknown, key?: string): Record<string, u
     throw new Error('业务服务返回了无法识别的列表，暂时无法展示数据。')
   }
   return rows as Record<string, unknown>[]
+}
+
+export const managerEntries = [
+  { to: '/departments/product/opportunities', label: '商机看板', capability: 'product' },
+  { to: '/departments/product/documents?view=projects', label: '文档生成', capability: 'product' },
+  { to: '/departments/engineering/estimate', label: '产品报价', capability: 'engineering' },
+  { to: '/departments/product/knowledge', label: '智能助手', capability: 'product' },
+  { to: '/departments/business/finance', label: '财务看板', capability: 'general_manager' },
+] as const
+
+export function availableManagerEntries(user: EnterpriseAccess | null) {
+  return managerEntries.filter(entry => user?.business_role === 'general_manager' && hasCapability(user, entry.capability))
+}
+
+export function canAccessFinanceBoard(user: EnterpriseAccess | null) {
+  return user?.business_role === 'general_manager' && hasCapability(user, 'general_manager')
+}
+
+export function canAccessEntry(user: EnterpriseAccess | null, department: string) {
+  return user?.business_role === 'employee' && ['product', 'engineering', 'finance'].includes(department) && canAccessDepartment(user, department)
 }

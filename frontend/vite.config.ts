@@ -17,7 +17,7 @@ export default defineConfig({
           })
         },
       },
-      '/api': 'http://localhost:8080',
+      '^/api/': 'http://localhost:8080',
     },
   },
 })

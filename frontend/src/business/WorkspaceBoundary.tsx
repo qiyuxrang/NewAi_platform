@@ -1,9 +1,13 @@
 import { Component, Suspense, type ReactNode } from "react";
 
-class WorkspaceErrorBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
+class WorkspaceErrorBoundary extends Component<{ children: ReactNode; resetKey: string }, { failed: boolean }> {
   state = { failed: false };
 
   static getDerivedStateFromError() { return { failed: true }; }
+
+  componentDidUpdate(previous: Readonly<{ children: ReactNode; resetKey: string }>) {
+    if (this.state.failed && previous.resetKey !== this.props.resetKey) this.setState({ failed: false });
+  }
 
   render() {
     if (this.state.failed) return <section className="state-card" role="alert">
@@ -17,7 +21,7 @@ class WorkspaceErrorBoundary extends Component<{ children: ReactNode }, { failed
 }
 
 export default function WorkspaceBoundary({ children, resetKey = "" }: { children: ReactNode; resetKey?: string }) {
-  return <WorkspaceErrorBoundary key={resetKey}>
+  return <WorkspaceErrorBoundary resetKey={resetKey}>
     <Suspense fallback={<div className="center-empty" role="status" aria-live="polite" aria-busy="true">正在加载工作页面…</div>}>
       {children}
     </Suspense>

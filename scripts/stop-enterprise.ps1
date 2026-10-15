@@ -50,6 +50,8 @@ if ($GatewayOnly) {
 
 # Stop only this project's per-user runtimes, matched by their dedicated
 # network and exact image. Keep every container and volume for the next start.
+& docker compose --project-name aicompany-claw --env-file $EnvFile -f (Join-Path $repo 'docker-compose.enterprise.yml') stop searxng
+if ($LASTEXITCODE) { throw 'Local search could not be stopped.' }
 $ids = & docker ps --quiet --filter 'network=aicompany-claw-internal' --filter 'ancestor=aicompany-claw:20261008'
 if ($LASTEXITCODE) { throw 'Could not inspect enterprise runtimes.' }
 if ($ids) {

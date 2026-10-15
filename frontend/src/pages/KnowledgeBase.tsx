@@ -372,7 +372,7 @@ export default function KnowledgeBase() {
           ) : (
             <div className="rounded-xl border border-dark-border bg-dark-card overflow-hidden">
               {/* Table header */}
-              <div className="grid grid-cols-[1fr_100px_160px_100px] gap-2 border-b border-dark-border bg-dark-bg px-4 py-2 text-xs font-medium text-dark-text-secondary">
+              <div className="grid grid-cols-[minmax(0,1fr)_100px_160px_100px] gap-2 border-b border-dark-border bg-dark-bg px-4 py-2 text-xs font-medium text-dark-text-secondary">
                 <span>名称</span>
                 <span className="text-right">大小</span>
                 <span className="text-right">修改时间</span>
@@ -389,11 +389,11 @@ export default function KnowledgeBase() {
                     const entrySubPath = entry.path.replace(knowledgeRoot(selectedAgent) + '/', '')
                     return (
                       <div key={entry.path}>
-                        <div className="grid grid-cols-[1fr_100px_160px_100px] gap-2 items-center border-b border-dark-border px-4 py-2 hover:bg-dark-bg/50 transition-colors">
+                        <div className="grid grid-cols-[minmax(0,1fr)_100px_160px_100px] gap-2 items-center border-b border-dark-border px-4 py-2 hover:bg-dark-bg/50 transition-colors">
                           {/* Name */}
                           <button
                             onClick={() => isDir ? navigateTo(entrySubPath) : (isTextFile(entry) ? handlePreview(entry) : undefined)}
-                            className={`flex items-center gap-2 text-sm text-left ${
+                            className={`flex min-w-0 items-center gap-2 text-sm text-left ${
                               isDir
                                 ? 'text-accent-blue hover:underline'
                                 : isTextFile(entry) ? 'text-dark-text hover:text-accent-blue' : 'text-dark-text cursor-default'

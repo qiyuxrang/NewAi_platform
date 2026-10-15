@@ -18,7 +18,31 @@ SCRIPT = Path(__file__).resolve().parent / "product_assets" / "simple_presentati
 
 
 def presentation_renderer_hash():
-    return hashlib.sha256(SCRIPT.read_bytes() + Path(__file__).read_bytes()).hexdigest()
+    from .product_ppt_master import contract_hash
+    return hashlib.sha256(SCRIPT.read_bytes() + Path(__file__).read_bytes() + contract_hash().encode()).hexdigest()
+
+
+def _style_design(planning):
+    """Keep style choice identical to the existing document-runtime implementation."""
+    code = ("import json,sys; from simple_presentation import select_style,STYLES; "
+            "style,goal,reason=select_style(json.loads(sys.argv[1])); "
+            "print(json.dumps([style,goal,STYLES[style],reason]))")
+    context = {"style": planning.get("presentation_style", "auto"),
+               "goal": planning.get("communication_goal", ""),
+               **{key: planning.get(key, "") for key in ("purpose", "audience", "requirements")}}
+    try:
+        result = subprocess.run([str(_document_runtime()), "-B", "-c", code,
+            json.dumps({"planning_context": context}, ensure_ascii=False)], cwd=SCRIPT.parent,
+            env=_safe_environment(), capture_output=True, timeout=30,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+        if result.returncode:
+            raise ValueError
+        style, goal, palette, reason = json.loads(result.stdout)
+        metadata = {"style_label": palette["label"], "goal_label": {"customer": "客户沟通", "department": "部门汇报", "decision": "立项决策"}[goal],
+                    "selection_reason": reason}
+        return style, goal, {key: "#" + palette[key] for key in ("background", "ink", "muted", "accent", "panel")}, metadata
+    except (OSError, ValueError, KeyError, subprocess.TimeoutExpired):
+        raise DocumentError("presentation_unavailable", diagnostic={"stage": "presentation_plan", "reason": "style_failed"}) from None
 
 
 def _valid_plan(plan, pair, slides):
@@ -47,6 +71,9 @@ def _valid_plan(plan, pair, slides):
 
 
 def _valid_manifest(quality, pair):
+    if isinstance(quality, dict) and quality.get("engine_version") == "ppt-master-v1":
+        from .product_ppt_master import valid_manifest
+        return valid_manifest(quality, pair)
     if not isinstance(quality, dict):
         return False
     text_fields = ("engine", "engine_version", "design_profile", "fact_boundary")
@@ -176,9 +203,13 @@ def _render_with_progress(command, directory, content, pair, progress, timeout):
                 process.communicate()
 
 
-def render_presentation_draft(task, pair, *, presentation_style="auto", communication_goal="", audience="", purpose="", requirements="", progress=None):
+def render_presentation_draft(task, pair, *, presentation_style="auto", communication_goal="", audience="", purpose="", requirements="", progress=None, designer=None):
     if pair.get("approval_inherited") is not False or not pair.get("blocks") or not pair.get("sources"):
         raise DocumentError("presentation_unavailable", diagnostic={"stage": "presentation_source", "reason": "invalid_source"})
+    if designer is not None:
+        from .product_ppt_master import render
+        return render(task, pair, designer, progress=progress, presentation_style=presentation_style,
+            communication_goal=communication_goal, audience=audience, purpose=purpose, requirements=requirements)
     try:
         runtime = _document_runtime()
     except DocumentError:

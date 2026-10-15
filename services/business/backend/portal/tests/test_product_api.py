@@ -410,6 +410,48 @@ class ProductApiTests(PortalTestCase):
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["code"], "product_disabled")
 
+    def test_task_list_hides_revoked_input_without_expanding_user_scope(self):
+        from portal.product_retrieval import _authorization
+
+        visible = self.create_task(key="task-list-visible", reviewer=False)
+        revoked = self.create_task(key="task-list-revoked", reviewer=False)
+        reviewer_task = self.create_task(key="task-list-reviewer")
+        revoked_record = DocumentTask.objects.get(pk=revoked["id"])
+        revoked_title = "撤权资料对应的敏感项目标题"
+        revoked_record.title = revoked_title
+        revoked_record.save(update_fields=["title"])
+        input_revision = revoked_record.revisions.get(
+            kind=DocumentRevision.Kind.INPUT, version=revoked_record.input_version)
+        grants = {str(self.owner.pk): {"dataset-1": ["document-1"]}}
+
+        with override_settings(PRODUCT_RETRIEVAL_ENABLED=True, PRODUCT_RETRIEVAL_AUTHORIZATIONS=grants):
+            snapshot = _authorization(revoked_record)
+            revised = append_revision(
+                revoked_record, DocumentRevision.Kind.INPUT,
+                {**input_revision.payload, "retrieval": snapshot}, actor=self.owner)
+            revoked_record.input_version = revised.version
+            revoked_record.save(update_fields=["input_version"])
+
+            with override_settings(PRODUCT_RETRIEVAL_AUTHORIZATIONS={}):
+                owner_response = self.owner_client.get("/api/product/tasks/")
+
+        self.assertEqual(owner_response.status_code, 200, owner_response.content)
+        owner_tasks = owner_response.json()
+        self.assertIsInstance(owner_tasks, list)
+        owner_ids = {task["id"] for task in owner_tasks}
+        self.assertIn(visible["id"], owner_ids)
+        self.assertIn(reviewer_task["id"], owner_ids)
+        self.assertNotIn(revoked["id"], owner_ids)
+        self.assertNotIn(revoked_title, owner_response.content.decode())
+
+        reviewer_response = self.reviewer_client.get("/api/product/tasks/")
+        self.assertEqual(reviewer_response.status_code, 200, reviewer_response.content)
+        self.assertEqual([task["id"] for task in reviewer_response.json()], [reviewer_task["id"]])
+
+        other_response = self.other_client.get("/api/product/tasks/")
+        self.assertEqual(other_response.status_code, 200, other_response.content)
+        self.assertEqual(other_response.json(), [])
+
     def test_task_ids_are_not_enumerable_and_unknown_fields_are_rejected(self):
         task = self.create_task()
 

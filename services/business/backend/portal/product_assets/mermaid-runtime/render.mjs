@@ -9,8 +9,9 @@ import { controlledContext } from "./browser-policy.mjs";
 import { bitmapBinding, confined, loadBitmap, saveBitmap, sha256 } from "./bitmap-cache.mjs";
 
 const runtimeDirectory = path.dirname(fileURLToPath(import.meta.url));
-const layoutVersion = "word-readable-v1";
+const layoutVersion = "word-readable-v2";
 let failureReason = "runtime_manifest_invalid";
+let failureEvidence = {};
 async function main() {
   const {manifest,manifestSha256,bundle} = await readVerifiedBundle(path.join(runtimeDirectory,"dist"));
   const rendererSha256=sha256(Buffer.concat(await Promise.all(
@@ -71,6 +72,7 @@ async function main() {
   try {
     for (let index=0; index<figures.length; index+=1) {
       const figure=figures[index];
+      failureEvidence = {};
       failureReason="diagram_path_invalid";
       const destination=await confined(root,figure.path);
       if (!destination.startsWith(root+path.sep) || path.extname(destination).toLowerCase()!==".png") throw new Error("unsafe diagram path");
@@ -87,7 +89,7 @@ async function main() {
       if (cachedHash) {
         try {
           cachedLayout=JSON.parse(await fs.readFile(layoutPath,"utf8"));
-          if (cachedLayout.version!==layoutVersion || !Array.isArray(cachedLayout.panels) || !cachedLayout.panels.length || cachedLayout.panels.length>100) cachedLayout=null;
+          if (cachedLayout.version!==layoutVersion || !Array.isArray(cachedLayout.panels) || !cachedLayout.panels.length || cachedLayout.panels.length>2) cachedLayout=null;
           for (const [position,panel] of (cachedLayout?.panels || []).entries()) {
             const expectedPath=panel.index===1 ? figure.path : figure.path.replace(/\.png$/i,`-unit-${panel.index}.png`);
             if (panel.path!==expectedPath || panel.index!==position+1 || panel.total!==cachedLayout.panels.length
@@ -115,13 +117,53 @@ async function main() {
         let svg=graph.querySelector("svg");
         if (!svg || svg.querySelector(".error-icon,.error-text")) throw new Error("invalid diagram SVG");
         if (anchor && !svg.textContent.includes(anchor)) throw new Error("report evidence anchor is not visible in diagram");
-        // Direction affects layout only: all authored nodes, edges and labels remain unchanged.
-        if (/^\s*flowchart\s+(?:LR|RL)\b/.test(diagram) && svg.getBBox().width>widthMm*96/25.4*1.2) {
-          graph.removeAttribute("data-processed"); graph.textContent=diagram.replace(/^(\s*flowchart\s+)(?:LR|RL)\b/,"$1TB");
-          await window.mermaid.run({nodes:[graph]}); svg=graph.querySelector("svg");
-          if (!svg || (anchor && !svg.textContent.includes(anchor))) throw new Error("invalid relayout");
-        }
         await document.fonts.ready;
+        const exposeClusterTitles=()=>{
+          for(const label of svg.querySelectorAll(".cluster-label")){
+            const background=getComputedStyle(label.closest(".cluster").querySelector("rect")).fill;
+            const matrix=svg.getScreenCTM().inverse().multiply(label.getScreenCTM());
+            label.setAttribute("transform",`matrix(${matrix.a},${matrix.b},${matrix.c},${matrix.d},${matrix.e},${matrix.f})`);
+            for(const text of label.querySelectorAll("text")){
+              text.style.paintOrder="stroke";text.style.stroke=background;text.style.strokeWidth="5px";
+              text.style.strokeLinejoin="round";
+            }
+            // Mermaid draws cross-layer edges over group titles. Keep the same
+            // title position and palette while letting the line pass behind it.
+            svg.append(label);
+          }
+        };
+        exposeClusterTitles();
+        // Compare actual paper dimensions only when the authored direction does
+        // not fit a readable unit. Prefer the authored layout on equal scores.
+        const measure=()=>{
+          const bounds=svg.getBBox(),width=Math.ceil(Math.max(320,bounds.width+24));
+          const widthOnPaper=Math.min(widthMm,width*25.4/96);
+          const text=[...svg.querySelectorAll("text")].filter(node=>node.textContent.trim());
+          const font=Math.min(18,...text.map(node=>parseFloat(getComputedStyle(node).fontSize)));
+          const minFontPt=font*widthOnPaper*72/25.4/width;
+          return {minFontPt,heightMm:(bounds.height+24)*widthOnPaper/width,
+            labelCount:text.length,nodeCount:svg.querySelectorAll(".node").length,
+            edgeCount:svg.querySelectorAll(".edgePath,.flowchart-link,.messageLine0,.messageLine1").length};
+        };
+        const sourceDirection=diagram.match(/^\s*flowchart\s+(TB|TD|BT|LR|RL)\b/)?.[1] || "sequence";
+        let direction=sourceDirection;
+        const original=measure(),directionCandidates=[{direction:sourceDirection,...original}];
+        // ponytail: one orthogonal candidate; broader search only for proven layout failures.
+        if (["TB","TD","LR","RL"].includes(sourceDirection) && (original.minFontPt<10.5 || original.heightMm>190)) {
+          const alternative=["LR","RL"].includes(sourceDirection) ? "TB" : "LR";
+          const renderDirection=async(value)=>{
+            graph.removeAttribute("data-processed");graph.textContent=diagram.replace(/^(\s*flowchart\s+)(?:TB|TD|LR|RL)\b/,"$1"+value);
+            await window.mermaid.run({nodes:[graph]});svg=graph.querySelector("svg");await document.fonts.ready;
+            if (!svg || (anchor && !svg.textContent.includes(anchor))) throw new Error("invalid relayout");
+            exposeClusterTitles();
+          };
+          await renderDirection(alternative);
+          const candidate=measure();directionCandidates.push({direction:alternative,...candidate});
+          const sameContent=["labelCount","nodeCount","edgeCount"].every(key=>candidate[key]===original[key]);
+          if (sameContent && candidate.minFontPt>=10.5 && (original.minFontPt<10.5 ||
+              Math.ceil(candidate.heightMm/190)<Math.ceil(original.heightMm/190))) direction=alternative;
+          else await renderDirection(sourceDirection);
+        }
         const bounds=svg.getBBox(),padding=12;
         const width=Math.ceil(Math.max(320,bounds.width+padding*2));
         const outputWidthMm=Math.min(widthMm,width*25.4/96);
@@ -129,7 +171,21 @@ async function main() {
         if (!text.length) throw new Error("missing diagram labels");
         const font=Math.min(18,...text.map(node=>parseFloat(getComputedStyle(node).fontSize)));
         const minFontPt=font*outputWidthMm*72/25.4/width;
-        if (!Number.isFinite(minFontPt) || minFontPt<10.5) throw new Error("diagram requires narrower reading units");
+        const unreadable=(detail,extra={})=>({failure:{detail,sourceDirection,direction,directionCandidates,minFontPt,...extra}});
+        if (!Number.isFinite(minFontPt) || minFontPt<10.5) return unreadable("font_below_minimum");
+        // Inspect rendered rows, not guessed character widths. Only reject a
+        // continuous authored number; separate values and English wraps remain valid.
+        const numericTokens=new Set(diagram.match(/\d+(?:[.．]\d+)*/g) || []);
+        let numericSplitCount=0;
+        for(const label of svg.querySelectorAll(".node text")){
+          const rows=[...label.children].filter(node=>node.tagName.toLowerCase()==="tspan").map(node=>node.textContent.trim());
+          for(let index=1;index<rows.length;index+=1){
+            const before=rows[index-1].match(/\d+(?:[.．]\d*)?$/)?.[0];
+            const after=rows[index].match(/^[.．]?\d+/)?.[0];
+            if(before && after && numericTokens.has(before+after)) numericSplitCount+=1;
+          }
+        }
+        if(numericSplitCount) return unreadable("numeric_token_split",{numericSplitCount});
         // Cuts never cross a node, actor, annotation or visible label. Repeating
         // the last row preserves the entry/exit context of cross-unit arrows.
         const protectedBoxes=[...svg.querySelectorAll(".node,.actor,.note,text")].map(node=>{
@@ -145,14 +201,15 @@ async function main() {
         while(end-start>maximumHeight){
           const candidates=bands.slice(0,-1).map((band,index)=>({cut:(band.end+bands[index+1].start)/2,index}))
             .filter(item=>item.cut>start+maximumHeight*.35 && item.cut<=start+maximumHeight);
-          if(!candidates.length) throw new Error("diagram cannot split without cutting labels");
+          if(!candidates.length) return unreadable("no_label_safe_cut");
           const chosen=candidates.at(-1);regions.push({start,end:chosen.cut});
           const lastNodeBand=bands.slice(0,chosen.index+1).findLast(band=>band.isNode);
           const repeated=(lastNodeBand?.start ?? bands[chosen.index].start)-padding;
           start=repeated>start+maximumHeight*.2 ? repeated : chosen.cut-12;
         }
         regions.push({start,end});
-        if (protectedBoxes.some(box=>!regions.some(region=>box.start>=region.start && box.end<=region.end))) throw new Error("reading unit cuts a visible label");
+        if(regions.length>2) return unreadable("too_many_reading_units",{readingUnitCount:regions.length,maximumReadingUnits:2});
+        if (protectedBoxes.some(box=>!regions.some(region=>box.start>=region.start && box.end<=region.end))) return unreadable("reading_unit_cuts_label");
         const sourceSvg=svg.cloneNode(true);host.replaceChildren();host.style.width=width+"px";
         const panels=regions.map((region,index)=>{
           const unit=document.createElement("section");unit.id="unit-"+(index+1);
@@ -164,13 +221,18 @@ async function main() {
           unit.append(image);host.append(unit);
           return {index:index+1,total:regions.length,width_mm:outputWidthMm,min_font_pt:minFontPt,css_width:width,css_height:unit.getBoundingClientRect().height};
         });
-        return {panels,labelCount:text.length,nodeCount:svg.querySelectorAll(".node").length,
+        return {panels,direction,sourceDirection,directionCandidates,labelCount:text.length,nodeCount:svg.querySelectorAll(".node").length,
           edgeCount:svg.querySelectorAll(".edgePath,.flowchart-link,.messageLine0,.messageLine1").length,
           labelsFullyContained:true,contentBounds:{width:bounds.width,height:bounds.height},minFontPt};
       },{diagram,anchor:inputDiagram.anchor_text,widthMm}).catch(error=>{
         if (/diagram requires narrower reading units|diagram cannot split without cutting labels|reading unit cuts a visible label/.test(error.message)) failureReason="diagram_layout_unreadable";
         throw error;
       });
+      if(layout.failure){
+        failureReason="diagram_layout_unreadable";
+        failureEvidence={figure_id:figure.id,...layout.failure};
+        throw new Error("diagram layout unreadable");
+      }
       failureReason="diagram_bitmap_failed";
       for(const panel of layout.panels){
         panel.path=panel.index===1 ? figure.path : figure.path.replace(/\.png$/i,`-unit-${panel.index}.png`);
@@ -191,4 +253,4 @@ async function main() {
   process.stdout.write(JSON.stringify({rendered,sourcePersisted:false,engine:`mermaid-js-${runtimeVersions.mermaid}`,
     bundleSha256:manifest.bundleSha256,manifestSha256,runtimeVersions,layoutVersion,figures:evidence,securityLevel:"strict",blockedNetworkRequests:networkPolicy.blockedRequests}));
 }
-main().catch(()=>{process.stderr.write(JSON.stringify({stage:"diagram_render",reason:failureReason})+"\n");process.exit(2);});
+main().catch(()=>{process.stderr.write(JSON.stringify({stage:"diagram_render",reason:failureReason,...failureEvidence})+"\n");process.exit(2);});

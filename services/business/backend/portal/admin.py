@@ -12,6 +12,7 @@ from django.shortcuts import redirect
 
 from .models import AuditEvent, BusinessLedgerGrant, BusinessMapping, Module, Role, User
 from .security import audit
+from .product_knowledge_models import ProductKnowledgeConversation
 
 
 class PortalAdminSite(admin.AdminSite):
@@ -71,6 +72,7 @@ class PortalAdminSite(admin.AdminSite):
             "GatewayModel": (7, "模型", "配置已保存的模型参数；连接测试仅发送固定短文本，可能产生费用。", "管理网关模型", "新增模型"),
             "ModelRoute": (8, "业务", "按业务模块配置模型路由，新增配置默认停用。", "管理业务路由", "新增路由"),
             "ModelCallLog": (9, "留痕", "只读查看调用状态、耗时与令牌计数，不记录输入或输出内容。", "查看调用日志", "新增记录"),
+            "ProductKnowledgeConversation": (10, "维护", "归档旧知识对话以释放活跃额度；保留历史，不展示对话内容。", "归档知识对话", "新增记录"),
         }
         labels = {
             model._meta.object_name: model_admin.admin_label_plural
@@ -359,6 +361,34 @@ class AuditAdmin(ManagedAdmin):
 
     def has_change_permission(self, request, obj=None):
         return False
+
+
+@admin.register(ProductKnowledgeConversation, site=site)
+class ProductKnowledgeConversationAdmin(ManagedAdmin):
+    admin_label = "知识对话"
+    admin_label_plural = "知识对话归档"
+    fields = readonly_fields = ("id", "owner", "version", "archived_at", "pending_until", "created_at", "updated_at")
+    list_display = ("id", "owner", "version", "archived_at", "updated_at")
+    list_filter = ("archived_at",)
+    search_fields = ("owner__username", "owner__display_name")
+    actions = ("archive_conversations",)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_change_permission(self, request, obj=None):
+        return False
+
+    @admin.action(description="归档所选知识对话（保留历史）", permissions=("view",))
+    def archive_conversations(self, request, queryset):
+        archived = 0
+        for item in queryset:
+            with transaction.atomic():
+                if item.archive(item.version):
+                    archived += 1
+                    self.log_change(request, item, "归档知识对话")
+                    audit(request.user, "productknowledgeconversation_archive", item.pk, changes=["archived_at"])
+        self.message_user(request, f"已归档 {archived} 个对话；已归档、正在回答或版本变化的记录已跳过。")
 
 
 from . import model_admin

@@ -45,7 +45,7 @@ class ServiceBoundary:
                     body.extend(message.get("body", b""))
                     if scope['path'] == '/v1/generate-vision':
                         limit = VISION_REQUEST_LIMIT
-                    elif scope['path'] == '/v1/generate-agent':
+                    elif scope['path'] in {'/v1/generate-agent', '/v1/generate-agent-stream'}:
                         limit = AGENT_REQUEST_LIMIT
                     elif scope['path'] in {'/v1/generate', '/v1/generate-stream'}:
                         limit = TEXT_REQUEST_LIMIT + 65536
@@ -280,6 +280,54 @@ def generate_agent(payload: AgentRequest):
         slots.release()
 
 
+@app.post("/v1/generate-agent-stream")
+def generate_agent_stream(payload: AgentRequest):
+    try:
+        names = validate_request(payload.messages, payload.tools, payload.tool_choice)
+    except (ValueError, TypeError, RecursionError):
+        raise GatewayError("invalid_request", "Agent 请求格式无效。", 400) from None
+    if not slots.acquire(blocking=False):
+        raise GatewayError("busy", "模型网关繁忙，请稍后重试。", 429)
+
+    async def events():
+        stream = None
+        try:
+            stream = stream_completion(payload.provider.model_dump(), payload.model.model_dump(), payload.messages,
+                                       agent_tools=payload.tools, tool_choice=payload.tool_choice, agent_deltas=True)
+            completed = False
+            while True:
+                event = await asyncio.to_thread(next, stream, None)
+                if event is None:
+                    break
+                try:
+                    if not isinstance(event, dict) or completed:
+                        raise ValueError
+                    if set(event) == {"delta"} and isinstance(event["delta"], str) and event["delta"]:
+                        pass
+                    elif event.get("done") is True:
+                        validate_result({key: value for key, value in event.items() if key != "done"}, names)
+                        completed = True
+                    else:
+                        raise ValueError
+                except (ValueError, TypeError, RecursionError):
+                    raise GatewayError("invalid_response", "模型服务返回格式无效。") from None
+                yield "data: " + json.dumps(event, ensure_ascii=False) + "\n\n"
+            if not completed:
+                raise GatewayError("invalid_response", "模型服务返回格式无效。")
+        except GatewayError as error:
+            yield "data: " + json.dumps({"error": {"code": error.code, "detail": error.message}}, ensure_ascii=False) + "\n\n"
+        except Exception:
+            yield 'data: {"error":{"code":"internal_error","detail":"模型调用失败，请检查服务配置。"}}\n\n'
+        finally:
+            try:
+                if stream is not None:
+                    stream.close()
+            finally:
+                slots.release()
+
+    return StreamingResponse(events(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
 @app.post("/v1/generate-stream")
 def generate_stream(payload: GenerateRequest):
     if payload.response_format is not None or payload.generation_profile is not None:
@@ -308,7 +356,7 @@ def generate_stream(payload: GenerateRequest):
         finally:
             try:
                 if stream is not None:
-                    await asyncio.to_thread(stream.close)
+                    stream.close()
             finally:
                 slots.release()
 

@@ -35,6 +35,18 @@ def can_use_business(user):
             and authorized_modules(user).filter(code="business", enabled=True).exclude(status="pending").exists())
 
 
+def can_use_assistant(user):
+    """Shared conversation access grants no department business or document access."""
+    if not user or not user.is_authenticated or not user.is_active or user.must_change_password:
+        return False
+    modules = authorized_modules(user).filter(enabled=True)
+    if modules.filter(code__in=("product", "hr", "cost")).exists() or is_business_manager(user):
+        return True
+    from .business_models import BusinessLedgerGrant
+    return (user.department_code == "finance" and Module.objects.filter(code="business", enabled=True).exists()
+            and BusinessLedgerGrant.objects.filter(user=user, department="finance").exists())
+
+
 def current_ticket_authorized(ticket):
     user = ticket.user
     mapping = ticket.mapping

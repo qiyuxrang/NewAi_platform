@@ -6,7 +6,7 @@ from functools import wraps
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import F, Prefetch, Q
 from django.http import FileResponse
 from django.urls import path
 from django.utils import timezone
@@ -714,9 +714,14 @@ def tasks(request):
         scope = Q(owner=request.user)
         if reviewer_allowed(request.user):
             scope |= Q(reviewer=request.user)
-        queryset = DocumentTask.objects.filter(scope).order_by("-updated_at")
+        current_inputs = DocumentRevision.objects.filter(
+            kind="input", version=F("task__input_version"))
+        queryset = (DocumentTask.objects.filter(scope)
+                    .prefetch_related(Prefetch("revisions", queryset=current_inputs, to_attr="task_list_inputs"))
+                    .order_by("-updated_at"))
         audit(request.user, "product_task_list", f"list:r{request.product_request_id}")
-        return Response([_task_summary(task) for task in queryset])
+        return Response([_task_summary(task) for task in queryset
+                         if not task.task_list_inputs or input_authorized(task, task.task_list_inputs[0])])
     body = _body(request, {"title", "input"}, {"reviewer_id", "intake_mode", "output_families"})
     intake_mode = body.get("intake_mode", "manual")
     if not isinstance(intake_mode, str) or intake_mode not in {"manual", "equipment_background"}:
@@ -888,7 +893,7 @@ def _queue(task, action):
     else:
         raise ProductError("invalid_action", "任务动作无效。")
     task.pending_action = action
-    blocked = action in {"blueprint", "write", "generate_outputs"} and not getattr(settings, "PRODUCT_MODEL_CALLS_ALLOWED", False)
+    blocked = action in {"blueprint", "write", "generate_outputs", "presentation"} and not getattr(settings, "PRODUCT_MODEL_CALLS_ALLOWED", False)
     task.state = DocumentTask.State.WAITING_INPUT if blocked else DocumentTask.State.QUEUED
     task.error_code = "model_authorization_required" if blocked else ""
     task.version += 1
@@ -1100,7 +1105,7 @@ def retry(request, task_id):
             raise ProductError("invalid_action", "没有可重试的持久动作。", 409)
         if task.pending_action in {"write", "render", "three_drafts", "presentation", "generate_outputs"}:
             _require_generation_knowledge(task)
-        blocked = task.pending_action in {"blueprint", "write", "generate_outputs"} and not getattr(settings, "PRODUCT_MODEL_CALLS_ALLOWED", False)
+        blocked = task.pending_action in {"blueprint", "write", "generate_outputs", "presentation"} and not getattr(settings, "PRODUCT_MODEL_CALLS_ALLOWED", False)
         task.state = DocumentTask.State.WAITING_INPUT if blocked else DocumentTask.State.QUEUED
         task.error_code = "model_authorization_required" if blocked else ""
         task.version += 1

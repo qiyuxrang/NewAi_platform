@@ -1,13 +1,19 @@
 import { Settings, LogOut } from 'lucide-react'
 import { useState, useEffect, useRef } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { ping, logout, getContainerInfo } from '../lib/api'
+import { useEnterprise } from './enterprise-context'
+import { availableManagerEntries } from '../enterprise-navigation'
 import NotificationBell from './NotificationBell'
 
 type ServiceStatus = 'initializing' | 'online' | 'offline'
 
 export default function TopBar() {
   const navigate = useNavigate()
+  const { pathname } = useLocation()
+  const { user } = useEnterprise()
+  const manager = user?.business_role === 'general_manager'
+  const page = availableManagerEntries(user).find(entry => entry.to.split('?')[0] === pathname)?.label ?? (pathname === '/departments/product/outputs' ? '文档生成 / 成果文件' : '工作首页')
   const [status, setStatus] = useState<ServiceStatus>('initializing')
   const checkIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
@@ -129,11 +135,11 @@ export default function TopBar() {
 
   return (
     <header className="flex h-14 items-center justify-between border-b border-dark-border bg-dark-sidebar px-6">
-      <div />
+      {manager ? <div className="gm-breadcrumb"><Link to="/dashboard">总经理工作台</Link><span>/</span><strong>{page}</strong></div> : <div />}
 
       {/* Right side */}
       <div className="flex items-center gap-4">
-        <div
+        {!manager && <div
           className={`flex items-center gap-2 rounded-full px-3 py-1.5 text-xs font-medium border ${statusConfig.borderColor} ${statusConfig.textColor}`}
         >
           <span
@@ -142,7 +148,8 @@ export default function TopBar() {
             }`}
           />
           {statusConfig.text}
-        </div>
+        </div>}
+        {manager && <span className="gm-account">{user?.username} · 总经理</span>}
 
         {/* ✅ 使用组件 */}
         <NotificationBell />

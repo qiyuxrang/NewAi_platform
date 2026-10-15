@@ -3,8 +3,8 @@
 from typing import Literal
 
 BusinessRole = Literal["unassigned", "employee", "general_manager"]
-DepartmentCode = Literal["product", "hr", "engineering"]
-DEPARTMENTS = ("product", "hr", "engineering")
+DepartmentCode = Literal["product", "hr", "engineering", "finance"]
+DEPARTMENTS = ("product", "hr", "engineering", "finance")
 
 
 def enterprise_identity(user) -> dict:
@@ -12,7 +12,7 @@ def enterprise_identity(user) -> dict:
     role = getattr(user, "business_role", None) or "unassigned"
     department = getattr(user, "department_code", None)
     if role == "general_manager":
-        capabilities = ["general_manager", *DEPARTMENTS]
+        capabilities = ["general_manager", "product", "hr", "engineering"]
     elif role == "employee" and department in DEPARTMENTS:
         capabilities = [department]
     else:

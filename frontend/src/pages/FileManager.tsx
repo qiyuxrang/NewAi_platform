@@ -320,7 +320,7 @@ export default function FileManager() {
       ) : (
         <div className="rounded-xl border border-dark-border bg-dark-card overflow-hidden">
           {/* Table header */}
-          <div className="grid grid-cols-[1fr_100px_160px_100px] gap-2 border-b border-dark-border bg-dark-bg px-4 py-2 text-xs font-medium text-dark-text-secondary select-none">
+          <div className="grid grid-cols-[minmax(0,1fr)_100px_160px_100px] gap-2 border-b border-dark-border bg-dark-bg px-4 py-2 text-xs font-medium text-dark-text-secondary select-none">
             <button onClick={() => handleSort('name')} className="text-left hover:text-dark-text transition-colors">
               名称<SortIcon column="name" />
             </button>
@@ -341,11 +341,11 @@ export default function FileManager() {
                 const isPreviewing = previewFile?.name === entry.name
                 return (
                   <div key={entry.path}>
-                    <div className="grid grid-cols-[1fr_100px_160px_100px] gap-2 items-center border-b border-dark-border px-4 py-2 hover:bg-dark-bg/50 transition-colors">
+                    <div className="grid grid-cols-[minmax(0,1fr)_100px_160px_100px] gap-2 items-center border-b border-dark-border px-4 py-2 hover:bg-dark-bg/50 transition-colors">
                       {/* Name */}
                       <button
                         onClick={() => isDir ? navigateTo(entry.path) : (isTextFile(entry) ? handlePreview(entry) : undefined)}
-                        className={`flex items-center gap-2 text-sm text-left ${
+                        className={`flex min-w-0 items-center gap-2 text-sm text-left ${
                           isDir
                             ? 'text-accent-blue hover:underline'
                             : isTextFile(entry) ? 'text-dark-text hover:text-accent-blue' : 'text-dark-text cursor-default'

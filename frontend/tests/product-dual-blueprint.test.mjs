@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { after, test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
+import ts from 'typescript';
 import { createServer } from 'vite';
 import React from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
@@ -12,6 +15,11 @@ const server = await createServer({ root, configFile: false, appType: 'custom',
 after(() => server.close());
 const { default: ProjectStages } = await server.ssrLoadModule('/src/business/product/ProjectStages.tsx');
 const { blueprintChapters, manualBlueprint } = await server.ssrLoadModule('/src/business/product/product-api.ts');
+const source = ts.createSourceFile('ProjectStages.tsx', readFileSync(new URL('../src/business/product/ProjectStages.tsx', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+const savedFilter = source.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'currentSavedChapters');
+assert.ok(savedFilter, 'Saved-body checks must execute the production current-family filter.');
+const filterCode = ts.transpileModule(savedFilter.getText(source), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+const currentSavedChapters = vm.runInNewContext(`${filterCode}; currentSavedChapters`);
 globalThis.window = { location: { search: '?tab=blueprint', origin: 'http://localhost' } };
 
 const chapter = (id, family, title = id) => ({ id, family, title, scope: `${title}设计范围`, source_ids: ['r1'] });
@@ -96,11 +104,22 @@ test('saved body with the wrong report family is excluded even when title and so
     saved('wrong-t', 'technical-solution', 'f1', '串入技术报告的可研稿'),
     saved('wrong-f', 'feasibility', 't1', '串入可研报告的技术稿')];
   const original = structuredClone(task);
+  const filteredSaved = currentSavedChapters(task);
+  assert.deepEqual(Array.from(filteredSaved, chapter => chapter.id), ['valid-t', 'valid-f']);
+  const body = family => Array.from(filteredSaved).filter(chapter => chapter.family === family).flatMap(chapter => chapter.payload.paragraphs).join('\n');
+  assert.match(body('technical-solution'), /有效技术正文/);
+  assert.doesNotMatch(body('technical-solution'), /有效可研正文|串入技术报告的可研稿|串入可研报告的技术稿/);
+  assert.match(body('feasibility'), /有效可研正文/);
+  assert.doesNotMatch(body('feasibility'), /有效技术正文|串入技术报告的可研稿|串入可研报告的技术稿/);
   const technical = render(task, 'technical-solution');
-  assert.match(technical, /有效技术正文/);
+  assert.match(technical, /已保存的正文内容 · 1 章/);
+  assert.match(technical, /<summary>共同标题<\/summary>/);
+  assert.doesNotMatch(technical, /有效技术正文/, 'Body paragraphs stay unmounted until the chapter is expanded.');
   assert.doesNotMatch(technical, /有效可研正文|串入技术报告的可研稿|串入可研报告的技术稿/);
   const feasibility = render(task, 'feasibility');
-  assert.match(feasibility, /有效可研正文/);
+  assert.match(feasibility, /已保存的正文内容 · 1 章/);
+  assert.match(feasibility, /<summary>共同标题<\/summary>/);
+  assert.doesNotMatch(feasibility, /有效可研正文/, 'Body paragraphs stay unmounted until the chapter is expanded.');
   assert.doesNotMatch(feasibility, /有效技术正文|串入技术报告的可研稿|串入可研报告的技术稿/);
   assert.deepEqual(task, original);
 });

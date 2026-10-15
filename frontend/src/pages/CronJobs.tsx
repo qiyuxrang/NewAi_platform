@@ -159,7 +159,7 @@ export default function CronJobs() {
       ) : (
         <div className="rounded-xl border border-dark-border bg-dark-card overflow-hidden">
           {/* Table header */}
-          <div className="grid grid-cols-[1fr_180px_140px_140px_120px] gap-2 border-b border-dark-border bg-dark-bg px-4 py-2 text-xs font-medium text-dark-text-secondary">
+          <div className="grid grid-cols-[minmax(0,1fr)_180px_140px_140px_120px] gap-2 border-b border-dark-border bg-dark-bg px-4 py-2 text-xs font-medium text-dark-text-secondary">
             <span>任务名称</span>
             <span>调度</span>
             <span>上次执行</span>
@@ -169,7 +169,7 @@ export default function CronJobs() {
 
           {jobs.map((job) => (
             <div key={job.id}>
-              <div className="grid grid-cols-[1fr_180px_140px_140px_120px] gap-2 items-center border-b border-dark-border px-4 py-3 hover:bg-dark-bg/50 transition-colors">
+              <div className="grid grid-cols-[minmax(0,1fr)_180px_140px_140px_120px] gap-2 items-center border-b border-dark-border px-4 py-3 hover:bg-dark-bg/50 transition-colors">
                 {/* Name + message */}
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">

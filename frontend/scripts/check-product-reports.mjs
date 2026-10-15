@@ -44,8 +44,16 @@ const failedEquipment = phasesFor({ ...task, checkpoint: undefined, error_code: 
 assert.match(failedEquipment.detail, /未解析出设备清单条目/)
 assert.doesNotMatch(failedEquipment.detail, /正在/)
 phases = phasesFor({ ...task, checkpoint: undefined, output_targets: { 'technical-solution': 50000 }, output_generation: { 'technical-solution': { actual_characters: 49999 } }, analysis_progress: { writing_technical: { status: 'completed' }, diagrams_technical: { status: 'failed', detail: 'render rejected' } } }, [])
-assert.equal(phases.find(item => item.id === 'writing_technical').status, 'blocked')
+const writingPhase = phases.find(item => item.id === 'writing_technical')
+assert.equal(writingPhase.status, 'completed', 'A saved writing-step status is distinct from minimum-length and delivery checks.')
+assert.equal(writingPhase.statusLabel, '正文已生成')
+assert.match(writingPhase.detail, /已保存 49,999 字；最低 50,000 字/)
+assert.match(writingPhase.detail, /篇幅待补，草稿可先下载/, 'Below-target content must remain visible even when the writing step is completed.')
 assert.equal(phases.find(item => item.id === 'diagrams_technical').status, 'failed')
+for (const status of ['failed', 'blocked']) {
+  assert.equal(phasesFor({ ...task, checkpoint: undefined, analysis_progress: { writing_technical: { status } } }, []).find(item => item.id === 'writing_technical').status, status, 'Real backend failure and blocking statuses must be preserved.')
+}
+assert.equal(phasesFor({ ...task, state: 'COMPLETED', checkpoint: undefined, output_generation: { 'technical-solution': { actual_characters: 50000 } }, analysis_progress: {} }, []).find(item => item.id === 'writing_technical').status, 'pending', 'Task completion or saved character counts cannot invent a missing writing-step status.')
 
 const apiSource = readFileSync(new URL('../src/business/product/product-api.ts', import.meta.url), 'utf8')
 const compiledApi = ts.transpileModule(apiSource, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText

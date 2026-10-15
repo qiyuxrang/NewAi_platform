@@ -5,6 +5,11 @@ RUN corepack enable && corepack prepare pnpm@11.10.0 --activate
 COPY services/business/backend/portal/product_assets/mermaid-runtime/ ./
 RUN pnpm install --frozen-lockfile && pnpm build
 
+WORKDIR /harness
+COPY services/business/harness/package.json services/business/harness/package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts --registry=https://registry.npmjs.org
+COPY services/business/harness/runner.mjs ./
+
 FROM ghcr.io/astral-sh/uv:0.11.17@sha256:03bdc89bb9798628846e60c3a9ad19006c8c3c724ccd2985a33145c039a0577b AS uv
 
 FROM python:3.13-slim-bookworm
@@ -28,6 +33,7 @@ RUN uv python install 3.12 \
 WORKDIR /app/services/business
 COPY services/business/backend/ ./backend/
 COPY services/business/model_gateway/ ./model_gateway/
+COPY --from=diagrams /harness/ ./harness/
 COPY --from=diagrams /runtime/ ./backend/portal/product_assets/mermaid-runtime/
 COPY services/engineering/ /app/services/engineering/
 COPY deploy/cloud/fonts.conf /etc/fonts/conf.d/99-enterprise-fonts.conf

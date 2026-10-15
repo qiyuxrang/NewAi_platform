@@ -6,10 +6,10 @@ from pathlib import Path
 
 
 _RULES_PATH = Path(__file__).resolve().parent / "product_assets" / "p1_rules.json"
-_RULES_SHA256 = "cca20ae57f89b54d63c701f264590c78249a9926cb66ec4ea879289fc440a8bb"
+_RULES_SHA256 = "dedd5724b92dcdec17530b0f61f16e8ba70cee3a402b1d7220166111b36fad31"
 _SCHEMA = "portal-product-p1-rules-v1"
 _STAGES = {"blueprint", "write", "review"}
-_SOURCE_IDS = {"intake", "technical-solution", "review", "plan"}
+_SOURCE_IDS = {"intake", "technical-solution", "review", "plan", "feasibility-guide", "feasibility-guide-requirements"}
 _EXCLUSION_IDS = {"short-test-length-targets", "legacy-figure-minimum", "workbuddy-runtime"}
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
@@ -57,6 +57,9 @@ def _load_rules():
             source_paths.add(source["path"])
         if source_ids != _SOURCE_IDS or type(payload["stages"]) is not dict or set(payload["stages"]) != _STAGES:
             _unavailable()
+        guide_asset = next(source for source in sources if source["id"] == "feasibility-guide-requirements")
+        if hashlib.sha256((_RULES_PATH.parent / "feasibility_guide_requirements.json").read_bytes()).hexdigest() != guide_asset["sha256"]:
+            _unavailable()
         for stage in payload["stages"].values():
             if type(stage) is not dict or set(stage) != {"source_ids", "rules"}:
                 _unavailable()
@@ -73,7 +76,7 @@ def _load_rules():
                        or not item["text"].strip() for item in exclusions)
                 or {item["id"] for item in exclusions} != _EXCLUSION_IDS):
             _unavailable()
-    except (KeyError, TypeError, ValueError, UnicodeDecodeError):
+    except (OSError, KeyError, TypeError, ValueError, UnicodeDecodeError):
         _unavailable()
     return payload, digest
 

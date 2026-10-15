@@ -5,8 +5,14 @@ import { fetchJSON } from '../lib/api'
 import { departments, departmentPath } from '../enterprise-navigation'
 import HrWorkspace from '../business/hr/HrWorkspace'
 import ProductWorkspace from '../business/product/ProductWorkspace'
+import ProductKnowledge from '../business/product/ProductKnowledge'
 import EngineeringWorkspace from '../business/engineering/EngineeringWorkspace'
 import BusinessSurface from '../business/BusinessSurface'
+import FinanceBoard from '../business/finance/FinanceBoard'
+import FinanceEntry from '../business/finance/FinanceEntry'
+import LedgerEntry from '../business/ledgers/LedgerEntry'
+import { useEntryAccess } from '../business/entry-access'
+import { useEnterprise } from '../components/enterprise-context'
 import WorkspaceBoundary from '../business/WorkspaceBoundary'
 
 interface BusinessConnection {
@@ -18,12 +24,18 @@ interface BusinessConnection {
 
 export default function DepartmentWorkspace() {
   const { department: departmentCode, feature: featureCode } = useParams()
+  const { user } = useEnterprise()
+  const entryAllowed = useEntryAccess()
+  const manager = user?.business_role === 'general_manager'
+  const finance = departmentCode === 'business' && featureCode === 'finance'
+  const entry = featureCode === 'entry'
+  const assistant = featureCode === 'knowledge'
   const department = departments.find(item => item.code === departmentCode)
   const feature = department?.functions.find(item => item.code === featureCode)
   const [connection, setConnection] = useState<BusinessConnection | null>(null)
   const [error, setError] = useState('')
   const [revision, setRevision] = useState(0)
-  const hrFeature = departmentCode === 'hr' && !!featureCode
+  const hrFeature = departmentCode === 'hr' && !!featureCode && !assistant
 
   useEffect(() => {
     let active = true
@@ -35,13 +47,13 @@ export default function DepartmentWorkspace() {
     return () => { active = false }
   }, [revision])
 
-  if (!department || (featureCode && !feature)) return <p className="text-dark-text-secondary">该工作页面不存在。</p>
+  if (!finance && (!department || (featureCode && !feature))) return <p className="text-dark-text-secondary">该工作页面不存在。</p>
 
-  return <div className={departmentCode === 'product' ? 'wb-department' : 'mx-auto max-w-6xl space-y-6'}>
-    <div hidden={departmentCode === 'product' && connection?.available}>
-      {feature && <Link to={departmentPath(department.code)} className="text-sm text-accent-blue">返回{department.label}</Link>}
-      <h1 className="mt-2 text-2xl font-bold text-dark-text">{feature?.label ?? `${department.label}工作台`}</h1>
-      <p className="mt-2 text-sm text-dark-text-secondary">{feature?.description ?? department.description}</p>
+  return <div className={departmentCode === 'product' ? 'wb-department' : assistant ? 'assistant-department' : 'mx-auto max-w-6xl space-y-6'}>
+    <div hidden={(manager || departmentCode === 'product' || entry || assistant) && connection?.available}>
+      {feature && <Link to={departmentPath(department!.code)} className="text-sm text-accent-blue">返回{department?.label}</Link>}
+      <h1 className="mt-2 text-2xl font-bold text-dark-text">{feature?.label ?? (finance ? '财务看板' : `${department?.label}工作台`)}</h1>
+      <p className="mt-2 text-sm text-dark-text-secondary">{feature?.description ?? department?.description}</p>
     </div>
     {(!connection?.available || error) && <section className="rounded-xl border border-dark-border bg-dark-card p-6">
       <h2 className="font-semibold text-dark-text">业务连接状态</h2>
@@ -56,11 +68,15 @@ export default function DepartmentWorkspace() {
     </section>}
     <WorkspaceBoundary resetKey={`${departmentCode}/${featureCode}`}>
       {connection?.available && hrFeature && <HrWorkspace feature={featureCode!} />}
+      {connection?.available && finance && <BusinessSurface><FinanceBoard /></BusinessSurface>}
+      {connection?.available && entry && departmentCode === 'finance' && <BusinessSurface><FinanceEntry /></BusinessSurface>}
+      {connection?.available && entry && departmentCode === 'engineering' && <BusinessSurface><LedgerEntry department="engineering" /></BusinessSurface>}
       {connection?.available && departmentCode === 'product' && <ProductWorkspace feature={featureCode || 'overview'} />}
-      {connection?.available && departmentCode === 'engineering' && featureCode && <BusinessSurface><EngineeringWorkspace section="estimate" /></BusinessSurface>}
+      {connection?.available && assistant && departmentCode !== 'product' && <BusinessSurface><ProductKnowledge /></BusinessSurface>}
+      {connection?.available && departmentCode === 'engineering' && featureCode && !entry && !assistant && <BusinessSurface><EngineeringWorkspace section="estimate" /></BusinessSurface>}
     </WorkspaceBoundary>
-    {!feature && departmentCode !== 'product' && <div className="grid grid-cols-2 gap-4">
-      {department.functions.map(item => <Link key={item.code} to={departmentPath(department.code, item.code)} className="rounded-xl border border-dark-border bg-dark-card p-5 hover:border-accent-blue">
+    {!finance && !feature && departmentCode !== 'product' && <div className="grid grid-cols-2 gap-4">
+      {department!.functions.filter(item => item.code !== 'entry' || entryAllowed).map(item => <Link key={item.code} to={departmentPath(department!.code, item.code)} className="rounded-xl border border-dark-border bg-dark-card p-5 hover:border-accent-blue">
         <div className="flex items-center justify-between font-semibold text-dark-text">{item.label}<ArrowRight size={16} /></div>
         <p className="mt-2 text-sm text-dark-text-secondary">{item.description}</p>
       </Link>)}

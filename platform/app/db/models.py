@@ -48,7 +48,7 @@ class User(Base):
 
     __table_args__ = (
         CheckConstraint("business_role IN ('unassigned', 'employee', 'general_manager')", name="ck_users_business_role"),
-        CheckConstraint("department_code IS NULL OR department_code IN ('product', 'hr', 'engineering')", name="ck_users_department_code"),
+        CheckConstraint("department_code IS NULL OR department_code IN ('product', 'hr', 'engineering', 'finance')", name="ck_users_department_code"),
         CheckConstraint("portal_user_id IS NULL OR portal_user_id > 0", name="ck_users_portal_user_id"),
     )
 

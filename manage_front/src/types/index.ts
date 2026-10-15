@@ -8,7 +8,7 @@ export interface TokenResponse {
 }
 
 export type BusinessRole = "unassigned" | "employee" | "general_manager";
-export type DepartmentCode = "product" | "hr" | "engineering";
+export type DepartmentCode = "product" | "hr" | "engineering" | "finance";
 
 export interface BusinessAssignment {
   business_role: BusinessRole;

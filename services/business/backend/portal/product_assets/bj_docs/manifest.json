@@ -54,9 +54,9 @@
     {
       "path": "scripts/artifacts.py",
       "source": "skills/bj-docs/scripts/artifacts.py",
-      "sha256": "b3f0e734c4da4a3bf81a15b1bddce20136e06ed01dbe87856e16471dfe5ac732",
-      "bytes": 29344,
-      "source_status": " M skills/bj-docs/scripts/artifacts.py"
+      "sha256": "9fabedc95d10fb4ae21a97fac0c26b6c0678c18bd9cc3019b03ad7e58d35757f",
+      "bytes": 30632,
+      "source_status": "user requested feasibility format adaptation 2026-10-15; technical format preserved"
     },
     {
       "path": "scripts/contract.py",
@@ -141,6 +141,13 @@
       "sha256": "9211d67a0a52e0445fb85e11c032eeec4ff6f3ad6870b8afac7a9d1a463f8a3e",
       "bytes": 14595,
       "source_status": "approved company identity asset"
+    },
+    {
+      "path": "scripts/feasibility_format.py",
+      "source": "user supplied Yulin guide section 2 and cover example, 2026-10-15",
+      "sha256": "57af9f742393e6f48eebf5d722327eb4ab61683728d2967408bfd7bd02144bdf",
+      "bytes": 17943,
+      "source_status": "user requested feasibility format adaptation 2026-10-15; technical format preserved"
     }
   ]
 }

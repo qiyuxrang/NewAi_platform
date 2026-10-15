@@ -67,7 +67,7 @@ export default function Sessions() {
   return (
     <div className="flex gap-6 h-full">
       {/* Left: session list */}
-      <div className={`flex-1 min-w-0 ${selectedKey ? 'max-w-[55%]' : ''}`}>
+      <div className="flex-1 min-w-0">
         <div className="mb-6 flex items-start justify-between">
           <div>
             <h1 className="text-2xl font-bold text-dark-text">会话历史</h1>
@@ -92,7 +92,7 @@ export default function Sessions() {
             暂无会话记录
           </div>
         ) : (
-          <div className="rounded-xl border border-dark-border bg-dark-card">
+          <div className="overflow-x-auto rounded-xl border border-dark-border bg-dark-card">
             <table className="w-full">
               <thead>
                 <tr className="text-left text-xs text-dark-text-secondary border-b border-dark-border">
@@ -157,7 +157,7 @@ export default function Sessions() {
 
       {/* Right: detail panel */}
       {selectedKey && (
-        <div className="w-[45%] min-w-[360px] flex flex-col rounded-xl border border-dark-border bg-dark-card overflow-hidden">
+        <div className="w-[45%] min-w-0 shrink-0 flex flex-col rounded-xl border border-dark-border bg-dark-card overflow-hidden">
           {/* Header */}
           <div className="px-5 py-3 border-b border-dark-border flex items-center justify-between shrink-0">
             <div className="min-w-0">

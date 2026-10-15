@@ -263,9 +263,37 @@ class ProductDocumentTests(SimpleTestCase):
         })
         self.assertNotIn("exact_page_margins_and_gutter", policy["pending_formal_template_confirmation"])
 
-    def test_both_word_families_apply_frozen_interim_format(self):
+    def test_both_word_families_apply_family_format(self):
         def paragraph_text(paragraph):
             return "".join(node.text or "" for node in paragraph.iter(self.W + "t"))
+
+        def effective_run_value(paragraph, style_map, property_name, attribute):
+            run = paragraph.find(self.W + "r")
+            if run is not None:
+                direct = run.find(f"{self.W}rPr/{self.W}{property_name}")
+                if direct is not None and direct.get(self.W + attribute) is not None:
+                    return direct.get(self.W + attribute)
+            paragraph_properties = paragraph.find(self.W + "pPr")
+            if paragraph_properties is not None:
+                direct = paragraph_properties.find(f"{self.W}rPr/{self.W}{property_name}")
+                if direct is not None and direct.get(self.W + attribute) is not None:
+                    return direct.get(self.W + attribute)
+            reference = paragraph.find(f"{self.W}pPr/{self.W}pStyle")
+            style_id = reference.get(self.W + "val") if reference is not None else None
+            visited = set()
+            while style_id and style_id not in visited:
+                visited.add(style_id)
+                style = style_map.get(style_id)
+                if style is None:
+                    break
+                run_properties = style.find(self.W + "rPr")
+                if run_properties is not None:
+                    value = run_properties.find(f"{self.W}{property_name}")
+                    if value is not None and value.get(self.W + attribute) is not None:
+                        return value.get(self.W + attribute)
+                based_on = style.find(self.W + "basedOn")
+                style_id = based_on.get(self.W + "val") if based_on is not None else None
+            return None
 
         with tempfile.TemporaryDirectory() as directory, override_settings(PRODUCT_STORAGE_ROOT=directory):
             second_chapter = SimpleNamespace(
@@ -287,6 +315,7 @@ class ProductDocumentTests(SimpleTestCase):
                 self.assertEqual(quality["output_sha256"], hashlib.sha256(target.read_bytes()).hexdigest())
                 with ZipFile(target) as archive:
                     document = ET.fromstring(archive.read("word/document.xml"))
+                    styles = ET.fromstring(archive.read("word/styles.xml"))
                     sections = list(document.iter(self.W + "sectPr"))
                     self.assertTrue(sections)
                     for section in sections:
@@ -295,37 +324,63 @@ class ProductDocumentTests(SimpleTestCase):
                         grid = section.find(self.W + "docGrid")
                         self.assertEqual((size.get(self.W + "w"), size.get(self.W + "h")),
                                          ("11906", "16838"))
-                        self.assertEqual(grid.get(self.W + "linePitch"), "360")
-                        self.assertEqual(
-                            tuple(margins.get(self.W + name) for name in ("top", "bottom", "left", "right", "gutter")),
-                            ("1440", "1440", "1440", "1440", "0"),
-                        )
+                        if family == "technical-solution":
+                            self.assertEqual(grid.get(self.W + "linePitch"), "360")
+                            self.assertEqual(
+                                tuple(margins.get(self.W + name) for name in ("top", "bottom", "left", "right", "gutter")),
+                                ("1440", "1440", "1440", "1440", "0"),
+                            )
+                        else:
+                            self.assertEqual(grid, None)
+                            self.assertEqual(
+                                tuple(margins.get(self.W + name) for name in ("top", "bottom", "left", "right")),
+                                ("1440", "1440", "1803", "1803"),
+                            )
 
                     paragraphs = list(document.iter(self.W + "p"))
+                    style_map = {style.get(self.W + "styleId"): style
+                                 for style in styles.iter(self.W + "style")}
                     body = next(item for item in paragraphs if "本合成样例仅使用2台测试设备" in paragraph_text(item))
                     body_spacing = body.find(f"{self.W}pPr/{self.W}spacing")
                     body_run = body.find(self.W + "r")
                     self.assertEqual((body_spacing.get(self.W + "line"),
-                                      body_spacing.get(self.W + "lineRule")), ("360", "exact"))
+                                      body_spacing.get(self.W + "lineRule")),
+                                     ("360", "exact" if family == "technical-solution" else "auto"))
                     self.assertEqual(body_run.find(f"{self.W}rPr/{self.W}sz").get(self.W + "val"), "24")
                     self.assertEqual(body_run.find(f"{self.W}rPr/{self.W}rFonts").get(self.W + "eastAsia"), "宋体")
+                    if family == "feasibility":
+                        body_indent = body.find(f"{self.W}pPr/{self.W}ind")
+                        self.assertEqual((body_indent.get(self.W + "firstLine"),
+                                          body_indent.get(self.W + "firstLineChars")), ("480", "200"))
 
-                    heading = next(item for item in paragraphs if paragraph_text(item) == "1 项目概述")
+                    heading = next(item for item in paragraphs if paragraph_text(item) in (
+                        "1 项目概述", "第1章 项目概述"))
                     heading_run = heading.find(self.W + "r")
-                    self.assertEqual(heading.find(f"{self.W}pPr/{self.W}jc").get(self.W + "val"), "center")
-                    self.assertIsNone(heading.find(f"{self.W}pPr/{self.W}pStyle"))
-                    self.assertEqual(heading_run.find(f"{self.W}rPr/{self.W}sz").get(self.W + "val"), "32")
-                    self.assertIsNotNone(heading_run.find(f"{self.W}rPr/{self.W}b"))
+                    if family == "technical-solution":
+                        self.assertEqual(heading.find(f"{self.W}pPr/{self.W}jc").get(self.W + "val"), "center")
+                        self.assertIsNone(heading.find(f"{self.W}pPr/{self.W}pStyle"))
+                        self.assertEqual(heading_run.find(f"{self.W}rPr/{self.W}sz").get(self.W + "val"), "32")
+                        self.assertIsNotNone(heading_run.find(f"{self.W}rPr/{self.W}b"))
+                    else:
+                        self.assertEqual(heading.find(f"{self.W}pPr/{self.W}jc").get(self.W + "val"), "center")
+                        heading_spacing = heading.find(f"{self.W}pPr/{self.W}spacing")
+                        self.assertEqual((heading_spacing.get(self.W + "before"), heading_spacing.get(self.W + "after"),
+                                          heading_spacing.get(self.W + "line"), heading_spacing.get(self.W + "lineRule")),
+                                         ("360", "360", "240", "auto"))
+                        self.assertEqual(effective_run_value(heading, style_map, "rFonts", "eastAsia"), "黑体")
+                        self.assertEqual(effective_run_value(heading, style_map, "sz", "val"), "44")
+                        self.assertEqual(effective_run_value(heading, style_map, "b", "val"), "1")
                     self.assertIsNone(heading.find(f"{self.W}pPr/{self.W}pageBreakBefore"))
                     self.assertGreaterEqual(len(document.findall(
                         f".//{self.W}br[@{self.W}type='page']")), 1)
-                    self.assertNotIn("第一章", archive.read("word/document.xml").decode())
+                    if family == "technical-solution":
+                        self.assertNotIn("第一章", archive.read("word/document.xml").decode())
 
                     headers = "".join(archive.read(name).decode("utf-8") for name in archive.namelist()
                                       if name.startswith("word/header") and name.endswith(".xml"))
                     footers = "".join(archive.read(name).decode("utf-8") for name in archive.namelist()
                                       if name.startswith("word/footer") and name.endswith(".xml"))
-                    self.assertIn("技术方案" if family == "technical-solution" else "可行性研究报告", headers)
+                    self.assertIn("技术方案" if family == "technical-solution" else "合成隔离技术方案", headers)
                     self.assertIn("PAGE", footers)
                     if family == "technical-solution":
                         self.assertFalse(any(
@@ -334,23 +389,38 @@ class ProductDocumentTests(SimpleTestCase):
                             for item in paragraphs
                         ))
 
-    def test_word_cover_contains_only_logo_and_document_topic_without_text_header(self):
+    def test_word_cover_uses_family_cover_and_report_identity_fields(self):
         with tempfile.TemporaryDirectory() as directory, override_settings(PRODUCT_STORAGE_ROOT=directory):
-            for family, expected_title in (("technical-solution", "合成隔离技术方案"),
-                                           ("feasibility", "合成隔离技术方案（可行性研究报告）")):
+            for family in ("technical-solution", "feasibility"):
                 result = render_report_draft(self.task, self.input_revision, self.blueprint, [self.chapter], family)
+                expected_image_count = len(result["render_evidence"]["diagram_generation"]["figures"])
                 with ZipFile(Path(directory) / result["path"]) as archive:
-                    document = archive.read("word/document.xml").decode("utf-8")
+                    document_xml = archive.read("word/document.xml")
+                    document = document_xml.decode("utf-8")
+                    tree = ET.fromstring(document_xml)
                     headers = "".join(archive.read(name).decode("utf-8") for name in archive.namelist()
                                       if name.startswith("word/header") and name.endswith(".xml"))
                     media = [name for name in archive.namelist() if name.startswith("word/media/")]
-                self.assertIn(expected_title, document)
-                self.assertGreaterEqual(len(media), 16 if family == "technical-solution" else 21)
+                if family == "technical-solution":
+                    self.assertIn("合成隔离技术方案", document)
+                    self.assertGreaterEqual(len(media), 16)
+                else:
+                    text = ["".join(node.text or "" for node in paragraph.iter(self.W + "t"))
+                            for paragraph in tree.iter(self.W + "p")]
+                    self.assertIn("合成隔离技术方案", text)
+                    self.assertIn("可行性研究报告", text)
+                    for field_text in (
+                        "项目建设单位：待提供", "编制单位：合成建设单位", "编制日期：",
+                        "项目建设单位联系人：待提供", "联系方式：待提供",
+                    ):
+                        self.assertTrue(any(value.startswith(field_text) for value in text), field_text)
+                    self.assertEqual(len(media), expected_image_count, "feasibility cover must not add a logo")
                 self.assertNotIn("西安工业大学毕业设计（论文）", headers)
-                self.assertIn("技术方案" if family == "technical-solution" else "可行性研究报告", headers)
+                self.assertIn("技术方案" if family == "technical-solution" else "合成隔离技术方案", headers)
                 self.assertNotIn("陕西省一二三数字信息技术有限公司", document)
-                self.assertNotIn("建设单位", document)
-                self.assertNotIn("编制单位", document)
+                if family == "technical-solution":
+                    self.assertNotIn("建设单位", document)
+                    self.assertNotIn("编制单位", document)
 
     def test_feasibility_is_separate_draft_and_uses_its_own_template(self):
         content = content_document(self.task, self.input_revision, self.blueprint, [self.chapter], family="feasibility")

@@ -294,7 +294,7 @@ class EnterpriseIdentityTests(unittest.TestCase):
 
     def test_missing_or_invalid_legacy_identity_is_unassigned(self):
         for legacy in (SimpleNamespace(role="admin"), SimpleNamespace(
-            role="user", business_role="employee", department_code="finance")):
+            role="user", business_role="employee", department_code="unknown")):
             self.assertEqual(enterprise_identity(legacy)["business_role"], "unassigned")
             self.assertEqual(enterprise_identity(legacy)["capabilities"], [])
 

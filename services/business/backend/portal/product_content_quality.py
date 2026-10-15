@@ -29,7 +29,7 @@ _DOCUMENT_COUNT = re.compile(
     r"(?P<pages>文档总页数))\s*(?:目标|设定)?\s*(?:为|是|共|[:：])?\s*[（(]?\s*"
     rf"(?P<number>{_NUM})\s*(?P<unit>份|页)(?P<document>\s*文档)?(?![\u3400-\u9fffA-Za-z0-9_-])")
 _CADENCE = re.compile(r"每(?:个)?(?P<unit>工作日|毫秒|秒|分钟|小时|天|日|周|星期|月|季度|年)")
-_GRANULARITY = re.compile(r"(?P<unit>毫秒|秒|分钟|小时|天)级")
+_GRANULARITY = re.compile(r"(?<![微纳毫])(?P<unit>毫秒|秒|分钟|小时|天)级")
 _PERCENT = re.compile(rf"百分之(?P<number>{_NUM})")
 _UUID = re.compile(r"(?<![\da-f])[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}(?![\da-f])", re.I)
 _CHAPTER_ID = re.compile(r"(?<![A-Za-z0-9_])chapter[-_][A-Za-z0-9]+(?:[-_][A-Za-z0-9]+)*(?![A-Za-z0-9_])", re.I)
@@ -222,6 +222,12 @@ def content_quality_policy_hash():
     policy = Path(__file__)
     return hashlib.sha256(b"\0".join(path.read_bytes() for path in (
         policy, policy.with_name("product_worker.py"), policy.with_name("product_documents.py"),
+        policy.parent / "product_assets" / "p1_rules.json",
+        policy.parent / "product_assets" / "bj_docs" / "manifest.json",
+        policy.with_name("product_feasibility.py"),
+        policy.with_name("product_feasibility_blocks.py"),
+        policy.parent / "product_assets" / "feasibility_guide_requirements.json",
+        policy.with_name("product_web_search.py"), policy.with_name("product_blueprint_knowledge.py"),
     ))).hexdigest()
 
 
@@ -1037,13 +1043,16 @@ def _trusted_text(value):
         return "\n".join(_trusted_text(part) for part in value)
     if not isinstance(value, Mapping):
         return ""
-    if value.get("kind") in {"public", "reference", "public_reference"} or value.get("is_public") is True:
+    if (value.get("kind") in {"public", "reference", "public_reference"} or value.get("is_public") is True
+            or value.get("fact_scope") == "PUBLIC_REFERENCE" or value.get("reference_only") is True):
         return ""
     parts = [_trusted_text(value[key]) for key in
-             ("project", "background", "conditions", "statements", "facts", "project_facts", "text", "content") if key in value]
+             ("project", "background", "conditions", "statements", "facts", "project_facts", "source_materials", "text", "content") if key in value]
     for item in value.get("items", []):
         if isinstance(item, Mapping):
             parts.append(f"{item.get('name', '')}数量：{item.get('quantity', '')}{item.get('unit', '')}")
+            if item.get("specification"):
+                parts.append(_trusted_text(f"{item.get('name', '')}规格：{item['specification']}"))
     return "\n".join(parts)
 
 
@@ -1132,6 +1141,66 @@ def _document_counts(clause):
                       _normalise(match["batch"] or ""), bool(match["pages"]), actual)
 
 
+def _electrical_specification_spans(paragraph, project_facts):
+    """Bind electrical specification tokens to one original site/equipment row."""
+    if not isinstance(project_facts, Mapping) or not _trusted_text(project_facts).strip():
+        return []
+    rows = []
+    for item in project_facts.get("items", []):
+        if isinstance(item, Mapping) and not item.get("source_edited") and item.get("source_section"):
+            specification = _trusted_text({**item, "text": item.get("specification", "")})
+            rows.append((item["source_section"], item.get("name", ""), specification))
+    for material in project_facts.get("source_materials", []):
+        section, sheet = "", ""
+        for line in _trusted_text(material).splitlines():
+            marker = re.match(r"\[工作表\s+([^·]+)·", line)
+            if marker and marker[1].strip() != sheet:
+                section, sheet = "", marker[1].strip()
+            heading = re.fullmatch(r"\s*[（(][一二三四五六七八九十\d]+[）)]\s*(\S+)\s*", line)
+            if heading:
+                section = heading[1]
+            cells = line.split("\t")
+            if section and len(cells) == 5 and cells[0].strip().isdigit():
+                rows.append((section, cells[1].strip(), cells[2].strip()))
+    token = re.compile(
+        r"(?<![A-Za-z0-9_.-])(?:[A-Za-z][A-Za-z0-9]*-)?"
+        r"\d+(?:\.\d+)?(?:/\d+(?:\.\d+)?)*\s*(?:kVA|kvar|kV|kW|Ah|A|V)(?![A-Za-z0-9])", re.I)
+    spans = []
+    for clause, offset in _clauses(paragraph):
+        for section, name, specification in rows:
+            if not name or not specification or specification.startswith(("=", "#")):
+                continue
+            for match in token.finditer(clause):
+                value = re.sub(r"\s+", "", match.group()).casefold()
+                if value not in {re.sub(r"\s+", "", found.group()).casefold() for found in token.finditer(specification)}:
+                    continue
+                before, after = clause[:match.start()], clause[match.end():]
+                locations = [(mention.start(), site) for site, _, _ in rows
+                             for mention in re.finditer(re.escape(site), before)]
+                region = re.sub(r"(?:配电室|控制分站|控制主站)$", "", section)
+                if len(region) >= 3 and not any(other != section and other.startswith(region)
+                        for other, other_name, _ in rows if other_name == name):
+                    locations.extend((mention.start(), section) for mention in re.finditer(
+                        re.escape(region) + r"(?=配置|列示|列有|的|[（(，,、\s])", before))
+                if not locations or max(locations)[1] != section:
+                    continue
+                unit = re.search(r"(?:kVA|kvar|kV|kW|Ah|A|V)$", value, re.I)[0].lower()
+                attribute = {"kva": "(?:额定|标称)?容量", "kvar": "(?:补偿)?容量", "kv": "(?:额定)?电压",
+                             "v": "(?:额定)?电压", "kw": "(?:额定)?功率", "ah": "(?:额定|标称)?容量",
+                             "a": "(?:额定)?电流"}[unit]
+                sentence = re.split(r"[。！？]", paragraph[:offset + match.start()])[-1]
+                example_object = (re.match(r"\s*以" + re.escape(name) + r"为例[，,]", sentence)
+                                  and re.match(r"设备(?:\d+台|[，,。；;]|$)", after)
+                                  and re.search(r"(?:" + re.escape(section) + "|" + re.escape(region)
+                                                + r")(?:列有|配置(?:了)?|列示)(?:" + token.pattern
+                                                + r"设备\d+台[、及和]){0,4}$", before, re.I))
+                if (re.search(re.escape(name) + r"(?:的)?(?:(?:型号|规格|" + attribute + r")(?:为|是|标注为)?)?[（(：:\s]*$", before)
+                        or re.match(r"(?:[、及和](?:\d+台)?" + token.pattern + r"){0,4}[）)\s]*(?:型|的)?" + re.escape(name), after, re.I)
+                        or example_object):
+                    spans.append((offset + match.start(), offset + match.end()))
+    return spans
+
+
 def unsupported_numeric_claims(paragraphs, *, project_facts=None, source_context=None):
     """Keep the numeric floor aligned with locally grounded/qualified parameters.
 
@@ -1154,6 +1223,7 @@ def unsupported_numeric_claims(paragraphs, *, project_facts=None, source_context
         spans.extend(match.span() for match in _LEXICAL_NUMERIC_IDENTIFIERS.finditer(paragraph))
         spans.extend((start, end) for software, version, start, end in _software_version_mentions(paragraph)
                      if (software, version) in reference_versions)
+        spans.extend(_electrical_specification_spans(paragraph, project_facts))
         spans.extend(match.span() for match in re.finditer(r"(?m)^\s*\d{1,3}[.、)）]\s+(?=\S)", paragraph))
         spans.extend(match.span() for match in re.finditer(
             r"\d{1,3}(?:个(?:评估|分析|检查)维度|种(?:校验|检查|分析)规则|项(?:检查|分析|评估)步骤)", paragraph))
@@ -1960,6 +2030,20 @@ def _chapter_contract_dangling_paragraph_issues(paragraphs: list[str]) -> list[d
     return issues
 
 
+def _chapter_contract_title_matches(body: str, suffix: str) -> bool:
+    suffix = re.sub(r"^(?:所述的?|的)", "", suffix).lstrip("《“\"'")
+    if suffix.startswith(body):
+        return True
+    parts = re.split(r"与|及|和|、", body)
+    aliases = {part for part in parts if len(part) >= 4}
+    # A shared final noun belongs to each joined component: 过程控制与仪表系统设计.
+    shared = re.search(r"(系统)(?:设计|方案)?$", parts[-1]) if len(parts) > 1 else None
+    if shared:
+        aliases.update(part + shared[1] for part in parts[:-1] if len(part) >= 4 and not part.endswith(shared[1]))
+    return any(re.match(re.escape(alias) + r"(?=$|[》”\"'，,。；;、/：:）)]|的|中|计划|接口|建立)", suffix)
+               for alias in aliases)
+
+
 def inspect_chapter_contract(
     paragraphs: Iterable[str],
     *,
@@ -1968,8 +2052,8 @@ def inspect_chapter_contract(
 ) -> list[dict[str, Any]]:
     """Return location-specific contract issues without changing input text.
 
-    Cross-chapter project references must use the approved full title directly
-    after the explicit ordinal. A bare ordinal is permitted only for the
+    Cross-chapter references require the approved title or a bounded joined
+    component of that title after the explicit ordinal. A bare ordinal is permitted only for the
     current chapter. Source-document chapter citations are exempt only when
     source wording is lexically adjacent to that citation.
     """
@@ -1999,7 +2083,7 @@ def inspect_chapter_contract(
             chapter = chapter_numbers[referenced_number]
             expected_body = str(chapter["body"] or "")
             suffix = _chapter_contract_compact(paragraph[match.end():])
-            if expected_body and suffix.startswith(expected_body):
+            if expected_body and _chapter_contract_title_matches(expected_body, suffix):
                 continue
             expected_title = str(chapter["title"])
             issues.append({

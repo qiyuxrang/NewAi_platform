@@ -27,20 +27,32 @@ SUBSECTION_TITLES = {
     "feasibility": ("评价目标与分析边界", "现状依据与关键假设", "可行性论证与风险控制", "实施条件与决策建议"),
 }
 
-DIAGRAM_PROMPT_VERSION = "report-evidence-mermaid-v2"
+DIAGRAM_PROMPT_VERSION = "report-evidence-mermaid-v3"
 DIAGRAM_INSTRUCTION = "为本批每张图生成对应本项目正文的Mermaid代码、具体标题和图说明。仅据report_blocks中的节点与关系绘图；建议主题若与本章无关，改用本章已有设计、流程或实施示例，不得套用通用平台架构或补造设备、网络、参数、审批及收益。未确认的关系须明确标为待确认。标题、图说明及所有节点、连线、分组和时序文字须保留本图所引正文中的候选、条件和待确认限定；锚点组件名称不能证明已选型、已部署或已实现等既有状态。每图引用正文块evidence_block_ids，anchor_text取自所引正文的连续原文且必须出现在图中。不同图表达不同正文机制，禁止重复图。仅用flowchart或sequenceDiagram，建议每图3至8节点，代码约1000字符以内；禁止Markdown围栏、配置指令、注释、HTML、URL、click、style、classDef和linkStyle。所有可见文字黑色由渲染器控制。仅返回schema规定的JSON。"
 MERMAID_SOURCE = re.compile(r"(?:flowchart\s+(?:TB|TD|BT|RL|LR)|graph\s+(?:TB|TD|BT|RL|LR)|sequenceDiagram|classDiagram|stateDiagram(?:-v2)?|erDiagram|gantt|journey|pie\b|mindmap\b|timeline\b)", re.I)
+DIAGRAM_LAYOUT_RESOURCE = Path(__file__).resolve().parent / "product_assets" / "diagram-layout-guidance.md"
+DIAGRAM_INSTRUCTION += "\n" + DIAGRAM_LAYOUT_RESOURCE.read_text(encoding="utf-8").split("## 来源与使用边界", 1)[0]
 
 
 def diagram_contract_hash() -> str:
     runtime = Path(__file__).resolve().parent / "product_assets" / "mermaid-runtime"
     return hashlib.sha256(DIAGRAM_PROMPT_VERSION.encode() + content_quality_policy_hash().encode()
-                          + Path(__file__).read_bytes() + (runtime / "render.mjs").read_bytes()
+                          + Path(__file__).read_bytes() + DIAGRAM_LAYOUT_RESOURCE.read_bytes() + (runtime / "render.mjs").read_bytes()
                           + (runtime / "dist" / "runtime-manifest.json").read_bytes()).hexdigest()
 
 
 def minimum_diagrams(family: str) -> int:
     return 15 if family == "technical-solution" else 20
+
+
+def heading_display_text(title: str) -> str:
+    """Remove authored outline numbering where Word supplies automatic numbering."""
+    ordinal = r"零〇一二两三四五六七八九十百千万"
+    return re.sub(
+        rf"^(?:第\s*[0-9{ordinal}]+\s*[章节篇]\s*[：:、.．]?\s*|"
+        rf"[（(]\s*[0-9{ordinal}]+\s*[）)]\s*|[{ordinal}]+[、.．：:]\s*|"
+        r"\d+(?:[.．]\d+)*(?:[.．、：:)）]\s*|\s+)(?![\d.．]))",
+        "", title.strip(), count=1)
 
 
 def add_structural_blocks(
@@ -52,6 +64,7 @@ def add_structural_blocks(
     chapter_index: int = 0,
     chapter_count: int = 1,
     chapter_title: str = "",
+    diagram_titles: list[str] | None = None,
 ) -> None:
     """Embed this chapter's mandatory diagrams without persisting Mermaid source.
 
@@ -61,14 +74,16 @@ def add_structural_blocks(
     """
     if chapter_count < 1 or not 0 <= chapter_index < chapter_count:
         raise ValueError("invalid diagram chapter allocation")
-    for index, title in enumerate(FAMILY_DIAGRAMS[family], start=1):
-        if (index - 1) % chapter_count != chapter_index:
+    offset = sum(block.get("type") == "figure" for block in blocks) if diagram_titles is not None else 0
+    for index, title in enumerate(FAMILY_DIAGRAMS[family] if diagram_titles is None else diagram_titles, start=1):
+        if diagram_titles is None and (index - 1) % chapter_count != chapter_index:
             continue
+        index += offset
         prefix = f"DIAGRAM_{index:02d}"
         title = f"{chapter_title}：{title}" if chapter_title else title
         description = "依据本章正文及所列资料绘制，未确认的关系须保留待确认标识。"
         blocks.extend([
-            {"id": prefix + "_HEADING", "type": "heading", "level": 2, "text": title,
+            {"id": prefix + "_HEADING", "type": "heading", "level": 2, "text": heading_display_text(title),
              "source_ids": sources, "requirement_ids": requirements},
             {"id": prefix + "_FIGURE", "type": "figure", "path": f"assets/diagram-{index:02d}.png",
              "caption": title, "width_mm": 145, "alt": description,
@@ -76,6 +91,21 @@ def add_structural_blocks(
             {"id": prefix + "_NOTE", "type": "paragraph", "text": description,
              "source_ids": sources, "requirement_ids": requirements},
         ])
+
+
+def diagram_evidence_blocks(blocks):
+    """Expose authored prose and native tables using their original block IDs."""
+    result = []
+    for block in blocks:
+        if block.get("type") == "paragraph" and not block["id"].startswith("DIAGRAM_"):
+            value = block["text"]
+        elif block.get("type") == "table":
+            value = "\n".join([block["caption"], " | ".join(block["columns"]),
+                               *(" | ".join(row) for row in block["rows"])])
+        else:
+            continue
+        result.append({"id": block["id"], "type": "paragraph", "text": value, "source_ids": block["source_ids"]})
+    return result
 
 
 def diagram_batches(document: dict):
@@ -87,8 +117,8 @@ def diagram_batches(document: dict):
                 for start in range(0, len(figures), 4):
                     yield figures[start:start + 4], paragraphs
             paragraphs, figures = [], []
-        elif block.get("type") == "paragraph" and not block["id"].startswith("DIAGRAM_"):
-            paragraphs.append({"id": block["id"], "text": block["text"], "source_ids": block["source_ids"]})
+        elif block.get("type") in {"paragraph", "table"}:
+            paragraphs.extend(diagram_evidence_blocks([block]))
         elif block.get("type") == "figure":
             figures.append(block)
     if figures:
@@ -263,6 +293,72 @@ def _validate_diagram_content(item: dict, evidence: dict) -> None:
         raise error
 
 
+def _diagram_structure_issues(item: dict) -> list[dict]:
+    """Catch degenerate supported diagrams before rendering; Mermaid owns syntax.
+
+    This intentionally inspects common node/edge notation rather than attempting
+    another Mermaid parser. Unknown syntax is left to the controlled renderer.
+    """
+    source = item["source"]
+    # ponytail: inspect common Mermaid notation; use its AST if more notation needs structural checks.
+    if re.match(r"\s*flowchart TB\s+EXCERPT_[0-9a-f]{16}\[", source):
+        return []  # The existing draft-only excerpt finding owns this fallback.
+    problems, nodes, edges = [], {}, []
+    if source.lstrip().startswith("sequenceDiagram"):
+        for line in source.splitlines()[1:]:
+            participant = re.match(r"\s*(?:participant|actor)\s+(\w+)(?:\s+as\s+(.+))?$", line)
+            if participant:
+                nodes[participant[1]] = participant[2] or participant[1]
+            message = re.match(r"\s*(\w+)\s*(?:--?>>?|--?[)x])\s*[+-]?(\w+)\s*:\s*(\S.*)$", line)
+            if message:
+                edges.append((message[1], message[2], message[3]))
+    else:
+        masked = list(source)
+        shapes = r'(?:\[(?:"[^"\n]*"|[^\]"\n])*\]|\((?:"[^"\n]*"|[^)"\n])*\)|\{(?:"[^"\n]*"|[^}"\n])*\})[\])}]*'
+        decisions = set()
+        for match in re.finditer(rf"(?P<id>[^\W\d]\w*)\s*(?P<shape>{shapes})", source):
+            before = source[source.rfind("\n", 0, match.start()) + 1:match.start()]
+            if re.match(r"\s*subgraph\s*$", before):
+                continue
+            shape = match["shape"]
+            nodes[match["id"]] = shape.strip(' [](){}"')
+            if shape.startswith("{") and not shape.startswith("{{"):
+                decisions.add(match["id"])
+            masked[match.start("shape"):match.end("shape")] = " " * len(shape)
+        plain = "".join(masked)
+        # Edge labels cannot masquerade as endpoints or arrow syntax.
+        edge_labels = {}
+        def hide_label(match):
+            token = f"EDGE_LABEL_{len(edge_labels)}"
+            edge_labels[token] = match[1]
+            return " " + token + " "
+        plain = re.sub(r"\|([^|\n]*)\|", hide_label, plain)
+        plain = re.sub(r"(?:--|==|-\.)\s+([^\n]+?)\s+(?:-->|==>|\.->)",
+                       lambda match: "-->" + hide_label(match), plain)
+        for match in re.finditer(r"(?=\b([^\W\d]\w*)\s*(?:-->|---|==>|-\.->|--[ox]|~~~)\s*(EDGE_LABEL_\d+)?\s*([^\W\d]\w*))", plain):
+            edges.append((match[1], match[3], edge_labels.get(match[2], "")))
+        for node in decisions:
+            if re.search(rf"\b{re.escape(node)}\s*&|\b{re.escape(node)}\s*(?:-->|==>|-\.->)[^\n]*&", plain):
+                continue  # Compound Mermaid edges are checked by the renderer.
+            outgoing = [edge for edge in edges if edge[0] == node]
+            if len({edge[1] for edge in outgoing}) < 2 or any(not edge[2].strip() for edge in outgoing):
+                problems.append("决策节点缺少两个有条件标签的去向")
+    entities = set(nodes) | {endpoint for edge in edges for endpoint in edge[:2]}
+    if len(entities) < 2 or not edges:
+        problems.append("关系图至少需要两个实体和一条关系，单节点摘录或无关系节点不能作为完整图")
+    if any(re.fullmatch(r"(?:节点|步骤|模块|组件|参与者|Node|Step|TBD|TODO)\s*[A-Z0-9一二三四五六七八九十]*", label, re.I)
+           for label in nodes.values()):
+        problems.append("图中存在没有业务含义的占位名称")
+    # Only obvious generated IDs are rejected; real English business names and
+    # implicit sequence participants remain valid.
+    if any(re.fullmatch(r"[A-Z]\d*", nodes.get(node, node)) for node in entities):
+        problems.append("实体显示为内部字母编号，须使用业务名称")
+    return [{"code": "diagram_structure_quality", "figure_id": item["figure_id"], "field": "source",
+             "paragraph_index": 0, "claim": problem,
+             "correction": "依据所引正文修正实体、关系和分支条件；无法确认时保留待确认，不补造关系或以摘录卡充数。"}
+            for problem in dict.fromkeys(problems)]
+
+
 def excerpt_diagrams(figures: list[dict], paragraphs: list[dict]) -> list[dict]:
     snippets = [(paragraph, match.group()) for paragraph in paragraphs
                 for match in re.finditer(r"[\u3400-\u9fff]{2,40}", paragraph["text"])]
@@ -280,6 +376,7 @@ def excerpt_diagrams(figures: list[dict], paragraphs: list[dict]) -> list[dict]:
 
 
 def _draft_diagram_source(source: str) -> str:
+    source = re.sub(r"(?m)^([ \t]*)Direction([ \t]+(?:TB|TD|BT|RL|LR)[ \t]*)(?=\r?$)", r"\1direction\2", source)
     # These decorations cannot add nodes, relations or interactive behavior.
     css = (r"(?:(?:fill|stroke|color):\s*#[0-9a-fA-F]{3,8}|"
            r"stroke-dasharray:\s*\d+(?:\s+\d+)*|stroke-width:\s*\d+(?:\.\d+)?px)")
@@ -359,6 +456,13 @@ def validate_diagram_batch(payload: dict, figures: list[dict], paragraphs: list[
             if not draft or not issues or any(issue["code"] == "body_source_identifier" for issue in issues):
                 raise
             findings.extend(issues)
+        structural_issues = _diagram_structure_issues(item)
+        if structural_issues:
+            if not draft:
+                error = ValueError("diagram structure quality: " + structural_issues[0]["claim"])
+                error.quality_issues = structural_issues
+                raise error
+            findings.extend(structural_issues)
         seen.add(identifier)
         sources.add(normalized)
     if seen != expected:
@@ -375,7 +479,7 @@ def apply_diagram_descriptions(document: dict, diagrams: list[dict]) -> None:
         prefix = item["figure_id"].removesuffix("_FIGURE")
         sources = list(dict.fromkeys(source for ref in item["evidence_block_ids"] for source in blocks[ref]["source_ids"]))
         figure.update(caption=item["title"], alt=item["description"], source_ids=sources)
-        blocks[prefix + "_HEADING"].update(text=item["title"], source_ids=sources)
+        blocks[prefix + "_HEADING"].update(text=heading_display_text(item["title"]), source_ids=sources)
         blocks[prefix + "_NOTE"].update(text=item["description"], source_ids=sources)
 
 
@@ -443,6 +547,21 @@ def validate_document_requirements(document: dict, *, allow_pending=False) -> di
     h2 = [block for block in blocks if block.get("type") == "heading" and block.get("level") == 2]
     required = minimum_diagrams(family)
     pending = document.get("diagram_pending", []) if allow_pending else []
+    plans = [item for item in document.get("requirements", []) if item.get("id") == "RGUIDEFIGURES"]
+    if plans:
+        from .product_feasibility import asset_hash
+        if family != "feasibility" or len(plans) != 1:
+            raise ValueError("invalid guide figure plan")
+        plan = json.loads(plans[0]["text"])
+        if (set(plan) != {"asset_sha256", "figure_ids"} or plan["asset_sha256"] != asset_hash()
+                or not isinstance(plan["figure_ids"], list)
+                or plan["figure_ids"] != [f"DIAGRAM_{index:02d}_FIGURE" for index in range(1, len(plan["figure_ids"]) + 1)]):
+            raise ValueError("invalid guide figure plan")
+        actual = {re.sub(r"_PANEL_\d+$", "", block["id"]) for block in figures}
+        actual.update(item["figure_id"] for item in pending)
+        if actual != set(plan["figure_ids"]):
+            raise ValueError("guide figures differ from approved plan")
+        required = len(plan["figure_ids"])
     if len(figures) + len(pending) < required:
         raise ValueError(f"diagram count below requirement: {len(figures)} < {required}")
     if not h1 or not h2:

@@ -24,6 +24,7 @@ from .product_service import (ProductError, append_revision, approved_blueprint,
 from .security import audit
 from .product_rules import ProductRulesError, rules_hash, stage_rules
 from .product_formal import has_repeated_filler, unsupported_financial_conclusion
+from . import product_feasibility
 
 
 _DIAGRAM_VALIDATION_REASONS = frozenset({
@@ -296,10 +297,12 @@ def _renew(task_id, fence):
 
 def _output_correction(action):
     correction = {"json_format_correction": "纠正后的输出仍须为一个完整JSON对象，逐一包含schema全部字段，空数组也不能省略；字段类型必须符合示例。source_ids必须从已批准来源中选取，不得编造。字符串中的引号、反斜杠和换行必须正确转义；不得重复键名，不得使用NaN或Infinity，不得添加JSON外说明。"}
+    if action in {"presentation_plan", "presentation_slide"}:
+        correction = {"presentation_correction": "上一轮PPT规划或SVG未通过校验。严格按schema返回完整JSON；逐字引用提供的证据，保留条件，不增添事实。SVG只使用锁定的颜色与字体，每段text显式字号和位置，按可读字号换行，不遗漏正文，禁止外链、隐藏内容及越界。纠错仍须交付本次全部页面或本页完整SVG。"}
     if action == "independent_review":
         correction["independent_review_correction"] = (
             "上一轮独立复核响应未通过严格校验。passed必须是JSON布尔值true或false，issues必须是字符串数组，"
-            "最多100项且每项不超过2000个字符。只返回恰含passed和issues两个键的完整JSON对象。"
+            "最多100项且每项不超过2000个字符。根对象严格遵循本次schema；如有guide_checks，必须逐项返回且引用本批正文原文。"
             "issues只能列出本次正文中已经存在且本次材料能够证实的具体实质问题；不得把明确合规的观察、"
             "准确引用或表述、无实质错误但仅需人工审核的内容列为issue，也不得列假设的未来问题。"
             "若上一轮混有真实问题和此类无效观察，只移除无效观察并逐项原样保留全部真实问题；"
@@ -413,7 +416,7 @@ def _model(task_id, fence, attempt_id, route, payload, *, retry_invalid_output=T
         if sum(len(text) for chapter in payload.get("chapters", []) for text in chapter.get("paragraphs", [])) > 7000:
             raise ExecutionError("request_too_large")
     try:
-        rule_text = stage_rules({"blueprint": "blueprint", "chapter": "write", "diagram": "write", "independent_review": "review"}[payload["action"]])
+        rule_text = stage_rules({"blueprint": "blueprint", "blueprint_scope": "blueprint", "chapter": "write", "diagram": "write", "independent_review": "review", "presentation_plan": "write", "presentation_slide": "write"}[payload["action"]])
         rule_version = rules_hash()
     except (ProductRulesError, KeyError):
         raise ExecutionError("product_rules_unavailable") from None
@@ -490,9 +493,16 @@ def _model(task_id, fence, attempt_id, route, payload, *, retry_invalid_output=T
     output_contract = ("\n输出根对象的键集合必须与以下schema完全相同；不得返回输入元信息、校验说明或纠正指令。"
                        "必须包含全部字段，空数组也必须返回，示例占位字符串不能作为内容：\n"
                        + json.dumps(payload["schema"], ensure_ascii=False)) if "schema" in payload else ""
+    if payload["action"] == "blueprint":
+        output_contract += "\n本次仅生成两份基础目录及条件，严格只返回schema的七个字段。指南适用性由后续分批调用完成，本次不得输出feasibility_guide或指南逐项取舍。"
+    if payload["action"] == "blueprint_scope":
+        output_contract += ("\n本次只判断guide_batch中的小节，根对象仅含sections、missing、conflicts，不能输出基础蓝图或其他批次。"
+                            "每个section_id恰好一次；reason最多160字；missing、conflicts各最多8条、每条最多200字。"
+                            "include和pending必须映射blueprint中已有的可研章节ID，不能映射技术方案章节或新造ID。"
+                            "仅确实不适用时用not_applicable，说明实际范围依据且chapter_ids为空；缺资料用pending并说明缺项。")
     if payload["action"] == "independent_review":
         output_contract += (
-            "\n独立复核根对象必须恰含passed和issues两个键。passed必须是JSON布尔值true或false，"
+            "\n独立复核根对象严格遵循本次schema，普通复核仅有passed和issues，指南逐项复核另含guide_checks。passed必须是JSON布尔值true或false，"
             "不能是字符串、数字或null；issues必须是JSON字符串数组，最多100项，每项不超过2000个字符，"
             "不能返回问题对象、对象数组或null。每项字符串完整说明位置、具体问题、依据及修正要求。"
             "未发现实质问题时返回passed=true和issues=[]；存在真实问题时返回passed=false及全部真实issues，"
@@ -632,7 +642,7 @@ def _model(task_id, fence, attempt_id, route, payload, *, retry_invalid_output=T
             # Keep reviewer semantics inside the same bounded correction path as
             # JSON and schema failures. The review caller still needs the actual
             # passed flag and issue list, so validation must not replace result.
-            _validated_reviewer(result)
+            _validated_reviewer(result, payload)
         if payload["action"] == "chapter" and "schema" in payload:
             validation_stage = "chapter_types"
             from .product_service import validate_chapter
@@ -647,6 +657,10 @@ def _model(task_id, fence, attempt_id, route, payload, *, retry_invalid_output=T
             try:
                 result = output_validator(result)
             except ProductError as error:
+                if payload["action"] in {"presentation_plan", "presentation_slide"}:
+                    # Server-owned validators supply this bounded diagnostic;
+                    # rejected model strings are never copied into instructions.
+                    structure_failure = {"reason": "presentation_contract", "detail": error.detail[:180]}
                 code = (error.code if error.code in {"condition_missing", "invalid_blueprint", "invalid_template_version"}
                         else "invalid_blueprint") if payload["action"] == "blueprint" else "invalid_model_output"
                 raise ExecutionError(code) from error
@@ -666,6 +680,8 @@ def _model(task_id, fence, attempt_id, route, payload, *, retry_invalid_output=T
             task.save(update_fields=["checkpoint", "updated_at"])
         if retry_invalid_output:
             correction = _output_correction(payload["action"])
+            if payload["action"] in {"presentation_plan", "presentation_slide"} and structure_failure:
+                correction["presentation_correction"] += " 本次检查原因：" + structure_failure.get("detail", structure_failure["reason"])
             if payload["action"] == "diagram":
                 correction["diagram_validation_correction"] += (
                     " 本批figure_id必须逐字使用且每个恰好一次：" +
@@ -825,7 +841,8 @@ def current_chapters(task, input_hash, blueprint_hash, family="technical-solutio
 def _project_facts(payload):
     return {"project": payload.get("project", ""), "background": payload.get("background", ""),
             "conditions": payload.get("conditions", []), "statements": payload.get("statements", []),
-            "items": [{key: item.get(key, "") for key in ("name", "quantity", "unit")}
+            "source_materials": payload.get("source_materials", []),
+            "items": [{key: item.get(key, "") for key in ("name", "quantity", "unit", "specification")}
                       for item in payload.get("items", []) if isinstance(item, dict)]}
 
 
@@ -931,6 +948,9 @@ def _saved_writing_context(paragraphs):
 def _countable_body(paragraph):
     from .product_documents import clean_report_paragraph
     body = clean_report_paragraph(paragraph)
+    body = "\n".join(line for line in body.splitlines() if not (
+        re.match(r"^\s*#{1,6}\s+", line) or "|" in line
+        or re.match(r"^\s*(?:附表|表|图)\s*\d+(?:[-.]\d+)*\s*\S", line)))
     normal = re.sub(r"\s+", "", body)
     return normal if (normal and not re.fullmatch(r"(?:待审核|待确认|待补充|待核对)[。；;.!！]*", normal)
                       and not has_repeated_filler([body])) else ""
@@ -1051,6 +1071,8 @@ def _generate_family(task_id, fence, attempt_id, task, input_revision, blueprint
     label = '技术方案' if family == 'technical-solution' else '可行性研究报告'
     for chapter_index, chapter in enumerate(family_chapters, 1):
         existing = chapters.get(chapter["id"])
+        guide_requirements = (product_feasibility.chapter_requirements(blueprint.payload, chapter["id"])
+                              if family == "feasibility" else [])
         actual = _chapter_character_count([existing]) if existing else 0
         previous = []
         def validate_output(result):
@@ -1091,6 +1113,14 @@ def _generate_family(task_id, fence, attempt_id, task, input_revision, blueprint
                 raise ExecutionError("invalid_model_output", quality_issues=[{
                     "code": "chapter_body_missing", "chapter_id": chapter["id"], "paragraph_index": 0,
                     "claim": checked["paragraphs"][0], "correction": "仅补充本批实质分析，不能输出内部字段、占位文字或重复句。"}])
+            if guide_requirements and not previous:
+                from .product_feasibility_blocks import authored_blocks
+                if not any(block["type"] == "heading" and block["level"] == 2 for block in
+                           authored_blocks(checked["paragraphs"], "CHECK", [], [])):
+                    raise ExecutionError("invalid_model_output", quality_issues=[{
+                        "code": "chapter_structure_missing", "chapter_id": chapter["id"], "paragraph_index": 0,
+                        "claim": checked["paragraphs"][0],
+                        "correction": "首批正文须用独立一行的##标题列出实际论证小节并紧接实质正文，后续可用###细分，不能只返回标题。"}])
             return checked
 
         if existing and (not enforce_length or actual >= chapter_minimum):
@@ -1104,14 +1134,17 @@ def _generate_family(task_id, fence, attempt_id, task, input_revision, blueprint
             payload = _writing_model(task_id, fence, attempt_id, settings.PRODUCT_WRITING_ROUTE, {
                 "action": "chapter", "family": family,
                 "deliverable": label,
+                **({"feasibility_requirements": guide_requirements,
+                    "feasibility_instruction": "逐项落实本章已批准适用小节的内容要素、编制要求、表图和测算，分批续写时优先补尚未展开的要求。source_text仅是指南资料，样例参数不是项目事实。public_research和project_inputs用于补证与缺项处理，不照抄为内部核对清单。适用但证据不足时写清具体缺项、获取方法和论证限制；明确不适用的细项不得套造。小节使用独立一行的##或###标题。每张适用表格先写独立一行的表号和标题，再写完整Markdown管道表（各列分隔行至少三个连字符），整表放在同一个paragraphs元素内，至少一行数据，单元格中的竖线转义为\\|。未知单元格写待确认，保留对象、单位及依据；表格不计入正文字数。图形在正文说明节点、关系、边界和绘图依据，后续图形流程负责生成图片。"}
+                   if guide_requirements else {}),
                 "content_focus": ("说明项目需求与调研依据、技术路线比较、系统架构、接口和设备选型依据、实施部署、联调测试、运维及验收方法。逐项解释选择理由、约束和可验证结果。"
                                   if family == "technical-solution" else
-                                  "围绕项目背景调研和建设必要性，详细分析需求规模、建设条件、技术可行性、组织实施、运营、资源与环境、风险、投资估算依据与效益评价。缺少报价或测算数据时提供方法、变量和证据缺口，不虚构数值或肯定投资结论。"),
+                                  "按系统规则中《榆林市市级政务信息化项目实施方案编制指南（建设类）》（2024年3月）的适用内容，结合项目真实建设范围深入论证；严格服从已批准的本章和来源，不新增已裁剪目录。内容适用但资料不足时保留并标注待确认，不得据此判为不适用或删除；金额、收益和法规要求须有可靠来源或项目资料依据，不得杜撰。"),
                 "approved_blueprint": {"purpose": blueprint.payload["purpose"], "audience": blueprint.payload["audience"],
                                        "conditions": blueprint.payload["conditions"], "chapter": chapter,
                                        "chapters": [{"id": item["id"], "title": item["title"]}
                                                     for item in family_chapters]},
-                "input": model_input(task, input_revision.payload, chapter["source_ids"]), "chapter": chapter,
+                "input": model_input(task, input_revision.payload, chapter["source_ids"], chapter=chapter), "chapter": chapter,
                 "continuation": {"append_only": bool(previous), "saved_characters": actual,
                                   **_saved_writing_context(previous),
                                  "part": part_index + 1},
@@ -1182,9 +1215,20 @@ def _source_items(task, payload):
     return enrich_item_context(payload.get("items", []), parsed)
 
 
-def model_input(task, payload, source_ids=None):
+def model_input(task, payload, source_ids=None, *, chapter=None):
     context = {key: payload.get(key, [] if key == "conditions" else "") for key in ("project", "requirements", "conditions")}
     allowed = set(source_ids) if source_ids is not None else None
+    if chapter is not None:
+        chapter_allowed = set(chapter.get("source_ids", []))
+        allowed = chapter_allowed if allowed is None else allowed & chapter_allowed
+    selections = []
+    def material_text(text, source_id, representation):
+        if chapter is None:
+            return text
+        from .product_chapter_materials import chapter_material
+        excerpt, selection = chapter_material(text, chapter)
+        selections.append({"source_id": source_id, "representation": representation, **selection})
+        return excerpt
     context["items"] = [item for item in _source_items(task, payload) if allowed is None or _item_in_sources(item, allowed)]
     for key in ("sources", "knowledge_sources"):
         context[key] = [source for source in payload.get(key, []) if allowed is None or str(source.get("id")) in allowed]
@@ -1193,12 +1237,32 @@ def model_input(task, payload, source_ids=None):
     if allowed is None:
         context["background"] = payload.get("background", "")
     elif task.sources.exists():
-        context["background"] = "\n".join(source.parsed.get("background", "") for source in task.sources.filter(media_type="text/plain") if str(source.pk) in allowed)
+        context["background"] = "\n".join(
+            (f"[资料 {source.pk}]\n" if chapter is not None else "")
+            + material_text(source.parsed.get("background", ""), str(source.pk), "legacy_background")
+            for source in task.sources.filter(media_type="text/plain") if str(source.pk) in allowed)
     else:
-        context["background"] = payload.get("background", "")
+        background_sources = [source for source in payload.get("sources", []) if source.get("purpose") == "background"]
+        # An aggregated legacy snapshot cannot be separated safely without its sources.
+        authorized_background = chapter is None or (bool(background_sources)
+            and all(str(source.get("id")) in allowed for source in background_sources))
+        context["background"] = (material_text(payload.get("background", ""), None, "input_background")
+                                  if authorized_background else "")
+        if not authorized_background:
+            selections.append({"source_id": None, "representation": "input_background", "mode": "unavailable",
+                               "reason": "legacy_aggregate_cannot_separate_authorized_sources"})
     selected_materials = [item for item in materials if allowed is None or item["source_id"] in allowed]
     if selected_materials:
-        context["background"] += "\n\n" + "\n\n".join(f"[资料 {item['source_id']} · {item['status']} · {item['extraction_hash']}]\n{item['text']}" for item in selected_materials)
+        context["background"] += "\n\n" + "\n\n".join(
+            f"[资料 {item['source_id']} · {item['status']} · {item['extraction_hash']}]\n"
+            + material_text(item["text"], item["source_id"], "source_material") for item in selected_materials)
+    if chapter is not None:
+        context["knowledge_sources"] = [{**source, "text": material_text(source.get("text", ""), source.get("id"), "knowledge_source")}
+                                        for source in context["knowledge_sources"]]
+        context["material_selection"] = {
+            "instruction": "资料按本章完整标题或范围分句在本地匹配；excerpt是节选而非全文。省略内容不能作为不存在事实的证据，不得推断缺失参数或肯定结论。限定、否定、相邻段落及整表保留；无法可靠匹配时保留该授权全文。哈希仍指向保存的原全文。",
+            "range_unit": "原资料Unicode字符偏移，起点含、终点不含", "sources": selections,
+        }
     context["issues"] = payload.get("issues", []) if allowed is None else []
     return context
 
@@ -1555,11 +1619,17 @@ def _review_batch_payloads(payload, chapters):
     return batches
 
 
-def _validated_reviewer(reviewer):
-    if (set(reviewer) != {"passed", "issues"} or type(reviewer["passed"]) is not bool
+def _validated_reviewer(reviewer, request=None):
+    guide = bool(request and request.get("review_contract", {}).get("guide_audit_only"))
+    if (set(reviewer) != ({"passed", "issues", "guide_checks"} if guide else {"passed", "issues"}) or type(reviewer["passed"]) is not bool
             or not isinstance(reviewer["issues"], list) or len(reviewer["issues"]) > 100
             or any(not isinstance(issue, str) or len(issue) > 2000 for issue in reviewer["issues"])):
         raise ExecutionError("invalid_model_output")
+    if guide:
+        try:
+            product_feasibility.validate_guide_review(reviewer, request)
+        except ProductError as error:
+            raise ExecutionError("invalid_model_output") from error
     # A reviewer issue must name a defect. Reject a self-clearing compliance
     # observation so the shared one-shot correction can repair the response;
     # never filter issues here because doing so could hide a real defect.
@@ -1622,19 +1692,38 @@ def _review_fragments(request):
             for chapter in request["chapters"] if "fragment" in chapter]
 
 
+def _batch_reviewer(record, request):
+    return {"passed": record["reviewer_passed"], "issues": list(record["issues"]),
+            **({"guide_checks": record["guide_checks"]}
+               if request.get("review_contract", {}).get("guide_audit_only") else {})}
+
+
+def _planned_review_requests(task, input_revision, blueprint, chapters, family, *, guide_only=False):
+    payload, scope = _review_payload(task, input_revision, blueprint, chapters, family)
+    requests = [] if guide_only else ([payload] if scope == "full" else _review_batch_payloads(payload, chapters))
+    if family == "feasibility" and blueprint.payload.get("feasibility_guide"):
+        requests.extend(product_feasibility.review_requests(payload, blueprint.payload, chapters, _review_request_size))
+        scope = "guide_batched" if guide_only else "full_batched"
+    else:
+        scope = "full" if scope == "full" else "full_batched"
+    return requests, scope
+
+
 def _valid_cached_review_batch(record, index, request, binding, calls):
     fields = {"batch", "request_sha256", "passed", "reviewer_passed", "model_call_input_sha256", "model_call_attempt_id",
               "model_call", "response_sha256", "issues", "fragments"}
+    if request.get("review_contract", {}).get("guide_audit_only"):
+        fields.add("guide_checks")
     if not isinstance(record, dict) or set(record) != fields or type(record["batch"]) is not int or record["batch"] != index:
         return False
     try:
-        reviewer = {"passed": record["reviewer_passed"], "issues": record["issues"]}
-        passed = _validated_reviewer(reviewer)
+        reviewer = _batch_reviewer(record, request)
+        passed = _validated_reviewer(reviewer, request)
         if (type(record["passed"]) is not bool or record["passed"] != passed
                 or record["request_sha256"] != digest(request) or record["fragments"] != _review_fragments(request)
                 or record["response_sha256"] != digest(reviewer)):
             return False
-    except (ExecutionError, TypeError, KeyError):
+    except (ExecutionError, ProductError, TypeError, KeyError):
         return False
     return any(call.get("attempt_id") == record["model_call_attempt_id"]
                and type(record["model_call"]) is int and call.get("call") == record["model_call"]
@@ -1704,36 +1793,41 @@ def _review_checkpoint(task_id, fence, family, binding, requests, record=None):
     return valid
 
 
-def _review_family(task_id, fence, attempt_id, task, input_revision, blueprint, chapters, family=""):
+def _review_family(task_id, fence, attempt_id, task, input_revision, blueprint, chapters, family="", *, guide_only=False):
     family = family or "technical-solution"
     phase = 'review_feasibility' if family == 'feasibility' else 'review_technical'
     label = '可行性研究报告' if family == 'feasibility' else '技术方案'
     _analysis_progress(task_id, fence, phase, 'running', detail=f'正在独立复核{label}的事实、数量与来源')
-    payload, scope = _review_payload(task, input_revision, blueprint, chapters, family)
-    requests = [payload] if scope == "full" else _review_batch_payloads(payload, chapters)
-    scope = "full" if scope == "full" else "full_batched"
+    requests, scope = _planned_review_requests(task, input_revision, blueprint, chapters, family, guide_only=guide_only)
     binding = _review_binding(task, input_revision, blueprint, chapters, requests)
     reusable = _review_checkpoint(task_id, fence, family, binding, requests)
     issues, batches, passed = [], [], True
     covered_characters = 0
+    guide_requests, guide_responses = [], []
     for index, request in enumerate(requests, 1):
         if index in reusable:
             batch = reusable[index]
-            reviewer = {"passed": batch["reviewer_passed"], "issues": list(batch["issues"])}
+            reviewer = _batch_reviewer(batch, request)
             # Even a zero-call recovery rechecks current permissions and fencing.
             _review_checkpoint(task_id, fence, family, binding, requests)
         else:
             reviewer = _model(task_id, fence, attempt_id, settings.PRODUCT_REVIEW_ROUTE, request)
             latest_call = DocumentTask.objects.get(pk=task_id).checkpoint["calls"][-1]
-            batch = {"batch": index, "request_sha256": digest(request), "passed": _validated_reviewer(reviewer),
+            batch = {"batch": index, "request_sha256": digest(request), "passed": _validated_reviewer(reviewer, request),
                      "reviewer_passed": reviewer["passed"], "model_call_input_sha256": latest_call["input_hash"],
                      "model_call_attempt_id": latest_call["attempt_id"], "model_call": latest_call["call"],
-                     "response_sha256": digest(reviewer), "issues": list(reviewer["issues"]), "fragments": _review_fragments(request)}
+                     "response_sha256": digest(reviewer), "issues": list(reviewer["issues"]), "fragments": _review_fragments(request),
+                     **({"guide_checks": reviewer["guide_checks"]} if "guide_checks" in reviewer else {})}
             _review_checkpoint(task_id, fence, family, binding, requests, batch)
-        batch_passed = _validated_reviewer(reviewer)
-        passed = passed and batch_passed
+        batch_passed = _validated_reviewer(reviewer, request)
+        guide_audit = request.get("review_contract", {}).get("guide_audit_only")
+        if guide_audit:
+            guide_requests.append(request)
+            guide_responses.append(reviewer)
+        else:
+            passed = passed and batch_passed
         issues.extend(issue for issue in reviewer["issues"] if issue not in issues)
-        for chapter in request["chapters"]:
+        for chapter in ([] if guide_audit else request["chapters"]):
             for paragraph in chapter.get("paragraphs", []):
                 covered_characters += len(paragraph)
         batches.append(batch)
@@ -1741,15 +1835,21 @@ def _review_family(task_id, fence, attempt_id, task, input_revision, blueprint, 
                            detail=f'{label}全文复核已完成 {index}/{len(requests)} 批',
                            completed_count=index, total_count=len(requests), review_scope=scope,
                            issue_count=len(issues), issues_preview=issues[:10])
-    expected_characters = sum(len(paragraph) for chapter in chapters for paragraph in chapter.payload.get("paragraphs", []))
+    expected_characters = (0 if guide_only else
+                           sum(len(paragraph) for chapter in chapters for paragraph in chapter.payload.get("paragraphs", [])))
     if covered_characters != expected_characters:
         raise ExecutionError("invalid_model_output")
-    status = "passed" if passed else "issues_found"
+    guide_coverage = product_feasibility.reduce_guide_reviews(guide_requests, guide_responses) if guide_requests else None
+    if guide_coverage is not None:
+        passed = passed and guide_coverage["passed"]
+        issues.extend(issue for issue in guide_coverage["issues"] if issue not in issues)
+    status = "passed" if passed and not issues else "issues_found"
     _analysis_progress(task_id, fence, phase, 'completed',
                        detail=f'{label}复核结束，发现 {len(issues)} 项问题' + ('；仍需人工全文核对' if scope != 'full' else ''),
                        issue_count=len(issues), completed_count=len(requests), total_count=len(requests), review_scope=scope)
     return {"status": status, "issues": issues, "scope": scope,
             "full_document_human_review_required": scope != "full",
+            **({"guide_coverage": guide_coverage} if guide_coverage is not None else {}),
             "coverage": {"complete": True, "body_characters": _chapter_character_count(chapters),
                          "raw_characters": covered_characters, "batch_count": len(requests),
                          "all_batches_passed": passed,
@@ -1768,6 +1868,31 @@ def _draft_review_binding(input_revision, blueprint, chapters):
             "body_sha256": digest([{"chapter_id": chapter.payload["chapter_id"],
                                     "paragraphs": chapter.payload["paragraphs"]} for chapter in chapters]),
             "quality_policy_sha256": content_quality_policy_hash()}
+
+
+def _guide_review_current(task, model, input_revision, blueprint, chapters):
+    if not isinstance(model, dict):
+        return False
+    try:
+        requests, scope = _planned_review_requests(task, input_revision, blueprint, chapters, "feasibility", guide_only=True)
+        binding = _review_binding(task, input_revision, blueprint, chapters, requests)
+        batches = model.get("coverage", {}).get("batches", [])
+        calls = DocumentTask.objects.get(pk=task.pk).checkpoint.get("calls", [])
+        if (model.get("scope") != scope or model.get("coverage", {}).get("review_binding") != binding
+                or len(batches) != len(requests) or not requests
+                or not all(_valid_cached_review_batch(batch, index, request, binding, calls)
+                           for index, (batch, request) in enumerate(zip(batches, requests), 1))):
+            return False
+        result = product_feasibility.reduce_guide_reviews(requests, [_batch_reviewer(batch, request)
+                                                            for batch, request in zip(batches, requests)])
+        issues = list(dict.fromkeys([*(issue for batch in batches for issue in batch["issues"]), *result["issues"]]))
+        return (model.get("guide_coverage") == result
+                and model.get("coverage", {}).get("complete") is True
+                and model.get("coverage", {}).get("all_batches_passed") is result["passed"]
+                and model.get("issues") == issues
+                and model.get("status") == ("passed" if result["passed"] and not issues else "issues_found"))
+    except (ProductError, ProductRulesError, ExecutionError, KeyError, TypeError, ValueError):
+        return False
 
 
 def _content_review_current(task, review, input_revision, blueprint, chapters):
@@ -1797,7 +1922,9 @@ def _content_review_current(task, review, input_revision, blueprint, chapters):
             and checked.get("quality_policy_sha256") == content_quality_policy_hash()
             and checked.get("program_checks_complete") is True and checked.get("passed") is False
             and checked.get("full_document_human_review_required") is True
-            and model == {"status": "not_run", "scope": "program_only", "full_document_human_review_required": True})
+            and model == {"status": "not_run", "scope": "program_only", "full_document_human_review_required": True}
+            and (review.family != "feasibility" or not blueprint.payload.get("feasibility_guide")
+                 or _guide_review_current(task, checked.get("guide_review"), input_revision, blueprint, chapters)))
     coverage = model.get("coverage", {})
     if not isinstance(coverage, dict):
         return False
@@ -1819,9 +1946,7 @@ def _content_review_current(task, review, input_revision, blueprint, chapters):
     if not isinstance(batches, list) or not batches or coverage.get("batch_count") != len(batches):
         return False
     try:
-        payload, scope = _review_payload(task, input_revision, blueprint, chapters, review.family)
-        requests = [payload] if scope == "full" else _review_batch_payloads(payload, chapters)
-        scope = "full" if scope == "full" else "full_batched"
+        requests, scope = _planned_review_requests(task, input_revision, blueprint, chapters, review.family)
         binding = _review_binding(task, input_revision, blueprint, chapters, requests)
     except (ExecutionError, ProductError, ProductRulesError, TypeError, KeyError, ValueError):
         return False
@@ -1832,10 +1957,23 @@ def _content_review_current(task, review, input_revision, blueprint, chapters):
     if not isinstance(calls, list) or not all(_valid_cached_review_batch(batch, index, request, binding, calls)
             for index, (batch, request) in enumerate(zip(batches, requests), 1)):
         return False
-    passed = all(batch["passed"] for batch in batches)
+    passed = all(batch["passed"] for batch, request in zip(batches, requests)
+                 if not request.get("review_contract", {}).get("guide_audit_only"))
     issues = list(dict.fromkeys(issue for batch in batches for issue in batch["issues"]))
+    guide_pairs = [(request, _batch_reviewer(batch, request)) for batch, request in zip(batches, requests)
+                   if request.get("review_contract", {}).get("guide_audit_only")]
+    if guide_pairs:
+        try:
+            result = product_feasibility.reduce_guide_reviews(
+                [request for request, _ in guide_pairs], [response for _, response in guide_pairs])
+        except (ProductError, KeyError, TypeError, ValueError):
+            return False
+        if model.get("guide_coverage") != result:
+            return False
+        passed = passed and result["passed"]
+        issues.extend(issue for issue in result["issues"] if issue not in issues)
     return (coverage.get("all_batches_passed") is passed and model.get("issues") == issues
-            and model.get("status") == ("passed" if passed else "issues_found"))
+            and model.get("status") == ("passed" if passed and not issues else "issues_found"))
 
 
 def _ensure_content_review(task, fence, attempt_id, input_revision, blueprint, chapters, family="technical-solution"):
@@ -1845,6 +1983,9 @@ def _ensure_content_review(task, fence, attempt_id, input_revision, blueprint, c
     # Re-run the current program policy even when a complete model review exists.
     checked = content_checks(input_revision.payload, blueprint.payload, chapters,
                              items=_source_items(task, input_revision.payload))
+    if family == "feasibility" and not blueprint.payload.get("feasibility_guide"):
+        checked["issues"].append({"code": "feasibility_guide_plan_missing",
+            "text": "当前蓝图尚未逐项确认可研指南的适用范围，请重新生成并确认蓝图后核对各章要求。"})
     draft = task.pending_action in {"generate_outputs", "three_drafts"}
     preview_pending = (blueprint_knowledge_status(input_revision.payload)["mode"] == PREVIEW
                        and bool(blueprint.payload.get("missing")) and not blueprint.payload.get("conflicts"))
@@ -1881,6 +2022,17 @@ def _ensure_content_review(task, fence, attempt_id, input_revision, blueprint, c
             model_review={"status": "not_run", "scope": "program_only", "full_document_human_review_required": True})
         review = task.revisions.filter(kind="review", family=family).order_by("-version").first()
         current = _content_review_current(task, review, input_revision, blueprint, chapters)
+        if family == "feasibility" and blueprint.payload.get("feasibility_guide"):
+            checked["guide_review"] = (review.payload["guide_review"] if current else
+                _review_family(task.pk, fence, attempt_id, task, input_revision, blueprint, chapters,
+                               family, guide_only=True))
+            guide = checked["guide_review"]["guide_coverage"]
+            checked["issues"].extend({"code": "feasibility_requirement_gap", "text": issue}
+                                     for issue in guide["issues"])
+            checked["issues"].extend({"code": "feasibility_requirement_pending",
+                "text": f"指南要求 {requirement_id} 尚待补充或完整核对。"} for requirement_id in guide.get("pending", []))
+            checked["draft_quality"].update(quality_issue_count=len(checked["issues"]),
+                quality_issue_codes=sorted({issue["code"] for issue in checked["issues"]}))
         if current and review.payload.get("diagram_review"):
             checked["diagram_review"] = review.payload["diagram_review"]
         if not current or checked != review.payload:
@@ -1931,6 +2083,8 @@ def _generate_diagrams(task_id, fence, attempt_id, document, *, draft=False):
         for figure in figures:
             subset = {"family": document["family"], "metadata": document["metadata"],
                       "blocks": [{**paragraph, "type": "paragraph"} for paragraph in paragraphs] + [figure]}
+            if document.get("diagram_render_feedback"):
+                subset["diagram_render_feedback"] = document["diagram_render_feedback"]
             binding = {"document": subset, "draft": draft, "contract": _diagram_contract_hash(),
                        "input_hash": input_revision.sha256 if input_revision else None,
                        "blueprint_hash": blueprint.sha256 if blueprint else None,
@@ -1985,13 +2139,20 @@ def _generate_diagrams_uncached(task_id, fence, attempt_id, document, *, draft=F
                                       "source": "Mermaid代码", "evidence_block_ids": ["report_blocks.id"], "anchor_text": "正文原文短语"}
                                      for figure in figures]},
         }
+        if document.get("diagram_render_feedback"):
+            request["render_feedback"] = document["diagram_render_feedback"]
+            request["instruction"] += (" 原图已在真实渲染中失败，按render_feedback重画同一机制。"
+                "仅用3至6个必要节点，每个标签尽量不超过14字，减少横向并列分支，避免嵌套分组；"
+                "参数型号不可拆写，细节放图说明；保留同一证据、条件限定与真实关系，不得改成单节点摘录卡。"
+                "优先在单页完整呈现，最多两个阅读单元；跨单元分支必须保留可追溯的来源标识。"
+                "画面须能在145毫米宽、190毫米高的纸面保持至少10.5磅文字。")
         try:
             diagrams.extend(_model(task_id, fence, attempt_id, settings.PRODUCT_WRITING_ROUTE, request,
                                    output_validator=validate))
         except ExecutionError as error:
             if error.code != "invalid_model_output":
                 raise
-            if (draft and error.diagram_validation_reason not in {
+            if (draft and not document.get("diagram_render_feedback") and error.diagram_validation_reason not in {
                     "diagram evidence outside authored chapter", "diagram identifiers differ from planned figures"}
                     and not any(issue["code"] == "body_source_identifier" for issue in error.quality_issues)):
                 with transaction.atomic():
@@ -2008,7 +2169,7 @@ def _generate_diagrams_uncached(task_id, fence, attempt_id, document, *, draft=F
     return diagrams
 
 
-def _diagram_progress(task_id, fence, family, status, *, figure_count, pending_count=0):
+def _diagram_progress(task_id, fence, family, status, *, figure_count, pending_count=0, required_count=None):
     phase = "diagrams_feasibility" if family == "feasibility" else "diagrams_technical"
     label = "可行性研究报告" if family == "feasibility" else "技术方案"
     details = {"running": f"正在依据{label}正文生成并渲染Mermaid图表", "completed": f"{label}的{figure_count}张Mermaid图已实际渲染",
@@ -2021,7 +2182,8 @@ def _diagram_progress(task_id, fence, family, status, *, figure_count, pending_c
             task = _guard(task_id, fence)
             progress = dict(task.checkpoint.get("output_generation", {}))
             progress[family] = {**progress.get(family, {}), "diagram_count": figure_count,
-                                "pending_diagram_count": pending_count, "minimum_diagrams": minimum_diagrams(family)}
+                                "pending_diagram_count": pending_count,
+                                "minimum_diagrams": minimum_diagrams(family) if required_count is None else required_count}
             task.checkpoint = {**task.checkpoint, "output_generation": progress}
             task.save(update_fields=["checkpoint", "updated_at"])
         phase = "render_feasibility" if family == "feasibility" else "render_technical"
@@ -2118,6 +2280,8 @@ def _execute_claim_action(task_id, fence, attempt_id):
         if task.pending_action == "blueprint":
             from .product_service import validate_blueprint
             from .product_blueprint_knowledge import require_blueprint_knowledge
+            from . import product_blueprint_batches
+            from .product_steps import run_step
 
             knowledge = require_blueprint_knowledge(input_revision.payload)
             context = _analyze_blueprint_input(task_id, fence, task, input_revision)
@@ -2137,13 +2301,34 @@ def _execute_claim_action(task_id, fence, attempt_id):
                     raise ProductError("invalid_blueprint", "蓝图来源超出当前授权资料范围。")
                 return checked
 
-            payload = _model(task_id, fence, attempt_id, settings.PRODUCT_BLUEPRINT_ROUTE,
+            route = settings.PRODUCT_BLUEPRINT_ROUTE
+            binding = {"input_hash": input_revision.sha256, "rules": rules_hash(),
+                       "route": _review_route_hash(route),
+                       "implementation": digest([Path(__file__).read_text(encoding="utf-8"),
+                           Path(product_blueprint_batches.__file__).read_text(encoding="utf-8"),
+                           Path(product_feasibility.__file__).read_text(encoding="utf-8")])}
+            scope_step_hashes = []
+
+            def plan_step(key, request, validator):
+                def valid_cache(result):
+                    try:
+                        return bool(validator(result))
+                    except (ProductError, TypeError, KeyError, ValueError):
+                        return False
+                step_binding = {**binding, "request": request}
+                if request["action"] == "blueprint_scope":
+                    scope_step_hashes.append(digest(step_binding))
+                return run_step(task_id, fence, key, step_binding,
+                    lambda: _model(task_id, fence, attempt_id, route, request, output_validator=validator),
+                    validate=valid_cache)
+
+            base = plan_step("blueprint:base",
                              {"action": "blueprint", "input": context, **feedback,
-                              "response_instruction": "仅生成蓝图，不生成报告正文。只返回schema定义的七个顶层字段，不增加blueprint、input或schema包装。input.conditions中的每个原始条件必须逐字出现在conditions[].text中，不能删除、改写、概括或合并；需要说明时另加条件，不得替换原始条件，预算和工期等未确认事项仍须保持未确认。条件type仅使用program/model/human。source_ids必须逐章选取足以支持本章的实际来源ID，不得将allowed_source_ids整体复制到每章，也不得输出示例占位值。",
+                              "response_instruction": "仅生成两份基础蓝图，不生成报告正文或指南逐项取舍；指南映射将在基础目录保存后分批完成。只返回schema定义的七个顶层字段，不增加包装。scope使用自然语言说明适用内容。input.conditions中的每个原始条件必须逐字出现在conditions[].text中，不能删除、改写、概括或合并；需要说明时另加条件，不得替换原始条件，预算和工期等未确认事项仍须保持未确认。条件type仅使用program/model/human。source_ids必须逐章选取足以支持本章的实际来源ID，不得将allowed_source_ids整体复制到每章，也不得输出示例占位值。",
                               "blueprint_structure": {
-                                  "instruction": "同一次生成并同时展示两份独立蓝图。chapters中每章必须标注family，ID全局唯一；两类目录和scope必须按用途分别设计，不能换标题复制同一目录。共同事实来源可以复用，一次确认整个蓝图版本。以下为规划维度，应按项目相关性组织，不机械照抄。",
+                                  "instruction": "同一次生成并同时展示两份独立蓝图。chapters中每章必须标注family，ID全局唯一；两类目录和scope必须按用途分别设计，不能换标题复制同一目录。共同事实来源可以复用，一次确认整个蓝图版本。可研按系统规则中指南顺序并结合项目实际建设范围选用或裁剪；以下12章是全范围候选，不要求每个项目齐全，不得扩大范围。纯基建且明确无信息化建设范围的项目不安排应用系统、数据资源共享、等级保护测评等信息化专属类别；混合项目按实际子项判断，不能整体跳过实际涉及的信息化内容。只有确不适用时才省略；适用但资料不足的内容应保留并标注待确认，不得因此删除。省略章节后标题连续编号。",
                                   "technical-solution": ["需求与现场调研", "技术路线比较与选型理由", "总体架构与系统边界", "分系统设计与接口", "设备配置及容量论证", "实施部署与联调", "测试验收", "运维与技术风险"],
-                                  "feasibility": ["项目背景与调研依据", "建设必要性", "需求与规模论证", "建设条件与约束", "技术可行性与方案比较", "组织实施与进度", "运营与保障", "投资估算方法与依据", "效益与财务评价边界", "资源环境与节能", "风险与敏感性分析", "研究结论与实施建议"]},
+                                  "feasibility": ["项目概述", "项目建设单位概况", "现状分析", "需求分析", "建设方案", "数据资源共享方案", "网络安全建设方案", "建设内容清单", "项目招标方案", "项目管理", "投资概算和资金来源", "项目可行性分析"]},
                               "output_requirements": {"technical_minimum_characters": _family_target("technical-solution"),
                                                       "feasibility_minimum_characters": _family_target("feasibility"),
                                                       "instruction": "按正式长文规模规划章节，逐章具体列明主要内容、设计分析和实施校验要点。在各自报告内分配全文字数下限；不得为篇幅扩张项目范围或编造资料。"},
@@ -2153,7 +2338,40 @@ def _execute_claim_action(task_id, fence, attempt_id):
                                                        "source_ids": ["source-id-from-allowed_source_ids"]}],
                                          "conditions": [{"text": "string", "type": "program/model/human"}],
                                          "missing": [], "conflicts": [], "template_version": "frozen-original-v1"}},
-                             output_validator=validate_output)
+                             validate_output)
+            catalog = product_feasibility.catalog()
+            batches = product_blueprint_batches.scope_batches(catalog)
+            scope_context = {key: value for key, value in context.items() if key != "knowledge_sources"}
+            results = []
+            for index, batch in enumerate(batches):
+                _analysis_progress(task_id, fence, "blueprint", "running",
+                    detail=f"基础目录已保存，指南适用范围已完成{index}/{len(batches)}批")
+                result = plan_step(f"blueprint:scope:{index + 1}",
+                    {"action": "blueprint_scope", "input": scope_context, "blueprint": base,
+                     "guide_batch": batch,
+                     "chapter_sections": [section for other in batches
+                         if (other["kind"], other["chapter_id"]) == (batch["kind"], batch["chapter_id"])
+                         for section in other["sections"]],
+                     "previous_decisions": [entry for other, result in zip(batches, results)
+                         if (other["kind"], other["chapter_id"]) == (batch["kind"], batch["chapter_id"])
+                         for entry in result["sections"]],
+                     "response_instruction": "仅判断本批小节并映射已有可研章节；按实际项目范围取舍，不得因缺资料删除适用类别。结构父节与其子节须保持一致。公开资料不得补造项目事实。",
+                     "schema": {"sections": [{"section_id": "guide_batch-section-id",
+                         "status": "include/pending/not_applicable", "chapter_ids": ["feasibility-chapter-id"],
+                         "reason": "实际范围依据或待确认缺项，最多160字"}], "missing": [], "conflicts": []}},
+                    lambda value, batch=batch: product_blueprint_batches.validate_scope_batch(value, batch, base))
+                results.append(result)
+            try:
+                payload = validate_output(product_blueprint_batches.merge_scope_batches(base, catalog, batches, results))
+            except ProductError as error:
+                from .product_models import DocumentStep
+                # Locally valid decisions can conflict across batches. A manual retry
+                # must reconsider them, rather than replay the same rejected plan.
+                with transaction.atomic():
+                    _guard(task_id, fence)
+                    DocumentStep.objects.filter(task_id=task_id, key__startswith="blueprint:scope:",
+                        input_hash__in=scope_step_hashes, status="completed").update(status="pending", error_code="invalid_blueprint")
+                raise ExecutionError("invalid_blueprint") from error
             _store(task_id, fence, "blueprint", payload, input_revision.sha256)
             _analysis_progress(task_id, fence, 'blueprint', 'completed',
                 knowledge_mode=knowledge["mode"], ragflow_used=knowledge["ragflow_used"])
@@ -2178,8 +2396,7 @@ def _execute_claim_action(task_id, fence, attempt_id):
             failures = []
             for family in (value for value in families if value != "presentation"):
                 try:
-                    chapters = _generate_family(task_id, fence, attempt_id, task, input_revision, blueprint, family)
-                    _ensure_content_review(task, fence, attempt_id, input_revision, blueprint, chapters, family)
+                    _generate_family(task_id, fence, attempt_id, task, input_revision, blueprint, family)
                     _analysis_progress(task_id, fence, 'outputs', 'running', detail='正文已保存，正在制作可下载文件')
                     reports.extend(generate_report_drafts(task, fence, attempt_id, input_revision, blueprint,
                                                          families=[family]))

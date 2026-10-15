@@ -20,7 +20,7 @@ from .integration import NoRedirect
 from .model_messages import TEXT_REQUEST_LIMIT
 from .model_response_format import (supports_chapter_response_format, validate_response_format,
                                     validate_generation_profile, validate_profile_usage)
-from .security import audit, authorized_modules, can_use_department
+from .security import audit, authorized_modules, can_use_assistant, can_use_department
 
 
 ERROR_MESSAGES = {
@@ -299,12 +299,15 @@ def _fresh_user(user):
     return fresh
 
 
-def _route_for(user, code):
+def _route_for(user, code, *, assistant=False):
     from .models import ModelRoute
     user = _fresh_user(user)
     route = ModelRoute.objects.select_related("model__provider", "module").filter(code=code).first()
     if not route or not (authorized_modules(user).filter(pk=route.module_id, enabled=True).exists()
-                         or can_use_department(user, route.module.code)):
+                         or can_use_department(user, route.module.code)
+                         or assistant and code == getattr(settings, "PRODUCT_KNOWLEDGE_MODEL_ROUTE", None)
+                         and route.module.code == "product" and route.module.enabled
+                         and can_use_assistant(user)):
         raise GatewayError("forbidden", status=403)
     # A route is only valid while its configured default remains usable. Optional
     # models supplement the default; they do not mask a broken route baseline.

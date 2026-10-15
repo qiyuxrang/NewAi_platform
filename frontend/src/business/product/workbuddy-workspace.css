@@ -1,9 +1,9 @@
 /* Scoped to the product department; other departments keep their own theme. */
-.workbuddy-product { background:#fff; color:#202326; color-scheme:light; }
+.workbuddy-product { position:fixed; inset:0; background:#fff; color:#202326; color-scheme:light; }
 .workbuddy-product .wb-page { padding:0; overflow:hidden; }
-.wb-department,.wb-department > .enterprise-business { height:100%; min-width:0; }
+.wb-department,.wb-department > .enterprise-business { height:100%; min-height:0; min-width:0; }
 .wb-department .enterprise-business { --page:#fff; --surface:#fff; --raised:#f6f7f9; --ink:#262930; --muted:#858a93; --line:#e9ebef; --soft:#f7f8fa; --accent:#3976ed; --accent-dark:#2866dc; --action:#3976ed; --on-action:#fff; font-family:Inter,"Microsoft YaHei",sans-serif; color:var(--ink); }
-.wb-shell { display:grid; grid-template-columns:224px minmax(0,1fr); height:100%; min-height:0; background:#fff; font-size:13px; }
+.wb-shell { display:grid; grid-template-columns:224px minmax(0,1fr); grid-template-rows:minmax(0,1fr); height:100%; min-height:0; background:#fff; font-size:13px; }
 .wb-navigation { display:flex; flex-direction:column; padding:26px 15px 15px; border-right:1px solid #e9ebef; background:#f8f9fb; min-height:0; gap:16px; }
 .wb-brand { display:flex; align-items:center; gap:10px; color:#272c35; padding:0 8px 4px; text-decoration:none; }
 .wb-brand > span { display:grid; place-items:center; width:34px; height:34px; border-radius:10px; background:#3676ee; color:#fff; }
@@ -37,6 +37,7 @@
 .wb-toolbar small { font-size:11px; color:#a0a5ae; }
 .wb-work-content { flex:1; min-height:0; overflow:auto; padding:28px 32px; }
 .wb-work-content:has(.wb-project-layout) { overflow:hidden; padding:0; }
+.wb-task-list,.wb-work-content,.wb-project-center,.wb-results { overscroll-behavior-y:contain; }
 .wb-shell :is(button,a,input,textarea,select,summary):focus-visible { outline:2px solid #3976ed; outline-offset:3px; }
 .wb-shell button { cursor:pointer; }
 .wb-shell button:disabled { cursor:not-allowed; }
@@ -45,7 +46,7 @@
 .wb-shell .pd-panel { box-shadow:none; }
 .wb-shell .pd-feedback { border-color:#eadcc2; color:#8d7142; background:#fffbf4; overflow-wrap:anywhere; }
 .wb-shell .pd-feedback.success { border-color:#dbe9e2; color:#547962; background:#f7fbf8; }
-.wb-new-project { max-width:1160px; margin:38px auto 20px; }
+.wb-new-project { margin:0 0 20px; }
 .wb-new-project .pd-page-title { margin:0 0 22px; align-items:center; }
 .wb-new-project .pd-page-title h1 { font-size:28px; font-weight:500; }
 .wb-welcome-mark { display:block; color:#3976ed; font-size:32px; margin-bottom:18px; }
@@ -63,7 +64,7 @@
 .wb-new-project .pd-new-aside ul li { font-size:12px; padding:12px 0; }
 .wb-new-project .pd-new-aside ul li small { color:#979ea9; font-size:10px; margin-top:6px; }
 .wb-new-project .pd-new-aside ol { color:#858c97; font-size:12px; }
-.wb-project-layout { display:grid; grid-template-columns:minmax(0,1fr) 310px; height:100%; min-height:0; }
+.wb-project-layout { display:grid; grid-template-columns:minmax(0,1fr) 310px; grid-template-rows:minmax(0,1fr); height:100%; min-height:0; }
 .wb-project-center { overflow-y:auto; min-width:0; min-height:0; padding:26px 32px 0; }
 .wb-project-center .pd-workspace { max-width:980px; margin:auto; }
 .wb-project-center .pd-project-header { padding:0 0 17px; gap:12px; align-items:center; border-color:#eef0f3; }

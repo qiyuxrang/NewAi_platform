@@ -10,6 +10,7 @@ export function workspaceHref(href: string): string {
   } else if (department === 'cost') target = '/departments/engineering/estimate'
   else {
     target = ['knowledge', 'outputs', 'opportunities'].includes(section) ? `/departments/product/${section}` : '/departments/product/documents'
+    if (section === 'new') params.set('view', 'new')
     if (['projects', 'history'].includes(section) && !params.has('task')) params.set('view', 'projects')
   }
   return `${target}${params.size ? `?${params}` : ''}${hash}`

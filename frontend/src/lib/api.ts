@@ -20,7 +20,7 @@ export interface AuthUser {
   created_at: string
   role: 'user' | 'admin'
   business_role: 'unassigned' | 'employee' | 'general_manager'
-  department_code: 'product' | 'hr' | 'engineering' | null
+  department_code: 'product' | 'hr' | 'engineering' | 'finance' | null
   portal_user_id: number | null
   capabilities: string[]
 }

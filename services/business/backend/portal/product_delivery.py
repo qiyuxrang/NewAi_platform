@@ -75,11 +75,27 @@ def artifact_delivery(artifact, *, current=None):
             blocked.append({"code": error.code})
         structure = evidence.get("document_structure", {})
         from .product_diagrams import minimum_diagrams
+        required_figures = minimum_diagrams(artifact.family)
+        if artifact.family == "feasibility" and blueprint.payload.get("feasibility_guide"):
+            from .product_feasibility_blocks import figure_plan
+            from .product_diagrams import validate_document_requirements
+            import json
+            required_figures = len({title for chapter in blueprint_chapters(blueprint.payload, artifact.family)
+                                    for title in figure_plan(blueprint.payload, chapter["id"])})
+            try:
+                verified_structure = validate_document_requirements(report.payload)
+                plan = next(item for item in report.payload["requirements"] if item["id"] == "RGUIDEFIGURES")
+                if (not isinstance(structure, dict)
+                        or len(json.loads(plan["text"])["figure_ids"]) != required_figures
+                        or structure.get("figure_count") != verified_structure["figure_count"]):
+                    raise ValueError
+            except (KeyError, TypeError, ValueError, StopIteration):
+                blocked.append({"code": "document_structure_incomplete"})
         if (not isinstance(structure, dict)
                 or any(type(structure.get(key)) is not int for key in
                        ("figure_count", "heading1_count", "heading2_count", "toc_depth", "embedded_raster_count"))
                 or evidence.get("structural_generation") != "completed"
-                or structure.get("figure_count", 0) < minimum_diagrams(artifact.family)
+                or structure.get("figure_count", 0) < required_figures
                 or structure.get("heading1_count", 0) < 1 or structure.get("heading2_count", 0) < 1
                 or structure.get("toc_depth") != 2
                 or structure.get("embedded_raster_count", 0) < structure.get("figure_count", 0)

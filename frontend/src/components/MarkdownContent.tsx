@@ -17,7 +17,7 @@ function CodeBlock({ className, children }: { className?: string; children: Reac
   }
 
   return (
-    <div className="group relative my-2 rounded-lg bg-[#1a1a2e] border border-dark-border overflow-hidden">
+    <div className="group relative my-2 rounded-lg bg-dark-bg text-dark-text border border-dark-border overflow-hidden">
       <div className="flex items-center justify-between px-3 py-1.5 bg-dark-bg/50 border-b border-dark-border">
         <span className="text-[10px] text-dark-text-secondary uppercase tracking-wider">{lang || 'code'}</span>
         <button
@@ -34,11 +34,11 @@ function CodeBlock({ className, children }: { className?: string; children: Reac
   )
 }
 
-export default memo(function MarkdownContent({ content, className = '' }: { content: string; className?: string }) {
+export default memo(function MarkdownContent({ content, className = '', fileLinks = true }: { content: string; className?: string; fileLinks?: boolean }) {
   return (
     <div className={`markdown-body text-sm leading-relaxed ${className}`}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkFileLinks]}
+        remarkPlugins={fileLinks ? [remarkGfm, remarkFileLinks] : [remarkGfm]}
         components={{
           // Code blocks
           code({ className, children, ...props }) {
@@ -92,7 +92,8 @@ export default memo(function MarkdownContent({ content, className = '' }: { cont
           th({ children }) { return <th className="px-3 py-1.5 text-left font-medium text-dark-text-secondary border-b border-dark-border">{children}</th> },
           td({ children }) { return <td className="px-3 py-1.5 border-b border-dark-border/50">{children}</td> },
           // Links (工作区文件路径自动渲染为下载卡片)
-          a: fileDownloadLinkRenderer,
+          a: fileLinks ? fileDownloadLinkRenderer : ({ href, children }) => /^https?:\/\//i.test(href || '')
+            ? <a href={href} target="_blank" rel="noopener noreferrer">{children}</a> : <span>{children}</span>,
           // Images: hide inline markdown images (files are shown as download cards below)
           img() { return null },
           // Horizontal rule

@@ -300,7 +300,7 @@ export default function UsersPage() {
               <div>
                 <Label htmlFor="business-department">所属部门</Label>
                 <Select value={editDepartment} disabled={saving || editBusinessRole === "unassigned"} onValueChange={(value: string | null) => {
-                  if (value === "none" || value === "product" || value === "hr" || value === "engineering") setEditDepartment(value);
+                  if (value === "none" || value === "product" || value === "hr" || value === "engineering" || value === "finance") setEditDepartment(value);
                 }}>
                   <SelectTrigger id="business-department"><SelectValue>{editDepartment === "none" ? "未分配" : departmentLabels[editDepartment]}</SelectValue></SelectTrigger>
                   <SelectContent>

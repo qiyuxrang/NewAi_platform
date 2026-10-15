@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ArrowRight, Clock3, FileText, Filter, Info, LayoutGrid, List, Plus, Search, ShieldCheck, Star } from "lucide-react";
 import { ApiError } from "../api";
+import { useEnterprise } from "../../components/enterprise-context";
 import {
   getOpportunity,
   getOpportunityOptions,
@@ -284,6 +285,8 @@ function Sources({ sources }: { sources: TenderSource[] }) {
 }
 
 export default function TenderOpportunities() {
+  const { user } = useEnterprise();
+  const isGeneralManager = user?.business_role === "general_manager";
   const [filters, setFilters] = useState<OpportunityFilters>(initialFilters);
   const [page, setPage] = useState(initialPage);
   const [list, setList] = useState<ListState>({ kind: "loading" });
@@ -582,10 +585,16 @@ export default function TenderOpportunities() {
   const regions = options.regions.some(item => item.value === filters.region) || !filters.region
     ? options.regions : [{ value: filters.region, label: filters.region }, ...options.regions];
   const stats = list.kind === "ready" ? list.data.stats : undefined;
+  const activityMetrics = [
+    { label: "今日新增", value: stats?.today_new },
+    { label: "本轮新增", value: stats?.latest_batch_new },
+    { label: "即将截止", value: stats?.closing_soon },
+  ].map(item => ({ ...item, value: typeof item.value === "number" && Number.isFinite(item.value) && item.value >= 0 ? item.value : null }));
+  const activityMax = Math.max(0, ...activityMetrics.map(item => item.value ?? 0));
   const serviceReady = overview?.consumer_online === true && overview.available;
   const serviceLabel = metadataMessage ? "采集服务状态待确认" : overview?.consumer_online === false ? "采集服务当前离线"
     : serviceReady ? "采集服务运行正常" : overview?.available === false ? "采集服务暂不可用" : "采集服务状态待确认";
-  return <div className="pd-workspace tender-workspace">
+  return <div className={`pd-workspace tender-workspace${isGeneralManager ? " tender-manager" : ""}`}>
     <section className="tender-hero">
       <div><h1>全国商机看板</h1><p>信息化 · 数字化 · 智能化公开商机，助力招投标机会挖掘与跟踪。</p></div>
       <div className={`tender-service${serviceReady && !metadataMessage ? " is-ready" : ""}`}>
@@ -606,6 +615,14 @@ export default function TenderOpportunities() {
       <article className="tender-stat tender-stat-orange"><span className="tender-stat-icon"><FileText aria-hidden="true" /></span><div><span>本轮新增 <Info size={13} aria-hidden="true" /></span><strong>{stats?.latest_batch_new ?? "—"}</strong></div><span className="tender-stat-decoration" aria-hidden="true" /></article>
       <article className="tender-stat tender-stat-red"><span className="tender-stat-icon"><Clock3 aria-hidden="true" /></span><div><span>即将截止 <Info size={13} aria-hidden="true" /></span><strong>{stats?.closing_soon ?? "—"}</strong></div><span className="tender-stat-decoration" aria-hidden="true" /></article>
     </section>
+
+    {isGeneralManager && activityMetrics.some(item => item.value !== null) && <section className="tender-activity-chart" aria-labelledby="tender-activity-title" aria-busy={listUpdating}>
+      <div><h2 id="tender-activity-title">新增与截止数量</h2><p>当前筛选 · 单位：条 · 指标可能重叠，分别比较，不表示占比。</p></div>
+      <ul>{activityMetrics.map(item => <li key={item.label}>
+        <span>{item.label}</span><span className="tender-activity-track" aria-hidden="true">{item.value !== null && <span style={{ width: `${activityMax > 0 ? item.value / activityMax * 100 : 0}%` }} />}</span>
+        <strong title={item.value === null ? "暂无数据" : `${item.label}：${item.value} 条`}>{item.value ?? "—"}</strong>
+      </li>)}</ul>
+    </section>}
 
     <div className="tender-browser">
       <section className="tender-filters" aria-label="商机筛选">

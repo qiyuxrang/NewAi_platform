@@ -1,12 +1,14 @@
 import { useState, useEffect, useRef } from 'react'
-import { NavLink, useLocation } from 'react-router-dom'
+import { Link, NavLink, useLocation } from 'react-router-dom'
 import { changePassword, logout } from '../lib/api'
 import { useEnterprise } from './enterprise-context'
-import { availableDepartments, departmentPath } from '../enterprise-navigation'
+import { availableDepartments, availableManagerEntries, departmentPath, enterpriseHomePath, hasCapability } from '../enterprise-navigation'
 import Brand from './Brand'
+import RecentProjects from './RecentProjects'
+import { useEntryAccess } from '../business/entry-access'
 import {
+  Search, FileText, Calculator, BookOpen, ChartNoAxesCombined,
   LayoutDashboard,
-  MessageSquare,
   Settings,
   User,
   KeyRound,
@@ -21,6 +23,7 @@ export default function Sidebar() {
   const location = useLocation()
   const { user, loading, error } = useEnterprise()
   const visibleDepartments = availableDepartments(user)
+  const entryAllowed = useEntryAccess()
   const manager = user?.business_role === 'general_manager'
   const [menuOpen, setMenuOpen] = useState(false)
   const [pwdModalOpen, setPwdModalOpen] = useState(false)
@@ -82,17 +85,22 @@ export default function Sidebar() {
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto px-3 py-2">
-        <NavLink to="/dashboard" className={({ isActive }) => `flex items-center gap-3 rounded-lg px-3 py-2 text-sm ${isActive ? 'bg-accent-blue/15 text-accent-blue' : 'text-dark-text-secondary hover:bg-dark-card hover:text-dark-text'}`}>
+        {!manager && enterpriseHomePath(user) === '/dashboard' && <NavLink to="/dashboard" className={({ isActive }) => `flex items-center gap-3 rounded-lg px-3 py-2 text-sm ${isActive ? 'bg-accent-blue/15 text-accent-blue' : 'text-dark-text-secondary hover:bg-dark-card hover:text-dark-text'}`}>
           <LayoutDashboard size={18} />工作首页
-        </NavLink>
+        </NavLink>}
         <div className="my-4 space-y-2">
           {loading && <p role="status" className="px-3 text-xs text-dark-text-secondary">正在加载权限…</p>}
           {error && <p role="status" className="px-3 text-xs text-accent-red">权限加载失败</p>}
           {!loading && !error && !visibleDepartments.length && <p className="px-3 text-xs text-dark-text-secondary">部门未分配</p>}
-          {visibleDepartments.map(department => {
+          {manager && availableManagerEntries(user).map((entry) => {
+            const Icon = { '商机看板': Search, '文档生成': FileText, '产品报价': Calculator, '智能助手': BookOpen, '财务看板': ChartNoAxesCombined }[entry.label]
+            const active = entry.label === '文档生成' ? /^\/departments\/product\/(documents|outputs)/.test(location.pathname) : location.pathname === entry.to.split('?')[0]
+            return <Link key={entry.to} to={entry.to} aria-current={active ? 'page' : undefined} className={`gm-nav-link ${active ? 'active' : ''}`}><Icon size={19} />{entry.label}</Link>
+          })}
+          {!manager && visibleDepartments.map(department => {
             const links = <div className="space-y-1">
               <NavLink end to={departmentPath(department.code)} className={({ isActive }) => `block rounded-lg px-3 py-2 text-sm ${isActive ? 'bg-accent-blue/15 text-accent-blue' : 'text-dark-text-secondary hover:bg-dark-card hover:text-dark-text'}`}>部门首页</NavLink>
-              {department.functions.map(feature => <NavLink key={feature.code} to={departmentPath(department.code, feature.code)} className={({ isActive }) => `block rounded-lg px-3 py-2 text-sm ${isActive ? 'bg-accent-blue/15 text-accent-blue' : 'text-dark-text-secondary hover:bg-dark-card hover:text-dark-text'}`}>{feature.label}</NavLink>)}
+              {department.functions.filter(feature => feature.code !== 'entry' || entryAllowed).map(feature => <NavLink key={feature.code} to={departmentPath(department.code, feature.code)} className={({ isActive }) => `block rounded-lg px-3 py-2 text-sm ${isActive ? 'bg-accent-blue/15 text-accent-blue' : 'text-dark-text-secondary hover:bg-dark-card hover:text-dark-text'}`}>{feature.label}</NavLink>)}
             </div>
             return manager ? <details key={department.code} open={location.pathname.startsWith(departmentPath(department.code))}>
               <summary className="cursor-pointer rounded-lg px-3 py-2 text-sm font-medium text-dark-text hover:bg-dark-card">{department.label}</summary>
@@ -103,9 +111,7 @@ export default function Sidebar() {
             </div>
           })}
         </div>
-        <NavLink to="/chat" className={({ isActive }) => `flex items-center gap-3 rounded-lg px-3 py-2 text-sm ${isActive ? 'bg-accent-blue/15 text-accent-blue' : 'text-dark-text-secondary hover:bg-dark-card hover:text-dark-text'}`}>
-          <MessageSquare size={18} />智能助手
-        </NavLink>
+        {manager && hasCapability(user, 'product') && <RecentProjects key={user?.portal_user_id} />}
         <NavLink to="/settings" className={({ isActive }) => `mt-2 flex items-center gap-3 rounded-lg px-3 py-2 text-sm ${isActive ? 'bg-accent-blue/15 text-accent-blue' : 'text-dark-text-secondary hover:bg-dark-card hover:text-dark-text'}`}>
           <Settings size={18} />设置
         </NavLink>

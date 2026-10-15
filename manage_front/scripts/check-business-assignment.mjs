@@ -20,6 +20,15 @@ test('employee payload has department and positive integer portal ID', () => {
     business_role: 'employee', department_code: 'hr', portal_user_id: 42,
   })
 })
+test('finance assignment uses the existing authenticated admin request contract', async () => {
+  const { api, calls } = apiSpy()
+  const payload = businessAssignmentPayload('employee', 'finance', '42')
+  await api.updateUser('isolated-finance-user', payload)
+  assert.equal(calls[0].path, '/api/admin/users/isolated-finance-user')
+  assert.equal(calls[0].options.method, 'PUT')
+  assert.equal(calls[0].options.headers.Authorization, 'Bearer fixture-jwt')
+  assert.deepEqual(JSON.parse(calls[0].options.body), { business_role: 'employee', department_code: 'finance', portal_user_id: 42 })
+})
 test('unassigned and manager allow null department and explicit ID clearing', () => {
   for (const role of ['unassigned', 'general_manager']) {
     assert.deepEqual(plain(businessAssignmentPayload(role, 'none', '')), {

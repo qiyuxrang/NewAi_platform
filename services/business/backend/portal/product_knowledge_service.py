@@ -1,4 +1,4 @@
-"""Official RAGFlow /api/v1/retrieval, deliberately separate from blueprint retrieval.
+"""Official RAGFlow /api/v1/retrieval with separate bounded QA/blueprint windows.
 
 Contract verified against infiniflow/ragflow 313ca90f6abd7682fe8523e16fd67b3653a3fa84,
 docs/references/http_api_reference.md, Retrieve chunks. No remote chat/session state.
@@ -7,6 +7,9 @@ All settings are opt-in Django PRODUCT_KNOWLEDGE_* settings; no env files are re
 import json
 import os
 import re
+from collections import OrderedDict
+from hashlib import sha256
+from threading import Lock
 from http.client import HTTPException
 from math import isfinite
 from time import monotonic
@@ -16,7 +19,8 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_ope
 
 from django.conf import settings
 from .models import User
-from .product_service import ProductError, product_user_allowed
+from .product_service import ProductError
+from .security import can_use_assistant
 
 
 MESSAGES = {
@@ -37,6 +41,10 @@ CHUNK_SCAN_PAGE_SIZE = 50
 CHUNK_SCAN_LIMIT = 2000
 CHUNK_RESPONSE_LIMIT = 1024 * 1024
 CHUNK_CONTENT_LIMIT = 64 * 1024
+ORIGINAL_CACHE_LIMIT = 64 * 1024 * 1024
+ORIGINAL_CACHE_TTL = 120
+_original_cache = OrderedDict()
+_original_cache_lock = Lock()
 
 
 def fail(code, status=503):
@@ -56,16 +64,18 @@ def identifier(value):
     return value
 
 
-def authorize(user):
+def authorize(user, *, allow_empty=False):
     fresh = User.objects.filter(pk=user.pk).first()
-    if (not fresh or not product_user_allowed(fresh)
+    if (not fresh or not can_use_assistant(fresh)
             or fresh.session_version != user.session_version or fresh.grant_version != user.grant_version):
         fail("forbidden", 403)
     grants = getattr(settings, "PRODUCT_KNOWLEDGE_AUTHORIZATIONS", {})
     if not isinstance(grants, dict):
         fail("unconfigured")
     raw = grants.get(str(fresh.pk))
-    if not isinstance(raw, dict) or not 1 <= len(raw) <= 4:
+    if allow_empty and raw is None:
+        raw = {}
+    if not isinstance(raw, dict) or not (0 if allow_empty else 1) <= len(raw) <= 4:
         fail("scope_revoked", 403)
     scope = {}
     for dataset, documents in raw.items():
@@ -83,7 +93,7 @@ def authorize(user):
 
 
 def recheck(user, snapshot):
-    if authorize(user) != snapshot:
+    if authorize(user, allow_empty=not snapshot.get("datasets")) != snapshot:
         fail("scope_revoked", 403)
 
 
@@ -117,11 +127,10 @@ def configuration():
     return url, token, route
 
 
-def ready(user):
+def _model_ready(user, purpose, *, assistant=False):
     from .model_gateway import GatewayError, _route_for, _model_config
-    config = configuration()
     try:
-        _, route = _route_for(user, config[2])
+        _, route = _route_for(user, purpose, assistant=assistant)
         if route.module.code != "product":
             fail("unconfigured")
         # Keep the lease longer than the complete bounded retrieval + gateway call.
@@ -134,6 +143,22 @@ def ready(user):
             fail("unconfigured")
     except GatewayError:
         fail("unconfigured")
+
+
+def assistant_ready(user):
+    # Model access does not require a configured retrieval service or document grant.
+    if getattr(settings, "PRODUCT_KNOWLEDGE_AI_CALLS_ALLOWED", False) is not True:
+        fail("disabled")
+    purpose = getattr(settings, "PRODUCT_KNOWLEDGE_MODEL_ROUTE", "")
+    if not isinstance(purpose, str) or not re.fullmatch(r"[a-z][a-z0-9_-]{1,99}", purpose):
+        fail("unconfigured")
+    _model_ready(user, purpose, assistant=True)
+    return purpose
+
+
+def ready(user):
+    config = configuration()
+    _model_ready(user, config[2])
     return config
 
 
@@ -290,6 +315,100 @@ def list_documents(dataset, documents, page, page_size, query, config):
             "page_size": page_size, "has_more": start + page_size < total}
 
 
+def original_document_metadata(dataset, document, config):
+    base, token = _browse_config(config)
+    params = urlencode({"id": document, "page": 1, "page_size": 1})
+    payload = _get_json(f"{base}datasets/{dataset}/documents?{params}", token,
+                        monotonic() + 25, DOCUMENT_RESPONSE_LIMIT)
+    if (not isinstance(payload, dict) or type(payload.get("code")) is not int
+            or payload["code"] != 0 or not isinstance(payload.get("data"), dict)):
+        fail("invalid_response", 502)
+    rows = payload["data"].get("docs")
+    if not isinstance(rows, list) or len(rows) > 1:
+        fail("invalid_response", 502)
+    if not rows:
+        raise ProductError("not_found", "原文件不存在。", 404)
+    item = rows[0]
+    if _document_identity(item, dataset) != document:
+        fail("invalid_response", 502)
+    name, size = text(item.get("name"), 300), nonnegative_integer(item.get("size"))
+    filename = name.replace("\\", "/").rsplit("/", 1)[-1]
+    # Provider catalogue prefixes are display text, never URL or file paths.
+    if any(ord(char) < 32 for char in name) or filename in {"", ".", ".."}:
+        fail("invalid_response", 502)
+    try:
+        fingerprint = sha256(json.dumps(item, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+    except (ValueError, TypeError):
+        fail("invalid_response", 502)
+    return {"name": name, "filename": filename, "size": size, "fingerprint": fingerprint}
+
+
+def cached_original_document(dataset, document, metadata, config):
+    # Preview cache never supplies authority: the API refreshes metadata and
+    # checks scope/config before and after every read, including a cache hit.
+    config_hash = sha256(json.dumps(config, separators=(",", ":")).encode()).hexdigest()
+    key = (config_hash, dataset, document, metadata["fingerprint"])
+    now = monotonic()
+    with _original_cache_lock:
+        for existing in list(_original_cache):
+            if _original_cache[existing][0] <= now:
+                del _original_cache[existing]
+        cached = _original_cache.get(key)
+        if cached is not None:
+            _original_cache.move_to_end(key)
+            return cached[1]
+    raw = original_document(dataset, document, metadata, config)
+    with _original_cache_lock:
+        _original_cache[key] = (monotonic() + ORIGINAL_CACHE_TTL, raw)
+        _original_cache.move_to_end(key)
+        while len(_original_cache) > 16 or sum(len(value[1]) for value in _original_cache.values()) > ORIGINAL_CACHE_LIMIT:
+            _original_cache.popitem(last=False)
+    return raw
+
+
+def original_document(dataset, document, metadata, config):
+    from .product_knowledge_preview import FILE_LIMIT, too_large
+    if metadata["size"] > FILE_LIMIT:
+        too_large()
+    base, token = _browse_config(config)
+    request = Request(f"{base}datasets/{dataset}/documents/{document}", method="GET", headers={
+        "Authorization": "Bearer " + token, "Accept": "application/octet-stream",
+        "Accept-Encoding": "identity"})
+    deadline = monotonic() + 25
+    try:
+        with _open(request, 10) as response:
+            if response.status != 200:
+                fail("unavailable")
+            declared = response.headers.get("Content-Length")
+            if (declared is not None and (not declared.isascii() or not declared.isdigit()
+                                         or int(declared) != metadata["size"])
+                    or response.headers.get("Content-Encoding", "identity").lower() != "identity"):
+                fail("invalid_response", 502)
+            parts, size = [], 0
+            while True:
+                if monotonic() >= deadline:
+                    fail("unavailable")
+                part = response.read1(min(8192, metadata["size"] + 1 - size))
+                if monotonic() >= deadline:
+                    fail("unavailable")
+                if not isinstance(part, bytes):
+                    fail("invalid_response", 502)
+                if not part:
+                    break
+                parts.append(part)
+                size += len(part)
+                if size > metadata["size"]:
+                    fail("invalid_response", 502)
+            if size != metadata["size"]:
+                fail("invalid_response", 502)
+    except HTTPError as error:
+        error.close()
+        fail("unavailable")
+    except (URLError, OSError, TimeoutError, HTTPException):
+        fail("unavailable")
+    return b"".join(parts)
+
+
 def list_chunks(dataset, document, page, page_size, config):
     base, token = _browse_config(config)
     chunks, seen = [], set()
@@ -403,7 +522,9 @@ def list_datasets(scope, config):
     return datasets
 
 
-def retrieve(question, history, scope, config):
+def retrieve(question, history, scope, config, *, blueprint=False):
+    # Blueprint evidence has a separate fixed budget; question answering keeps its original window.
+    source_limit, per_document_limit, content_limit = (12, 4, 4000) if blueprint else (6, 1, 1200)
     # Include previous questions to resolve follow-ups without an extra ungrounded LLM call.
     query = "\n".join([turn["question"] for turn in history[-2:]] + [question])[-6000:]
     url, token, _ = config
@@ -464,19 +585,19 @@ def retrieve(question, history, scope, config):
             content = text(chunk.get("content"), CHUNK_CONTENT_LIMIT)
             title = text(chunk.get("document_keyword"), 300)
             sources.append({"id": "", "chunk_id": chunk_id, "dataset_id": dataset,
-                            "document_id": chunk["document_id"], "title": title, "content": content[:1200]})
+                            "document_id": chunk["document_id"], "title": title, "content": content[:content_limit]})
     # Round-robin datasets so the bound does not exclude later authorized datasets.
-    selected, cited_documents = [], set()
+    selected, cited_documents = [], {}
     for index in range(12):
         for dataset in scope["datasets"]:
             items = [s for s in sources if s["dataset_id"] == dataset]
-            if index < len(items) and len(selected) < 6:
+            if index < len(items) and len(selected) < source_limit:
                 source = items[index]
                 document = (source["dataset_id"], source["document_id"])
-                if document not in cited_documents:
+                if cited_documents.get(document, 0) < per_document_limit:
                     selected.append(source)
-                    cited_documents.add(document)
-    if re.search(r"有哪些|哪些|相关项目|项目列表|什么项目|有关于.*项目", question):
+                    cited_documents[document] = cited_documents.get(document, 0) + 1
+    if not blueprint and re.search(r"有哪些|哪些|相关项目|项目列表|什么项目|有关于.*项目", question):
         projects, distinct = set(), []
         for source in selected:
             project = re.search(r".{1,160}?项目", source["title"])

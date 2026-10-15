@@ -12,7 +12,7 @@ checkedModule.paths = Module._nodeModulePaths(fileURLToPath(new URL('..', import
 checkedModule.require = createRequire(sourceFile)
 checkedModule._compile(compiled, sourceFile)
 const { workspaceHref } = checkedModule.exports
-assert.equal(workspaceHref('/centers/product/new'), '/departments/product/documents')
+assert.equal(workspaceHref('/centers/product/new'), '/departments/product/documents?view=new')
 assert.equal(workspaceHref('/centers/product/projects'), '/departments/product/documents?view=projects')
 assert.equal(workspaceHref('/centers/product/projects?task=real&tab=history'), '/departments/product/documents?task=real&tab=history')
 assert.equal(workspaceHref('/centers/product/outputs?page=2'), '/departments/product/outputs?page=2')

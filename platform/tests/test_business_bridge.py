@@ -231,6 +231,22 @@ class BridgeTests(unittest.TestCase):
         self.business_response = lambda req: httpx.Response(302, headers={"Location": "https://evil.test/"})
         self.assertEqual(self.client.get("/api/enterprise/business/product/tasks/", headers=self.headers()).status_code, 502)
 
+    def test_only_sandboxed_knowledge_document_preview_can_return_html(self):
+        self.assertEqual(self.link().status_code, 200)
+        path = "product/knowledge/datasets/dataset-05/documents/doc-a/preview/"
+        csp = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:"
+        self.business_response = lambda req: httpx.Response(200, content=b"<p>complete document end</p>",
+            headers={"Content-Type": "text/html; charset=utf-8", "Content-Security-Policy": csp})
+        result = self.client.get("/api/enterprise/business/" + path, headers=self.headers())
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.content, b"<p>complete document end</p>")
+        self.assertEqual(result.headers["content-security-policy"], csp)
+        self.assertEqual(result.headers["cache-control"], "no-store")
+        self.assertEqual(self.client.get("/api/enterprise/business/product/tasks/", headers=self.headers()).status_code, 502)
+        self.assertEqual(self.client.post("/api/enterprise/business/" + path, headers=self.headers()).status_code, 502)
+        self.business_response = lambda req: httpx.Response(200, text="login", headers={"Content-Type": "text/html"})
+        self.assertEqual(self.client.get("/api/enterprise/business/" + path, headers=self.headers()).status_code, 502)
+
     def test_sse_and_permission_denials_are_preserved(self):
         self.link()
         events = b"data: " + b"x" * 100000 + b"\n\ndata: done\n\n"
@@ -255,6 +271,23 @@ class BridgeTests(unittest.TestCase):
         self.assertEqual(self.link().json()["business_role"], "employee")
         self.modules.append({"code": "business", "enabled": True})
         self.assertEqual(self.link().json()["business_role"], "general_manager")
+
+    def test_each_department_can_proxy_shared_assistant_without_product_capability(self):
+        for department, module in (("hr", "hr"), ("engineering", "cost")):
+            with self.subTest(department=department):
+                self.profile.update(department_code=department, roles=[{"code": department}])
+                self.modules = [{"code": module, "enabled": True}]
+                self.business_response = lambda req: httpx.Response(200, json={
+                    "departments": [{"department": "finance"}]})
+                self.assertEqual(self.link().json()["capabilities"], [department])
+                path = "/api/enterprise/business/product/knowledge/status/"
+                response = self.client.get(path, headers=self.headers())
+                self.assertEqual(response.status_code, 200, response.text)
+                self.assertEqual(self.requests[-1].url.path, "/api/product/knowledge/status/")
+                self.assertEqual(self.client.get("/api/enterprise/status", headers=self.headers()).json()["capabilities"],
+                                 [department])
+                self.business_response = lambda req: httpx.Response(403, json={"code": "scope_revoked"})
+                self.assertEqual(self.client.get(path, headers=self.headers()).status_code, 403)
 
     def test_unlink_keeps_identity_but_blocks_proxy_and_sensitive_paths(self):
         self.link()

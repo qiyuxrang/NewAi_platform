@@ -245,7 +245,11 @@ class ThreeDraftFlowTests(PortalTestCase):
         record.save(update_fields=["checkpoint"])
         approved = self.approve_blueprint(self.save_blueprint(created))["task"]
         self.assertEqual(approved["pending_action"], "generate_outputs")
-        self.assertTrue(run_once())
+        from portal.product_worker import _ensure_content_review
+        with patch("portal.product_worker._ensure_content_review", wraps=_ensure_content_review) as review:
+            self.assertTrue(run_once())
+        self.assertEqual(review.call_count, 2)
+        self.assertEqual({call.args[-1] for call in review.call_args_list}, {"technical-solution", "feasibility"})
         current = self.owner_client.get(f"/api/product/tasks/{record.pk}/").json()
         self.assertEqual(current["state"], "COMPLETED", current.get("error_code"))
         self.assertEqual({item["family"] for item in current["reports"]}, {"technical-solution", "feasibility"})

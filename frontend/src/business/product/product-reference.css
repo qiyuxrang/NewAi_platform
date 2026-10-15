@@ -1,14 +1,26 @@
 /* Product department reference layouts. Keep the existing service contracts. */
 .wb-department .enterprise-business { --ink:#192334; --muted:#8290a6; --line:#e5ebf4; --accent:#246bff; --accent-dark:#175bea; --action:#246bff; --soft:#f5f8fd; --good:#15a568; --good-bg:#edf9f3; --warning:#bd791e; --warning-bg:#fff6e8; --danger:#d74343; --danger-bg:#fff0f0; font-family:"Microsoft YaHei","Segoe UI",sans-serif; }
-.wb-shell.wb-reference { --nav-width:234px; grid-template-columns:var(--nav-width) minmax(0,1fr); min-width:1100px; font-size:14px; background:linear-gradient(120deg,#f7faff,#fff 70%); }
-.wb-reference[data-view=projects] { --nav-width:287px; }
-.wb-reference[data-view=knowledge] { --nav-width:228px; }
-.wb-reference[data-view=opportunities] { --nav-width:246px; }
+.wb-shell.wb-reference { --nav-width:224px; grid-template-columns:var(--nav-width) minmax(0,1fr); min-width:0; font-size:14px; background:linear-gradient(120deg,#f7faff,#fff 70%); }
+.wb-shell.wb-reference[data-view=knowledge] { position:relative; width:100%; min-width:0; }
+.wb-reference[data-view=knowledge] .wb-navigation[hidden] { display:none; }
+.wb-reference[data-view=knowledge] > .wb-work-area { grid-column:2; }
+.wb-reference[data-view=knowledge] .wb-toolbar { padding:0 18px; gap:10px; }
+.wb-reference[data-view=knowledge] .wb-toolbar small { display:none; }
+.wb-toolbar-title { display:flex; align-items:center; gap:12px; min-width:0; }
+.wb-toolbar-title > span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:#526077; font-size:14px; }
+.wb-navigation-toggle { display:inline-flex; align-items:center; flex:none; gap:5px; padding:6px 8px; border:1px solid #e0e8f4; border-radius:6px; background:#fff; color:#3876ed; }
+.wb-navigation-toggle span { font-size:12px; font-weight:400; white-space:nowrap; }
+.wb-width-separator { position:absolute; top:0; bottom:0; z-index:4; width:10px; cursor:col-resize; touch-action:none; }
+.wb-width-separator::after { content:""; position:absolute; top:18px; bottom:18px; left:4px; width:2px; border-radius:2px; background:#dce5f2; }
+.wb-width-separator:hover::after,.wb-width-separator:focus-visible::after { background:#246bff; }
+.wb-width-separator:focus-visible { outline:2px solid #3976ed; outline-offset:-2px; }
+.wb-navigation-separator { left:calc(var(--nav-width) - 5px); }
+.wb-shell[data-resizing] { cursor:col-resize; user-select:none; }
+.wb-shell[data-resizing] iframe { pointer-events:none; }
 .wb-reference .wb-navigation { gap:16px; padding:8px 15px 16px; background:linear-gradient(130deg,#fafcfe,#f1f6fc); border-color:#e5ebf4; }
 .wb-reference .wb-brand { display:flex; height:83px; padding:0; justify-content:center; flex-shrink:0; }
 .wb-reference .wb-brand img { display:block; width:100%; height:82px; object-fit:contain; mix-blend-mode:multiply; }
 .wb-reference .wb-new-task { min-height:42px; font-size:14px; border-color:#dfe6f0; color:#354157; }
-.wb-reference[data-view=projects] .wb-navigation { padding-left:24px; padding-right:23px; }
 .wb-reference[data-view=projects] .wb-new-task { color:white; border-color:#246bff; background:#246bff; box-shadow:0 3px 8px #246bff15; }
 .wb-reference .wb-links { gap:5px; }
 .wb-reference .wb-links a,.wb-reference .wb-navigation-foot a { min-height:40px; gap:12px; padding:9px 11px; font-size:14px; color:#59667b; position:relative; }
@@ -45,8 +57,8 @@
 .wb-reference .button.secondary { background:#fff; border:1px solid #e0e8f4; color:#3876ed; }
 .wb-reference .button:disabled { opacity:.5; }
 .wb-reference .pd-panel { border-color:#e5ebf4; border-radius:10px; }
-.wb-reference .wb-project-layout { grid-template-columns:minmax(0,1fr) 320px; }
-.wb-reference .wb-project-center { padding:20px 28px 0; scrollbar-width:thin; }
+.wb-reference .wb-project-layout { grid-template-columns:minmax(0,1fr) 320px; overflow:hidden; }
+.wb-reference .wb-project-center { padding:20px 28px 0; overflow-y:auto; scrollbar-width:thin; }
 .wb-reference .wb-project-center .pd-workspace { max-width:none; }
 .wb-reference .wb-project-center .pd-project-detail { display:block; }
 .wb-reference .wb-project-center .pd-project-header { border:0; padding-bottom:16px; align-items:center; }
@@ -132,5 +144,5 @@
 .wb-reference .wb-results-collapsed { grid-template-columns:minmax(0,1fr) 48px; }
 .wb-reference .wb-results-collapsed .wb-results > header { padding:0 9px; }
 .wb-reference .wb-followup { position:static; margin:24px 0; border:1px solid #e1e9f5; border-radius:10px; }
-@media(max-width:1400px) { .wb-shell.wb-reference { --nav-width:218px; }.wb-reference[data-view=projects] { --nav-width:240px; }.wb-reference .wb-project-layout { grid-template-columns:minmax(0,1fr) 284px; }.wb-reference .wb-project-center { padding:20px 22px 0; }.wb-reference .wb-results-collapsed { grid-template-columns:minmax(0,1fr) 48px; }.wb-reference .pd-project-facts button { gap:8px; padding:13px 10px; grid-template-columns:30px minmax(0,1fr) 14px; }.pd-project-facts b { font-size:22px; margin-right:7px; }.wb-reference .wb-project-center .pd-detail-tabs { gap:16px; } }
+@media(max-width:1400px) { .wb-reference .wb-project-layout { grid-template-columns:minmax(0,1fr) 284px; }.wb-reference .wb-project-center { padding:20px 22px 0; }.wb-reference .wb-results-collapsed { grid-template-columns:minmax(0,1fr) 48px; }.wb-reference .pd-project-facts button { gap:8px; padding:13px 10px; grid-template-columns:30px minmax(0,1fr) 14px; }.pd-project-facts b { font-size:22px; margin-right:7px; }.wb-reference .wb-project-center .pd-detail-tabs { gap:16px; } }
 @media(max-width:1100px) { .workbuddy-product .wb-page { overflow-x:auto; }.wb-reference .wb-project-center .pd-project-statusline > div:nth-child(n+3) { display:grid; }.wb-reference .wb-task-label,.wb-reference .wb-search { display:flex; }.wb-reference .wb-task-list { display:block; }.wb-reference .wb-links a,.wb-reference .wb-navigation-foot a,.wb-reference .wb-new-task { font-size:14px; justify-content:initial; }.wb-reference .wb-new-task { justify-content:center; } }

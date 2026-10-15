@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../api";
 import { CenterLink, Field } from "../shared";
 import { artifactDownload, artifactHistoryDownload, continueConversation, createConversationTask, draftDownload, draftHistoryDownload, getDraftOutputs, getTask, getTaskHistory, listTasks, updateTask, uploadSource } from "./product-api";
@@ -7,6 +7,7 @@ import "./product-workspace.css";
 import ProjectStages from "./ProjectStages";
 import { SOURCE_ACCEPT, updateSource } from "./product-api";
 import { outputStatus, useUnsavedWarning } from "./workbench-state";
+import { outputBasisChanged, stableTaskSnapshot } from './project-refresh';
 
 const pretty = (value: unknown) => JSON.stringify(value, null, 2);
 const emptyInput = (): TaskInput => ({ project: "", requirements: "", items: [], background: "", conditions: [] });
@@ -178,6 +179,7 @@ function TaskWorkspace() {
 export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, business = false }: { id: string; requestedArtifact: string; deepLinked: boolean; onFatal: (message: string) => void; business?: boolean }) {
   const [task, setTask] = useState<DocumentTask | null>(null);
   const [outputs, setOutputs] = useState<DraftOutput[]>([]);
+  const [outputsLoaded, setOutputsLoaded] = useState(false);
   const [outputsError, setOutputsError] = useState("");
   const [history, setHistory] = useState<TaskHistory | null>(null);
   const [historyError, setHistoryError] = useState("");
@@ -207,28 +209,43 @@ export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, busines
   const mutation = useRef<AbortController | null>(null);
   const reading = useRef<AbortController | null>(null);
   const related = useRef<AbortController | null>(null);
-  function receive(result: DocumentTask) {
+  const snapshot = useRef<DocumentTask | null>(null);
+  const hideInaccessible = useCallback((reason: unknown) => {
+    if (!(reason instanceof ApiError) || ![401, 403, 404].includes(reason.status)) return false;
+    reading.current?.abort(); related.current?.abort(); mutation.current?.abort();
+    snapshot.current = null; setTask(null); setOutputs([]); setHistory(null);
+    if (business || deepLinked) onFatal("项目访问权限已变化，当前资料已隐藏。");
+    return true;
+  }, [business, deepLinked, onFatal]);
+  const receive = useCallback((result: DocumentTask) => {
     if (requestedArtifact && !result.artifacts.some(item => String(item.id) === requestedArtifact)) {
+      related.current?.abort(); snapshot.current = null; setOutputs([]); setHistory(null);
       setTask(null); onFatal("指定成果不存在、无权访问或不属于当前产品任务。");
       return;
     }
-    setTask(result);
+    const invalidated = outputBasisChanged(snapshot.current, result);
+    snapshot.current = stableTaskSnapshot(snapshot.current, result);
+    setTask(snapshot.current);
     related.current?.abort();
-    setOutputs([]); setHistory(null); setOutputsError(""); setHistoryError("");
+    if (invalidated) { setOutputs([]); setHistory(null); }
     const controller = new AbortController();
     related.current = controller;
     void getDraftOutputs(id, controller.signal).then(data => {
       if (!controller.signal.aborted) {
-        if (data.task_version === result.version) setOutputs(Array.isArray(data.outputs) ? data.outputs : []);
-        else setOutputsError("成果版本已变化，请刷新项目状态后重新读取。");
+        if (data.task_version === result.version) {
+          const next = Array.isArray(data.outputs) ? data.outputs : [];
+          setOutputs(previous => JSON.stringify(previous) === JSON.stringify(next) ? previous : next);
+          setOutputsLoaded(true); setOutputsError("");
+        } else { setOutputs([]); setOutputsError("成果版本已变化，请刷新项目状态后重新读取。"); }
       }
-    }).catch(reason => { if (!controller.signal.aborted) { setOutputs([]); setOutputsError(errorMessage(reason)); } });
+    }).catch(reason => { if (!controller.signal.aborted) { hideInaccessible(reason); setOutputsError(errorMessage(reason)); } });
     void getTaskHistory(id, controller.signal).then(data => {
       if (!controller.signal.aborted) {
-        if (data.task_version === result.version) setHistory(data);
-        else setHistoryError("版本链已变化，请刷新项目状态后重新读取。");
+        if (data.task_version === result.version) {
+          setHistory(previous => JSON.stringify(previous) === JSON.stringify(data) ? previous : data); setHistoryError("");
+        } else { setHistory(null); setHistoryError("版本链已变化，请刷新项目状态后重新读取。"); }
       }
-    }).catch(reason => { if (!controller.signal.aborted) { setHistory(null); setHistoryError(errorMessage(reason)); } });
+    }).catch(reason => { if (!controller.signal.aborted) { hideInaccessible(reason); setHistoryError(errorMessage(reason)); } });
     if (!initial.current) {
       initial.current = true;
       setTitle(result.title); setInput(pretty(editableInput(result.input || emptyInput()))); setBlueprint(pretty(result.blueprint?.payload || emptyBlueprint));
@@ -236,7 +253,7 @@ export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, busines
         setArtifactId(requestedArtifact);
       }
     }
-  }
+  }, [id, requestedArtifact, onFatal, hideInaccessible]);
   useEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; reading.current?.abort(); related.current?.abort(); mutation.current?.abort(); };
@@ -249,11 +266,12 @@ export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, busines
       receive(result);
     })
       .catch(reason => { if (!controller.signal.aborted) {
+        hideInaccessible(reason);
         if (deepLinked) onFatal("指定产品任务或成果不存在，或当前账号无权访问。");
         else setError(errorMessage(reason));
       } });
     return () => controller.abort();
-  }, [id, requestedArtifact, deepLinked, onFatal]);
+  }, [id, requestedArtifact, deepLinked, onFatal, receive, hideInaccessible]);
   useEffect(() => {
     if (!task || !active(task) || busy || conflict) return;
     const controller = new AbortController();
@@ -262,15 +280,15 @@ export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, busines
       void getTask(id, controller.signal).then(result => { if (!controller.signal.aborted) receive(result); })
         .catch(reason => { if (!controller.signal.aborted) {
           setError(errorMessage(reason));
-          if (business && reason instanceof ApiError && [401, 403, 404].includes(reason.status)) { setTask(null); onFatal("项目访问权限已变化，当前资料已隐藏。"); }
+          hideInaccessible(reason);
         } })
         .finally(() => { if (!controller.signal.aborted) setPollRound(value => value + 1); });
     }, 3000);
     return () => { clearTimeout(timer); controller.abort(); };
-  }, [task, id, busy, conflict, pollRound]);
+  }, [task, id, busy, conflict, pollRound, receive, hideInaccessible]);
   async function perform(work: (signal: AbortSignal) => Promise<unknown>, reloading = false) {
     if (locked.current) return;
-    locked.current = true; setBusy(true); setError(""); setNotice(""); reading.current?.abort();
+    locked.current = true; setBusy(true); setError(""); setNotice(""); reading.current?.abort(); related.current?.abort();
     const controller = new AbortController(); mutation.current = controller;
     try {
       await work(controller.signal);
@@ -285,15 +303,16 @@ export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, busines
       if (!controller.signal.aborted && mounted.current) {
         setError(errorMessage(reason));
         if (reason instanceof ApiError && reason.status === 409) setConflict(true);
-        if (business && reason instanceof ApiError && [401, 403, 404].includes(reason.status)) { setTask(null); onFatal("项目访问权限已变化，当前资料已隐藏。"); }
+        hideInaccessible(reason);
       }
       return false;
     } finally { locked.current = false; if (mounted.current) setBusy(false); }
   }
   // Idle project pages still revalidate object-level grants and reviewer changes.
   // Versioned child editors keep their own draft and refuse to overwrite newer data.
+  const taskState = task?.state;
   useEffect(() => {
-    if (!business || !task || busy || active(task)) return;
+    if (!business || !taskState || busy || ['queued', 'running'].includes(taskState.toLowerCase())) return;
     let controller: AbortController | null = null;
     const refreshAccess = () => {
       if (document.hidden || locked.current) return;
@@ -302,14 +321,14 @@ export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, busines
       void getTask(id, request.signal).then(next => { if (!request.signal.aborted) receive(next); }).catch(reason => {
         if (request.signal.aborted) return;
         setError(errorMessage(reason));
-        if (reason instanceof ApiError && [401, 403, 404].includes(reason.status)) { setTask(null); onFatal("项目访问权限已变化，当前资料已隐藏。"); }
+        hideInaccessible(reason);
       });
     };
     const timer = window.setInterval(refreshAccess, 20000);
     window.addEventListener("focus", refreshAccess);
     document.addEventListener("visibilitychange", refreshAccess);
     return () => { controller?.abort(); window.clearInterval(timer); window.removeEventListener("focus", refreshAccess); document.removeEventListener("visibilitychange", refreshAccess); };
-  }, [business, id, busy, task?.state, task?.version]);
+  }, [business, id, busy, taskState, task?.version, receive, hideInaccessible]);
 
   if (!task) return <section className="center-panel">{error ? <><p role="alert">{error}</p><button disabled={busy} onClick={() => void perform(async () => {}, true)}>重新加载服务端状态</button></> : <p role="status">正在加载任务…</p>}</section>;
   const allows = (action: string) => Array.isArray(task.actions) ? task.actions.includes(action) : task.actions?.[action] === true;
@@ -345,7 +364,7 @@ export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, busines
   }
   async function continueTask() {
     if (locked.current || !task || conflict || disabled("add_source") || (!conversationMessage.trim() && conversationFiles.length === 0)) return;
-    locked.current = true; setBusy(true); setConversationError(""); reading.current?.abort();
+    locked.current = true; setBusy(true); setConversationError(""); reading.current?.abort(); related.current?.abort();
     const controller = new AbortController(); mutation.current = controller;
     try {
       let nextTask = task;
@@ -367,7 +386,7 @@ export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, busines
       if (!controller.signal.aborted && mounted.current) {
         setConversationError(errorMessage(reason));
         if (reason instanceof ApiError && reason.status === 409) setConflict(true);
-        if (business && reason instanceof ApiError && [401, 403, 404].includes(reason.status)) { setTask(null); onFatal("项目访问权限已变化，当前资料已隐藏。"); }
+        hideInaccessible(reason);
       }
     } finally { locked.current = false; if (mounted.current) setBusy(false); }
   }
@@ -377,7 +396,7 @@ export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, busines
   }
   if (business) return <>
     {error && <div className="pd-feedback" role="alert">{error}</div>}{notice && <p className="pd-inline-notice" role="status">{notice}</p>}
-    <ProjectStages task={task} outputs={outputs} history={history} outputsError={outputsError} historyError={historyError} busy={busy} conflict={conflict} disabled={disabled} onAction={send} onReload={() => void perform(async () => {}, true)} onUpload={(file, purpose) => perform(signal => uploadSource(id, file, task.version, signal, purpose))} onSourceAction={(sourceId, endpoint, body) => perform(signal => updateSource(sourceId, endpoint, body, signal))} composer={<form className="product-composer wb-followup" onSubmit={event => { event.preventDefault(); void continueTask(); }}>
+    <ProjectStages task={task} outputs={outputs} outputsLoaded={outputsLoaded} history={history} outputsError={outputsError} historyError={historyError} busy={busy} conflict={conflict} disabled={disabled} onAction={send} onReload={() => void perform(async () => {}, true)} onUpload={(file, purpose) => perform(signal => uploadSource(id, file, task.version, signal, purpose))} onSourceAction={(sourceId, endpoint, body) => perform(signal => updateSource(sourceId, endpoint, body, signal))} composer={<form className="product-composer wb-followup" onSubmit={event => { event.preventDefault(); void continueTask(); }}>
       {conversationError && <p role="alert">{conversationError}</p>}
       {conversationAccepted && conversationFiles.length > 0 && <p role="note">补充要求已保存，继续上传剩余 {conversationFiles.length} 份资料。</p>}
       <label className="sr-only" htmlFor={`wb-message-${id}`}>补充项目要求或资料路径</label><textarea id={`wb-message-${id}`} rows={2} maxLength={10000} placeholder={disabled('add_source') ? '当前阶段暂不可补充资料，请查看处理进度或审核提示。' : '继续补充项目要求、资料路径或上传附件…'} value={conversationMessage} disabled={disabled('add_source') || conversationAccepted} onChange={event => setConversationMessage(event.target.value)}/>
@@ -410,7 +429,7 @@ export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, busines
         return <article className={`product-output-card ${latest?.current ? "ready" : "locked"}`} key={family}>
           <strong>{outputLabels[family]}</strong>
           <span>{latest ? `${latest.draft ? "草稿" : "成果"} v${latest.version} · ${outputStatus(latest)} · ${latest.sha256.slice(0, 12)}` : "尚未生成"}</span>
-          {latest?.current && <a href={family === "technical-solution" ? artifactDownload(latest.id) : draftDownload(latest.id)}>下载当前文件</a>}
+          {!outputsError && latest?.current && !latest.stale && <a href={family === "technical-solution" ? artifactDownload(latest.id) : draftDownload(latest.id)}>下载当前文件</a>}
           {latest?.content_version != null && <small>内容 v{latest.content_version} · 已生成</small>}
           {latest?.source_versions.length ? <small>来源：{latest.source_versions.map(source => `${outputLabels[source.family as keyof typeof outputLabels] || source.family} v${source.version}`).join("、")}</small> : null}
         </article>;
@@ -481,9 +500,9 @@ export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, busines
     {historyError && <p role="alert">版本链读取失败：{historyError}</p>}
     <ul aria-label="成果历史版本">{outputs.map(item => <li key={item.id}>
       {outputLabels[item.family]} v{item.version} · {outputStatus(item)} · SHA256：{item.sha256}
-      <a href={item.family === "technical-solution" ? item.current ? artifactDownload(item.id) : artifactHistoryDownload(item.id) : item.current ? draftDownload(item.id) : draftHistoryDownload(item.id)} download>
+      {!outputsError && <a href={item.family === "technical-solution" ? item.current ? artifactDownload(item.id) : artifactHistoryDownload(item.id) : item.current ? draftDownload(item.id) : draftHistoryDownload(item.id)} download>
         下载{item.current ? "当前" : "历史文件（已过期）"}{outputLabels[item.family]} v{item.version}
-      </a>
+      </a>}
     </li>)}</ul>
     <details><summary>查看版本与来源链</summary><p>服务端记录为应用级只读历史，不宣称法证级不可篡改。</p><ul aria-label="版本来源链">{(history?.timeline || []).filter(item => item.event === "revision").map(item => <li key={item.id}>{item.family ? `${outputLabels[item.family] || item.family} · ` : ""}{item.kind} v{item.version} · SHA256：{item.sha256} · 原因：{item.reason || "未提供"} · 操作者：{item.actor?.name || "未提供"} · 来源：{item.source_refs?.join("、") || "无"}</li>)}</ul></details>
     <h3>后台任务控制</h3>

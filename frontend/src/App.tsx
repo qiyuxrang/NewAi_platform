@@ -9,7 +9,6 @@ import SkillStore from './pages/SkillStore'
 import Channels from './pages/Channels'
 import AIModels from './pages/AIModels'
 import Sessions from './pages/Sessions'
-import Chat from './pages/Chat'
 import CronJobs from './pages/CronJobs'
 import FileManager from './pages/FileManager'
 import KnowledgeBase from './pages/KnowledgeBase'
@@ -24,7 +23,7 @@ import SettingsHome from './pages/SettingsHome'
 import BusinessLink from './pages/BusinessLink'
 import { EnterpriseAccountStatus, EnterpriseProvider } from './components/EnterpriseContext'
 import { useEnterprise } from './components/enterprise-context'
-import { canAccessDepartment, canAccessSetting } from './enterprise-navigation'
+import { canAccessDepartment, canAccessSetting, canAccessFinanceBoard, canAccessEntry } from './enterprise-navigation'
 import { isLoggedIn } from './lib/api'
 
 function RequireAuth({ children }: { children: React.ReactNode }) {
@@ -34,9 +33,9 @@ function RequireAuth({ children }: { children: React.ReactNode }) {
 
 function RequirePermission({ children, setting }: { children: React.ReactNode; setting?: string }) {
   const { user, loading, error } = useEnterprise()
-  const { department } = useParams()
+  const { department, feature } = useParams()
   if (loading || error) return <EnterpriseAccountStatus />
-  const allowed = setting ? canAccessSetting(user, setting) : canAccessDepartment(user, department ?? '')
+  const allowed = setting ? canAccessSetting(user, setting) : department === 'business' && feature === 'finance' ? canAccessFinanceBoard(user) : feature === 'entry' ? canAccessEntry(user, department ?? '') : canAccessDepartment(user, department ?? '')
   if (!allowed) return <div role="alert" className="rounded-xl border border-dark-border bg-dark-card p-6 text-dark-text">
     <h1 className="text-lg font-semibold">没有访问权限</h1>
     <p className="mt-2 text-sm text-dark-text-secondary">当前账号未获此功能授权，请联系管理员。</p>
@@ -57,7 +56,7 @@ export default function App() {
         <Route path="agents" element={<RequirePermission setting="personal"><Agents /></RequirePermission>} />
         <Route path="agents/create" element={<RequirePermission setting="personal"><AgentCreate /></RequirePermission>} />
         <Route path="agents/:id" element={<RequirePermission setting="personal"><AgentDetail /></RequirePermission>} />
-        <Route path="chat" element={<Chat />} />
+        <Route path="chat" element={<Navigate to="/dashboard" replace />} />
         <Route path="skills" element={<RequirePermission setting="personal"><SkillStore /></RequirePermission>} />
         <Route path="channels" element={<RequirePermission setting="admin"><Channels /></RequirePermission>} />
         <Route path="plugins" element={<RequirePermission setting="admin"><Plugins /></RequirePermission>} />

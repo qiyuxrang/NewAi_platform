@@ -92,6 +92,14 @@ async def portal_profile(client: httpx.AsyncClient, expected_id: int | None = No
         departments = [mapping[code] for code in mapping if code in enabled]
         primary = profile.get("department_code")
         primary = mapping.get(primary, primary) if isinstance(primary, str) else None
+        if primary == "finance" and "business" in enabled and "general_manager" not in roles:
+            # The portal's business module may come from a different ledger grant.
+            permissions = json_response(await client.get("/api/business/ledgers/permissions/"), dict)
+            grants = permissions.get("departments")
+            if not isinstance(grants, list):
+                raise HTTPException(502, "企业业务身份响应异常")
+            if any(isinstance(grant, dict) and grant.get("department") == "finance" for grant in grants):
+                departments.append("finance")
         department = primary if primary in departments else next(iter(departments), None)
         role = "employee" if department else "unassigned"
     return {"portal_user_id": portal_id, "business_role": role, "department_code": department}, enabled

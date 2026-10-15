@@ -33,6 +33,27 @@ class ProductDiagramOutputRetryTests(PortalTestCase):
         return {"content": json.dumps({"diagrams": [item]}, ensure_ascii=False)}
 
     @patch("portal.product_worker.generate_for_use")
+    def test_real_render_feedback_keeps_budget_and_cannot_fall_back_to_excerpt(self, model):
+        task_id, fence, attempt_id = self.claimed()
+        document = self.document()
+        feedback = {"figure_id": "DIAGRAM_01_FIGURE", "reason": "diagram_layout_unreadable",
+                    "previous_source": json.loads(self.reply()["content"])["diagrams"][0]["source"]}
+        document["diagram_render_feedback"] = feedback
+        invalid = json.loads(self.reply()["content"])
+        invalid["diagrams"][0]["source"] += '\nclick A1 "https://external.invalid"'
+        model.return_value = {"content": json.dumps(invalid, ensure_ascii=False)}
+        with self.assertRaises(ExecutionError) as rejected:
+            _generate_diagrams(task_id, fence, attempt_id, document, draft=True)
+        self.assertEqual(rejected.exception.code, "diagram_generation_invalid")
+        self.assertEqual(model.call_count, 2)
+        request = json.loads(model.call_args_list[0].args[2][1]["content"])
+        self.assertEqual(request["render_feedback"], feedback)
+        self.assertIn("优先在单页完整呈现", request["instruction"])
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.attempts.get(pk=attempt_id).model_calls, 2)
+        self.assertFalse(any("diagram_excerpt_fallback" in call for call in self.task.checkpoint["calls"]))
+
+    @patch("portal.product_worker.generate_for_use")
     def test_draft_excerpt_after_two_rejections_keeps_real_refs_and_pending_evidence(self, model):
         task_id, fence, attempt_id = self.claimed()
         document = self.document()
@@ -62,7 +83,7 @@ class ProductDiagramOutputRetryTests(PortalTestCase):
             retained = []
             _diagram_sources(document, lambda _: excerpts, draft=True, quality_issues=retained)
         self.assertEqual(retained, warnings)
-        self.assertIn("尚未人工批准", document["pending"][-1]["text"])
+        self.assertEqual(document["pending"], [])
         self.task.refresh_from_db()
         calls = self.task.checkpoint["calls"]
         self.assertTrue(all(call.get("parse_error") == "invalid_model_output" for call in calls[-2:]))
@@ -109,7 +130,7 @@ class ProductDiagramOutputRetryTests(PortalTestCase):
                 patch("portal.product_documents.apply_diagram_descriptions"):
             self.assertEqual(_diagram_sources(document, lambda _: normalized, draft=True, quality_issues=downstream), normalized)
         self.assertEqual(downstream, findings)
-        self.assertIn("尚未人工批准", document["pending"][-1]["text"])
+        self.assertEqual(document["pending"], [])
         self.assertNotIn("diagram_quality_issues", document)
         for source in (original_source + "\nclick B2 \"https://external.invalid\"",
                        original_source + "\nstyle B2 fill:url(javascript:evil)",
@@ -241,6 +262,23 @@ class ProductDiagramOutputRetryTests(PortalTestCase):
         self.assertTrue(self.task.checkpoint["calls"][-1]["response_validated"])
         self.assertEqual(self.task.attempts.get(pk=attempt_id).model_calls, 2)
         self.assertFalse(self.task.artifacts.exists())
+
+    @patch("portal.product_worker.generate_for_use")
+    def test_single_node_uses_existing_bounded_quality_correction(self, model):
+        task_id, fence, attempt_id = self.claimed()
+        invalid = json.loads(self.reply()["content"])
+        invalid["diagrams"][0]["source"] = 'flowchart TB\nA1["权限控制"]'
+        model.side_effect = [{"content": json.dumps(invalid, ensure_ascii=False)}, self.reply()]
+        diagrams = _generate_diagrams(task_id, fence, attempt_id, self.document())
+        self.assertEqual(len(diagrams), 1)
+        self.assertEqual(model.call_count, 2)
+        correction = json.loads(model.call_args_list[1].args[2][1]["content"])
+        self.assertIn("diagram_structure_quality", json.dumps(correction))
+        self.task.refresh_from_db()
+        calls = self.task.checkpoint["calls"]
+        self.assertEqual(calls[-2]["quality_issues"][0]["figure_id"], "DIAGRAM_01_FIGURE")
+        self.assertEqual(calls[-2]["quality_issues"][0]["field"], "source")
+        self.assertTrue(calls[-1]["response_validated"])
 
     @patch("portal.product_worker.generate_for_use")
     def test_anchor_correction_cannot_replace_figure_id_or_use_foreign_evidence(self, model):

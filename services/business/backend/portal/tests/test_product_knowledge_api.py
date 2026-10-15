@@ -40,6 +40,8 @@ class _ProductKnowledgeApiFixture:
         self.addCleanup(settings.disable)
         self.factory = APIRequestFactory()
         self.ready = self.start_patch("portal.product_knowledge_service.ready", return_value=CONFIG)
+        self.assistant_ready = self.start_patch("portal.product_knowledge_service.assistant_ready", return_value=CONFIG[2])
+        self.configuration = self.start_patch("portal.product_knowledge_service.configuration", return_value=CONFIG)
         self.outbound = self.start_patch("portal.product_knowledge_service._open",
                                         side_effect=lambda *args: Response(wire()))
         self.gateway = self.start_patch("portal.model_gateway.generate_for_use", return_value={
@@ -108,24 +110,65 @@ class ProductKnowledgeApiTests(_ProductKnowledgeApiFixture, PortalTestCase):
     def test_streaming_question_emits_incremental_answer_and_commits_only_on_completion(self):
         item = self.create()
         raw = json.dumps({"answer": "项目甲与网络安全有关。", "source_ids": ["S1"]}, ensure_ascii=False)
+        payload = {"question": "项目有哪些？", "version": 0,
+                   "request_id": str(uuid.uuid4()), "stream": True}
         with patch("portal.model_gateway.stream_for_use", return_value=iter([
                 {"delta": raw[:20]}, {"delta": raw[20:]},
-                {"done": True, "prompt_tokens": 10, "completion_tokens": 20}])):
-            request = self.factory.post("/api/product/knowledge/", {
-                "question": "项目有哪些？", "version": 0, "request_id": str(uuid.uuid4()), "stream": True}, format="json")
+                {"done": True, "prompt_tokens": 10, "completion_tokens": 20}])) as stream:
+            request = self.factory.post("/api/product/knowledge/", payload, format="json",
+                                        HTTP_ACCEPT="text/event-stream, application/json")
             force_authenticate(request, user=self.owner)
             response = api.conversation(request, conversation_id=item.pk)
             self.assertEqual(response.status_code, 200)
+            self.assertTrue(response["Content-Type"].startswith("text/event-stream"))
             self.assertEqual(response["Cache-Control"], "private, no-store")
+            item.refresh_from_db()
+            self.assertEqual(item.version, 0)
+            self.assertEqual(item.turns, [])
             events = [json.loads(line[6:]) for chunk in response.streaming_content
                       for line in chunk.decode().splitlines() if line.startswith("data: ")]
+            request = self.factory.post("/api/product/knowledge/", payload, format="json",
+                                        HTTP_ACCEPT="text/event-stream, application/json")
+            force_authenticate(request, user=self.owner)
+            replay = api.conversation(request, conversation_id=item.pk)
+            self.assertEqual(replay.status_code, 200)
+            replay_events = [json.loads(line[6:]) for chunk in replay.streaming_content
+                             for line in chunk.decode().splitlines() if line.startswith("data: ")]
+            self.assertEqual(replay_events, [events[-1]])
+            stream.assert_called_once()
+        self.outbound.assert_called_once()
+        self.gateway.assert_not_called()
         self.assertTrue(any("delta" in event for event in events))
         self.assertIn("项目甲", "".join(event.get("delta", "") for event in events))
         self.assertIn("done", events[-1])
         self.assertEqual(len(events[-1]["done"]["turns"]), 1)
         item.refresh_from_db()
         self.assertEqual(item.version, 1)
+        self.assertEqual(len(item.turns), 1)
         self.assertIsNone(item.pending_id)
+
+    def test_stream_accept_preserves_json_errors_without_retrieval_or_answer(self):
+        item = self.create()
+        good = {"question": "问题", "version": 0, "request_id": str(uuid.uuid4()), "stream": True}
+        cases = ((self.denied, good, 403, "forbidden"),
+                 (self.other, good, 404, "not_found"),
+                 (self.owner, {**good, "question": " "}, 400, "invalid_request"),
+                 (self.owner, {**good, "version": 1}, 409, "conflict"))
+        with patch("portal.model_gateway.stream_for_use") as stream:
+            for user, payload, status, code in cases:
+                with self.subTest(status=status):
+                    request = self.factory.post("/api/product/knowledge/", payload, format="json",
+                                                HTTP_ACCEPT="text/event-stream, application/json")
+                    force_authenticate(request, user=user)
+                    response = api.conversation(request, conversation_id=item.pk)
+                    response.render()
+                    self.assertEqual(response.status_code, status)
+                    self.assertTrue(response["Content-Type"].startswith("application/json"))
+                    self.assertEqual(json.loads(response.content)["code"], code)
+                    self.assert_unchanged(item)
+            stream.assert_not_called()
+        self.outbound.assert_not_called()
+        self.gateway.assert_not_called()
 
     def test_stream_rechecks_scope_and_route_before_releasing_next_chunk(self):
         for change in ("scope", "route"):
@@ -149,7 +192,8 @@ class ProductKnowledgeApiTests(_ProductKnowledgeApiFixture, PortalTestCase):
 
                 with patch("portal.model_gateway.stream_for_use", return_value=provider_events()):
                     request = self.factory.post("/api/product/knowledge/", {
-                        "question": "问题", "version": 0, "request_id": str(uuid.uuid4()), "stream": True}, format="json")
+                        "question": "问题", "version": 0, "request_id": str(uuid.uuid4()), "stream": True}, format="json",
+                        HTTP_ACCEPT="text/event-stream, application/json")
                     force_authenticate(request, user=self.owner)
                     response = api.conversation(request, conversation_id=item.pk)
                     events = [json.loads(line[6:]) for chunk in response.streaming_content
@@ -164,7 +208,8 @@ class ProductKnowledgeApiTests(_ProductKnowledgeApiFixture, PortalTestCase):
         item = self.create()
         with patch("portal.model_gateway.stream_for_use", return_value=iter([{"delta": '{"answer":"未完成"'}])):
             request = self.factory.post("/api/product/knowledge/", {
-                "question": "问题", "version": 0, "request_id": str(uuid.uuid4()), "stream": True}, format="json")
+                "question": "问题", "version": 0, "request_id": str(uuid.uuid4()), "stream": True}, format="json",
+                HTTP_ACCEPT="text/event-stream, application/json")
             force_authenticate(request, user=self.owner)
             response = api.conversation(request, conversation_id=item.pk)
             events = [json.loads(line[6:]) for chunk in response.streaming_content
@@ -183,17 +228,19 @@ class ProductKnowledgeApiTests(_ProductKnowledgeApiFixture, PortalTestCase):
         self.assertEqual(self.request(api.status).status_code, 403)
         self.outbound.assert_not_called()
 
-    def test_unconfigured_status_and_creation_fail_without_external_calls(self):
+    def test_unconfigured_capabilities_keep_conversation_access_without_external_calls(self):
         for code in ("disabled", "unconfigured"):
             self.ready.side_effect = ProductError(code, "not ready", 503)
+            self.configuration.side_effect = ProductError(code, "not ready", 503)
+            self.assistant_ready.side_effect = ProductError(code, "not ready", 503)
             status = self.request(api.status)
             self.assertEqual(status.status_code, 200)
-            self.assertEqual(status.data["available"], False)
-            self.assertEqual(status.data["code"], code)
-            denied = self.request(api.conversations, "post", {})
-            self.assertEqual(denied.status_code, 503)
-            self.assertEqual(denied.data["code"], code)
-        self.assertEqual(Conversation.objects.count(), 0)
+            self.assertTrue(status.data["available"])
+            self.assertFalse(status.data["knowledge"]["available"])
+            self.assertFalse(status.data["assistant"]["available"])
+            self.assertEqual(status.data["assistant"]["code"], code)
+            self.assertEqual(self.request(api.conversations, "post", {}).status_code, 201)
+        self.assertEqual(Conversation.objects.count(), 2)
         self.outbound.assert_not_called()
         self.gateway.assert_not_called()
 
@@ -483,7 +530,8 @@ class ProductKnowledgeStreamLifecycleTests(_ProductKnowledgeApiFixture, Transact
 
         with patch("portal.model_gateway.stream_for_use", return_value=events()):
             request = self.factory.post("/api/product/knowledge/", {
-                "question": "问题", "version": 0, "request_id": str(uuid.uuid4()), "stream": True}, format="json")
+                "question": "问题", "version": 0, "request_id": str(uuid.uuid4()), "stream": True}, format="json",
+                HTTP_ACCEPT="text/event-stream, application/json")
             force_authenticate(request, user=self.owner)
             response = api.conversation(request, conversation_id=item.pk)
             self.assertIn(b'data: {"delta":', next(iter(response.streaming_content)))

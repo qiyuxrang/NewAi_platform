@@ -17,6 +17,11 @@ RUN pnpm install --frozen-lockfile --ignore-scripts
 COPY backend/portal/product_assets/mermaid-runtime/build.mjs backend/portal/product_assets/mermaid-runtime/browser-entry.mjs backend/portal/product_assets/mermaid-runtime/bundle-contract.mjs ./
 RUN pnpm build && pnpm prune --prod --ignore-scripts
 
+WORKDIR /build/harness
+COPY harness/package.json harness/package-lock.json ./
+RUN npm ci --omit=dev --ignore-scripts --registry=https://registry.npmjs.org
+COPY harness/runner.mjs ./
+
 FROM ghcr.io/astral-sh/uv:0.11.17@sha256:03bdc89bb9798628846e60c3a9ad19006c8c3c724ccd2985a33145c039a0577b AS uv
 
 FROM python:3.13-slim@sha256:9d2e5553305c7c7b0097999bb17187c69b921ccd6bc9d40e4bb5ebe652c00285 AS runtime
@@ -51,6 +56,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends chromium fonts-
     && rm -rf /root/.cache/uv
 
 COPY --from=mermaid-build /usr/local/bin/node /usr/local/bin/node
+COPY --from=mermaid-build /build/harness /app/harness
 COPY --from=mermaid-build /build/mermaid/node_modules /app/backend/portal/product_assets/mermaid-runtime/node_modules
 
 RUN groupadd --system --gid 10001 portal \

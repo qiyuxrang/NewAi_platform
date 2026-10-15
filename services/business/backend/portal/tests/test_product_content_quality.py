@@ -25,6 +25,69 @@ class ProductContentQualityTests(SimpleTestCase):
     def inspect(self, *paragraphs, facts=FACTS, references=None):
         return inspect_content_quality(paragraphs, project_facts=facts, source_context=references)
 
+    def test_electrical_specifications_bind_original_site_object_and_value(self):
+        material = ("[工作表 供配电设备 · A2:E2 · b2]\n（一）原煤仓配电室\n"
+                    "1\t干式变压器\tSCBH19-400kVA 10/0.69kV 400kVA\t台\t2\n"
+                    "（二）电气综合楼配电室\n"
+                    "2\t干式变压器\tSCBH19-2000kVA 10/0.69kV 2000kVA\t台\t4\n"
+                    "4\t干式变压器\tSCBH19-315kVA 10/0.4kV 315kVA\t台\t2\n"
+                    "3\t滤波柜\t250A\t台\t4")
+        facts = {"source_materials": [{"source_id": "original-company-file", "text": material}]}
+        for text in ("原煤仓配电室的SCBH19-400kVA干式变压器需核对铭牌。",
+                     "电气综合楼配电室的SCBH19-2000kVA干式变压器需核对铭牌。",
+                     "原煤仓配电室干式变压器的额定容量为400kVA。",
+                     "电气综合楼配电室滤波柜额定电流为250A。",
+                     "电气综合楼配置了250A滤波柜。",
+                     "以干式变压器为例，原煤仓配电室列有SCBH19-400kVA设备。",
+                     "电气综合楼配电室列有SCBH19-2000kVA及SCBH19-315kVA干式变压器。"):
+            with self.subTest(text=text):
+                self.assertEqual(unsupported_numeric_claims([text], project_facts=facts), [])
+        for text in ("原煤仓配电室的SCBH19-2000kVA干式变压器需核对铭牌。",
+                     "电气综合楼配电室的SCBH19-400kVA干式变压器需核对铭牌。",
+                     "原煤仓下配置了250A滤波柜。",
+                     "原煤仓配电室滤波柜额定电流为250A。",
+                     "电气综合楼配电室开关柜额定电流为250A。",
+                     "电气综合楼配电室滤波柜额定电压为250A。",
+                     "电气综合楼配电室滤波柜额定电流为400A。",
+                     "以滤波柜为例，原煤仓配电室列有SCBH19-400kVA设备。",
+                     "以干式变压器为例，电气综合楼配电室列有SCBH19-400kVA设备。",
+                     "以干式变压器为例，原煤仓配电室开关柜列有SCBH19-400kVA设备。",
+                     "电气综合楼配电室列有SCBH19-400kVA及SCBH19-315kVA干式变压器。",
+                     "原煤仓配电室的SCBH19-400kVA干式变压器数量为3台。",
+                     "原煤仓配电室干式变压器需核查，产品仓下配电室配置250A滤波柜。",
+                     "电气综合楼配电室干式变压器需核查。滤波柜容量为250GB。"):
+            with self.subTest(text=text):
+                self.assertTrue(unsupported_numeric_claims([text], project_facts=facts))
+        for public in ({"kind": "public"}, {"fact_scope": "PUBLIC_REFERENCE"}, {"reference_only": True}):
+            excluded = {"source_materials": [{**public, "text": material}]}
+            self.assertTrue(unsupported_numeric_claims(
+                ["电气综合楼配电室滤波柜额定电流为250A。"], project_facts=excluded))
+        unscoped = {"source_materials": [{"text": "3\t滤波柜\t250A\t台\t4"}]}
+        self.assertTrue(unsupported_numeric_claims(
+            ["电气综合楼配电室滤波柜额定电流为250A。"], project_facts=unscoped))
+
+    def test_shared_example_equipment_list_keeps_site_value_and_quantity_boundaries(self):
+        facts = {"source_materials": [{"text": "（一）原煤仓配电室\n"
+                 "1\t干式变压器\tSCBH19-400kVA\t台\t2\n（二）电气综合楼配电室\n"
+                 "2\t干式变压器\tSCBH19-2000kVA\t台\t4\n"
+                 "3\t干式变压器\tSCBH19-315kVA\t台\t2"}]}
+        text = ("以干式变压器为例，原煤仓配电室列有SCBH19-400kVA设备2台，"
+                "电气综合楼配电室列有SCBH19-2000kVA设备4台及SCBH19-315kVA设备2台。")
+        self.assertEqual([issue["parameter"] for issue in unsupported_numeric_claims([text], project_facts=facts)],
+                         ["2", "4", "2"])
+        for changed in (text.replace("315kVA", "400kVA"),
+                        text.replace("以干式变压器为例", "以滤波柜为例"),
+                        text.replace("设备4台及", "设备4台及原煤仓配电室列有")):
+            with self.subTest(text=changed):
+                self.assertTrue(any(issue["parameter"] in {"19", "400", "315"}
+                                    for issue in unsupported_numeric_claims([changed], project_facts=facts)))
+
+    def test_timestamp_word_boundary_does_not_turn_microseconds_into_seconds(self):
+        self.assertEqual(self.inspect("若涉及跨站联锁，微秒级时间戳差异可能导致逻辑误判。"), [])
+        self.assertTrue(self.inspect("平台实现秒级识别。"))
+        self.assertTrue(self.inspect("系统必须连续72小时高负载运行。"))
+        self.assertTrue(unsupported_numeric_claims(["系统必须连续72小时高负载运行。"], project_facts=FACTS))
+
     def test_same_name_quantity_binding_needs_unique_explicit_region_row_or_specification(self):
         candidates = [
             {"source_item_id": "s:b3", "name": "高压开关柜", "quantity": "15", "source_section": "原煤仓配电室",
@@ -2104,7 +2167,10 @@ class ProductContentQualityTests(SimpleTestCase):
         import hashlib
         from pathlib import Path
         import portal.product_content_quality as module
-        self.assertEqual(content_quality_policy_hash(), hashlib.sha256(Path(module.__file__).read_bytes()).hexdigest())
+        policy = Path(module.__file__)
+        sources = (policy, policy.with_name("product_worker.py"), policy.with_name("product_documents.py"))
+        self.assertEqual(content_quality_policy_hash(), hashlib.sha256(
+            b"\0".join(path.read_bytes() for path in sources)).hexdigest())
 
     def test_reference_quantity_does_not_become_project_parameter(self):
         references = "PostgreSQL文档示例采用每周备份。"
@@ -2336,6 +2402,28 @@ class ChapterContractTests(SimpleTestCase):
 
     def test_chapter_contract_current_chapter_chinese_ordinal_may_be_bare(self):
         self.assertEqual([], self.check(["本章（第一章）说明建设背景。"]))
+
+    def test_approved_joined_title_parts_have_bounded_natural_references(self):
+        technical = [{"id": "ts-04", "title": "第四章 过程控制与仪表系统设计"},
+                     {"id": "ts-05", "title": "第五章 辅助信息系统与安全监测"}]
+        financial = [{"id": "fs-05", "title": "第五章 投资估算与资金筹措"}]
+        for text, outline in (("报警接入第五章所述的辅助信息系统，避免监控盲区。", technical),
+                              ("与第四章过程控制系统建立联动。", technical),
+                              ("与第四章过程控制系统接口协议对接。", technical),
+                              ("影响第五章的投资估算。", financial),
+                              ("影响第五章的资金筹措计划。", financial)):
+            with self.subTest(text=text):
+                self.assertEqual(inspect_chapter_contract([text], approved_chapters=outline), [])
+        for text, outline in (("第四章所述的辅助信息系统应保留接口。", technical),
+                              ("与第五章过程控制系统建立联动。", technical),
+                              ("第五章所述的辅助信息系统性问题。", technical),
+                              ("第五章的投资估算器已经配置。", financial),
+                              ("第五章的运维计划。", financial),
+                              ("第五章的资金。", financial),
+                              ("第五章。", financial)):
+            with self.subTest(text=text):
+                self.assertEqual([issue["code"] for issue in inspect_chapter_contract([text], approved_chapters=outline)],
+                                 ["approved_chapter_reference_mismatch"])
 
     def test_chapter_contract_current_chapter_arabic_ordinal_may_be_bare(self):
         self.assertEqual([], self.check(["参见第1章，本节先交代背景。"]))

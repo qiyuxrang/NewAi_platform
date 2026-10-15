@@ -17,6 +17,27 @@ from portal.product_worker import ExecutionError, _store, claim_task, content_ch
 from .base import PortalTestCase
 
 
+def blueprint_model_responses(candidate, *, base_responses=(), **usage):
+    """Serve the base plan and requested scope batch from one final fixture."""
+    responses = iter(base_responses)
+
+    def reply(*args, **kwargs):
+        request = json.loads(args[2][1]["content"])
+        if request["action"] == "blueprint":
+            response = next(responses, candidate)
+            if isinstance(response, dict):
+                response = {key: value for key, value in response.items() if key != "feasibility_guide"}
+        elif request["action"] == "blueprint_scope":
+            ids = {section["id"] for section in request["guide_batch"]["sections"]}
+            response = {"sections": [entry for entry in candidate["feasibility_guide"]["sections"]
+                                     if entry["section_id"] in ids], "missing": [], "conflicts": []}
+        else:
+            raise AssertionError(f"Unexpected blueprint action: {request['action']}")
+        return {"content": response if isinstance(response, str) else json.dumps(response, ensure_ascii=False), **usage}
+
+    return reply
+
+
 class ProductQualityIssueContextTests(SimpleTestCase):
     def test_context_keeps_following_qualifier_and_omits_other_sentences(self):
         from portal.product_worker import _bounded_quality_issues
@@ -246,16 +267,19 @@ class ProductWorkerTests(PortalTestCase):
         self.task.pending_action = "blueprint"
         self.task.stage = "BLUEPRINT"
         self.task.save(update_fields=["pending_action", "stage"])
-        model.return_value = {"content": json.dumps(self.model_blueprint()), "prompt_tokens": 1, "completion_tokens": 1}
+        candidate = self.model_blueprint()
+        model.side_effect = blueprint_model_responses(candidate, prompt_tokens=1, completion_tokens=1)
 
         run_once()
 
-        payload = json.loads(model.call_args.args[2][1]["content"])
+        self.assert_blueprint_scope_calls(model, candidate)
+        first_call = model.call_args_list[0]
+        payload = json.loads(first_call.args[2][1]["content"])
         self.assertEqual(payload["allowed_source_ids"], ["r1"])
         self.assertEqual(payload["schema"]["chapters"][0]["source_ids"], ["source-id-from-allowed_source_ids"])
         self.assertIn("不得将allowed_source_ids整体复制到每章", payload["response_instruction"])
-        self.assertIn(json.dumps(payload["schema"], ensure_ascii=False), model.call_args.args[2][0]["content"])
-        self.assertIn("建设目标和待分析议题不能代替项目事实", model.call_args.args[2][0]["content"])
+        self.assertIn(json.dumps(payload["schema"], ensure_ascii=False), first_call.args[2][0]["content"])
+        self.assertIn("建设目标和待分析议题不能代替项目事实", first_call.args[2][0]["content"])
 
     def model_blueprint(self):
         payload = deepcopy(self.blueprint_payload)
@@ -263,7 +287,36 @@ class ProductWorkerTests(PortalTestCase):
         feasibility = [{**chapter, "id": "feas-" + chapter["id"], "family": "feasibility",
                         "title": "可行性论证" + chapter["title"]} for chapter in payload["chapters"]]
         payload["chapters"] = [*technical, *feasibility]
+        from portal.product_feasibility import catalog
+        guide = catalog()
+        payload["feasibility_guide"] = {"asset_sha256": guide["asset_sha256"], "sections": [
+            {"section_id": section["id"], "status": "include", "chapter_ids": [chapter["id"] for chapter in feasibility],
+             "reason": "单元测试模型回执：在可研章节展开指南内容，不代表真实项目适用性判断。"}
+            for section in [*(section for chapter in guide["chapters"] for section in chapter["sections"]),
+                            *guide["appendices"]]]}
         return payload
+
+    def assert_blueprint_scope_calls(self, model, candidate, base_call_count=1):
+        requests = [json.loads(call.args[2][1]["content"]) for call in model.call_args_list]
+        self.assertTrue(all(request["action"] == "blueprint" for request in requests[:base_call_count]))
+        self.assertEqual(set(requests[0]["schema"]),
+                         {"purpose", "audience", "chapters", "conditions", "missing", "conflicts", "template_version"})
+        scopes = requests[base_call_count:]
+        self.assertTrue(scopes)
+        self.assertTrue(all(request["action"] == "blueprint_scope" for request in scopes))
+        self.assertEqual(model.call_count, base_call_count + len(scopes))
+        self.assertTrue(all(call.args[1] == model.call_args_list[0].args[1] for call in model.call_args_list))
+        seen = []
+        for request in scopes:
+            self.assertEqual(set(request["schema"]), {"sections", "missing", "conflicts"})
+            batch = request["guide_batch"]
+            self.assertEqual(set(batch), {"kind", "chapter_id", "chapter_title", "sections"})
+            self.assertTrue(1 <= len(batch["sections"]) <= 8)
+            self.assertTrue(all(set(section) == {"id", "title", "applicability"} for section in batch["sections"]))
+            seen.extend(section["id"] for section in batch["sections"])
+        expected = [entry["section_id"] for entry in candidate["feasibility_guide"]["sections"]]
+        self.assertCountEqual(seen, expected)
+        self.assertEqual(len(seen), len(set(seen)))
 
     def queue_blueprint_with_original_conditions(self):
         conditions = ["在现有机房部署", "支持权限控制和审计", "预算和工期待确认"]
@@ -279,6 +332,8 @@ class ProductWorkerTests(PortalTestCase):
     def assert_blueprint_rejected(self, model, code):
         self.task.refresh_from_db()
         self.assertEqual(model.call_count, 2)
+        self.assertTrue(all(json.loads(call.args[2][1]["content"])["action"] == "blueprint"
+                            for call in model.call_args_list))
         self.assertEqual(self.task.state, "FAILED")
         self.assertEqual(self.task.error_code, code)
         self.assertEqual(self.task.blueprint_version, self.blueprint.version)
@@ -293,11 +348,11 @@ class ProductWorkerTests(PortalTestCase):
     @patch("portal.product_worker.generate_for_use")
     def test_valid_blueprint_preserves_conditions_and_saves_review_state(self, model):
         legal = self.queue_blueprint_with_original_conditions()
-        model.return_value = {"content": json.dumps(legal)}
+        model.side_effect = blueprint_model_responses(legal)
         run_once()
         self.task.refresh_from_db()
-        model.assert_called_once()
-        request = json.loads(model.call_args.args[2][1]["content"])
+        self.assert_blueprint_scope_calls(model, legal)
+        request = json.loads(model.call_args_list[0].args[2][1]["content"])
         self.assertEqual(request["input"]["conditions"], self.input_payload["conditions"])
         self.assertIn("每个原始条件必须逐字", request["response_instruction"])
         self.assertIn("预算和工期等未确认事项仍须保持未确认", request["response_instruction"])
@@ -310,13 +365,14 @@ class ProductWorkerTests(PortalTestCase):
         self.assertEqual(saved.input_hash, self.input_revision.sha256)
         self.assertEqual(saved.sha256, digest(legal))
         self.assertFalse(saved.approvals.exists())
+        self.assertEqual(self.task.revisions.filter(kind="blueprint").count(), 2)
         self.assertEqual(DocumentAttempt.objects.get(task=self.task).status, "done")
 
     @patch("portal.product_worker.generate_for_use")
     def test_rewritten_conditions_remain_rejected_after_one_correction(self, model):
         invalid = self.queue_blueprint_with_original_conditions()
         invalid["conditions"][-1]["text"] = "预算和工期需要进一步确认"
-        model.return_value = {"content": json.dumps(invalid)}
+        model.side_effect = blueprint_model_responses(invalid)
         run_once()
         self.assert_blueprint_rejected(model, "condition_missing")
         calls = self.task.checkpoint["calls"]
@@ -330,24 +386,24 @@ class ProductWorkerTests(PortalTestCase):
         legal = self.queue_blueprint_with_original_conditions()
         invalid = deepcopy(legal)
         invalid["conditions"] = invalid["conditions"][:1]
-        model.side_effect = [{"content": json.dumps(invalid)}, {"content": json.dumps(legal)}]
+        model.side_effect = blueprint_model_responses(legal, base_responses=(invalid,))
         run_once()
         self.task.refresh_from_db()
-        self.assertEqual(model.call_count, 2)
+        self.assert_blueprint_scope_calls(model, legal, base_call_count=2)
         self.assertEqual((self.task.state, self.task.error_code), ("WAITING_REVIEW", ""))
         saved = self.task.revisions.get(kind="blueprint", version=self.task.blueprint_version)
         self.assertEqual(saved.payload, legal)
         self.assertEqual(self.task.revisions.filter(kind="blueprint").count(), 2)
         self.assertEqual(self.task.checkpoint["calls"][0]["validation_error"], "condition_missing")
         self.assertNotIn("validation_error", self.task.checkpoint["calls"][1])
-        self.assertEqual(DocumentAttempt.objects.get(task=self.task).model_calls, 2)
+        self.assertEqual(DocumentAttempt.objects.get(task=self.task).model_calls, model.call_count)
 
     @patch("portal.product_worker.generate_for_use")
     def test_schema_failure_records_counts_without_response_keys_or_values(self, model):
         invalid = self.queue_blueprint_with_original_conditions()
         invalid.pop('audience')
         invalid['unexpected-private-field'] = 'private rejected response content'
-        model.return_value = {'content': json.dumps(invalid)}
+        model.side_effect = blueprint_model_responses(invalid)
         run_once()
         self.assert_blueprint_rejected(model, 'invalid_model_output')
         calls = self.task.checkpoint['calls']
@@ -362,7 +418,7 @@ class ProductWorkerTests(PortalTestCase):
     def test_json_and_blueprint_validation_share_one_correction(self, model):
         invalid = self.queue_blueprint_with_original_conditions()
         invalid["conditions"] = []
-        model.side_effect = [{"content": "invalid JSON"}, {"content": json.dumps(invalid)}]
+        model.side_effect = blueprint_model_responses(invalid, base_responses=("invalid JSON",))
         run_once()
         self.assert_blueprint_rejected(model, "condition_missing")
         self.assertEqual(self.task.checkpoint["calls"][0]["parse_error"], "invalid_model_output")
@@ -372,7 +428,7 @@ class ProductWorkerTests(PortalTestCase):
     def test_blueprint_correction_still_rejects_unauthorized_sources(self, model):
         invalid = self.queue_blueprint_with_original_conditions()
         invalid["chapters"][0]["source_ids"] = ["unapproved-source"]
-        model.return_value = {"content": json.dumps(invalid)}
+        model.side_effect = blueprint_model_responses(invalid)
         run_once()
         self.assert_blueprint_rejected(model, "invalid_blueprint")
 
@@ -380,7 +436,7 @@ class ProductWorkerTests(PortalTestCase):
     def test_blueprint_correction_still_rejects_unapproved_template(self, model):
         invalid = self.queue_blueprint_with_original_conditions()
         invalid["template_version"] = "unapproved-template"
-        model.return_value = {"content": json.dumps(invalid)}
+        model.side_effect = blueprint_model_responses(invalid)
         run_once()
         self.assert_blueprint_rejected(model, "invalid_template_version")
 
@@ -389,7 +445,7 @@ class ProductWorkerTests(PortalTestCase):
     def test_blueprint_correction_obeys_task_model_call_limit(self, model):
         invalid = self.queue_blueprint_with_original_conditions()
         invalid["conditions"] = []
-        model.return_value = {"content": json.dumps(invalid)}
+        model.side_effect = blueprint_model_responses(invalid)
         run_once()
         self.task.refresh_from_db()
         model.assert_called_once()
@@ -447,13 +503,14 @@ class ProductWorkerTests(PortalTestCase):
         self.task.pending_action = "blueprint"
         self.task.stage = "BLUEPRINT"
         self.task.save(update_fields=["pending_action", "stage"])
-        model.return_value = {"content": json.dumps(self.model_blueprint()), "prompt_tokens": 10, "completion_tokens": 20}
+        candidate = self.model_blueprint()
+        model.side_effect = blueprint_model_responses(candidate, prompt_tokens=10, completion_tokens=20)
 
         run_once()
 
         self.task.refresh_from_db()
         self.assertEqual(self.task.error_code, "")
-        model.assert_called_once()
+        self.assert_blueprint_scope_calls(model, candidate)
         self.assertNotIn("budget", self.task.checkpoint)
 
     def setUp(self):

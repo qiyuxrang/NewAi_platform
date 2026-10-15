@@ -71,3 +71,9 @@ frontend/dist/
 services/engineering/data/
 services/business/frontend/dist/
 services/business/staticfiles/
+
+# Local generated documents and validation evidence
+/tmp/
+/output/
+/frontend/layout-evidence/
+/doc/implementation-evidence/

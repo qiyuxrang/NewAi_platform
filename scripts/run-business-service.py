@@ -11,7 +11,7 @@ from urllib.parse import urlsplit
 from dotenv import load_dotenv
 
 WORKERS = {"product-worker": "run_product_worker", "hr-worker": "run_hr_worker",
-           "engineering-worker": "run_engineering_worker"}
+           "engineering-worker": "run_engineering_worker", "tender-worker": "run_tender_consumer"}
 
 
 def bundle_path_environment(repo):
@@ -87,6 +87,7 @@ def worker_preflight():
     from portal.hr_recruitment_models import RecruitmentRequest
     from portal.hr_screening_models import ResumeArtifact, ResumeScreeningBatch
     from portal.product_models import DocumentTask
+    from portal.tender_models import TenderFetchRun, TenderManualRefresh, TenderSource
     from portal.product_storage import StorageError
 
     with connection.cursor() as cursor:
@@ -147,6 +148,12 @@ def worker_preflight():
                             "online_flag": os.environ.get("PORTAL_ENGINEERING_ALLOW_ONLINE") == "1",
                             "online_effective": bool(online_webprice_key()), "result_type": "internal_draft",
                             "cli_invoked": False},
+            "tender": {"enabled": settings.PORTAL_TENDER_INGESTION_ENABLED,
+                       "manual_refresh_enabled": settings.PORTAL_TENDER_MANUAL_REFRESH_ENABLED,
+                       "schedule_enabled": settings.PORTAL_TENDER_SCHEDULE_ENABLED,
+                       "enabled_sources": TenderSource.objects.filter(enabled=True).count(),
+                       "running_sources": TenderFetchRun.objects.filter(state="RUNNING").count(),
+                       "running_batches": TenderManualRefresh.objects.filter(state="RUNNING").count()},
             "model_gateway_loopback_18411": model_gateway_matches(), "workers_started": False}
 
 

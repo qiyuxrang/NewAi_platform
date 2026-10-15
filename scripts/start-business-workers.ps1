@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('product', 'hr', 'engineering')][string[]]$Workers = @(),
+    [ValidateSet('product', 'hr', 'engineering', 'tender')][string[]]$Workers = @(),
     [string]$BusinessRepository = '',
     [switch]$CheckOnly
 )
@@ -12,7 +12,7 @@ $BusinessRepository = (Resolve-Path -LiteralPath $BusinessRepository).Path
 $python = (Resolve-Path -LiteralPath (Join-Path $BusinessRepository '.runtime/main-acceptance-venv/Scripts/python.exe')).Path
 $runner = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'run-business-service.py')).Path
 $runtime = (Resolve-Path -LiteralPath (Join-Path $repo '.runtime/enterprise')).Path
-if (!$CheckOnly -and !$Workers.Count) { throw 'Specify -Workers product,hr,engineering (or a subset). No worker was started.' }
+if (!$CheckOnly -and !$Workers.Count) { throw 'Specify -Workers product,hr,engineering,tender (or a subset). No worker was started.' }
 if (!$Workers.Count) { $Workers = @('product', 'hr', 'engineering') }
 $Workers = @($Workers | Select-Object -Unique)
 
@@ -43,6 +43,7 @@ try {
     if (!$snapshot.read_only -or !$snapshot.model_gateway_loopback_18411) { throw 'Business model gateway must be loopback:18411.' }
     if ('product' -in $Workers -and !$snapshot.product.enabled) { throw 'Business PRODUCT_P1_ENABLED is false.' }
     if ('engineering' -in $Workers -and $snapshot.engineering.runtime_status -ne 'ready') { throw 'Bundled engineering runtime is not ready.' }
+    if ('tender' -in $Workers -and (!$snapshot.tender.enabled -or !($snapshot.tender.manual_refresh_enabled -or $snapshot.tender.schedule_enabled))) { throw 'Tender ingestion and at least one queue trigger must be enabled.' }
     $workerProcesses = @(Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'")
     $checks = @()
     foreach ($worker in $Workers) {
@@ -50,7 +51,7 @@ try {
         $recordFile = Join-Path $runtime "legacy-worker-$worker-process.json"
         $record = if (Test-Path -LiteralPath $recordFile) { Get-Content -LiteralPath $recordFile -Raw | ConvertFrom-Json } else { $null }
         $owned = Get-BusinessOwnedProcess $record $service
-        $command = "run_${worker}_worker"
+        $command = if ($worker -eq 'tender') { 'run_tender_(?:consumer|worker)' } else { "run_${worker}_worker" }
         $matching = @($workerProcesses | Where-Object { $_.CommandLine -and ($_.CommandLine -match ('(?i)(?:^|\s)' + $command + '(?:\s|$)') -or
             $_.CommandLine -match ('(?i)run-business-service\.py.*\s' + [regex]::Escape($service) + '(?:\s|$)')) })
         # Venv python's real interpreter is a child of the recorded launcher.

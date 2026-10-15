@@ -79,7 +79,7 @@ if (!$GatewayOnly) {
     $business = (Resolve-Path -LiteralPath $business).Path
     $businessPython = (Resolve-Path -LiteralPath $businessPython).Path
     if (!(Test-Path -LiteralPath $vite)) { throw 'Frontend dependencies are absent; run npm ci in frontend first.' }
-    foreach ($required in @($next, (Join-Path $repo 'manage_front/.next/BUILD_ID'),
+    foreach ($required in @($next, (Join-Path $repo 'manage_front/.next/BUILD_ID'), (Join-Path $repo 'frontend/dist/index.html'),
             (Join-Path $business '.runtime/local.env'), (Join-Path $business '.runtime/model-gateway.env'))) {
         if (!(Test-Path -LiteralPath $required -PathType Leaf)) { throw "Required bundled dependency/build/config is absent: $required" }
     }
@@ -186,6 +186,7 @@ if ($ModelGatewayOnly) {
 & docker @composeArgs up --detach --wait postgres
 if ($LASTEXITCODE) { throw 'Enterprise PostgreSQL did not become healthy.' }
 if (!$GatewayOnly) {
+    & (Join-Path $PSScriptRoot 'start-search.ps1') -EnvFile $EnvFile
     Start-OwnedService 'modelgateway' 18411 $businessPython @($businessRunner,'gateway','--repository',$business) $business
     Wait-Url 'http://127.0.0.1:18411/health'
     Start-OwnedService 'portal' 8100 $businessPython @($businessRunner,'portal','--repository',$business) $business
@@ -195,7 +196,7 @@ if (!$GatewayOnly) {
 Start-OwnedService 'gateway' 8080 $PythonPath @('-m','uvicorn','app.main:app','--host','0.0.0.0','--port','8080','--no-access-log','--log-level','warning') (Join-Path $repo 'platform')
 Wait-Url 'http://127.0.0.1:8080/api/ping'
 if ($GatewayOnly) { Write-Host 'Owned enterprise gateway is healthy.'; return }
-Start-OwnedService 'frontend' 3080 $node @($vite,'--host','127.0.0.1','--port','3080','--strictPort') (Join-Path $repo 'frontend')
+Start-OwnedService 'frontend' 3080 $node @($vite,'preview','--host','127.0.0.1','--port','3080','--strictPort') (Join-Path $repo 'frontend')
 Wait-Url 'http://127.0.0.1:3080/'
 # Keep the original management application separate from the employee workspace.
 & {

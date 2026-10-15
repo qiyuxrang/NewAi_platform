@@ -163,6 +163,10 @@ def preserve_input_provenance(previous, updated):
                 "source_id": old["source_id"],
                 "source_row": old.get("source_row"),
             })
+        elif not item.get("source_edited"):
+            for key in ("source_section", "specification"):
+                if key in old:
+                    item[key] = old[key]
     if updated["sources"] and len(updated["items"]) != len(old_items):
         issues.append({"code": "source_recheck_required"})
     unique = {}
@@ -211,7 +215,8 @@ def blueprint_chapters(payload, family="technical-solution"):
 
 
 def validate_blueprint(payload, input_payload):
-    _object(payload, {"purpose", "audience", "chapters", "conditions", "missing", "conflicts", "template_version"})
+    _object(payload, {"purpose", "audience", "chapters", "conditions", "missing", "conflicts", "template_version"}
+            | ({"feasibility_guide"} if isinstance(payload, dict) and "feasibility_guide" in payload else set()))
     conditions = payload["conditions"]
     chapters = payload["chapters"]
     if (not isinstance(conditions, list) or len(conditions) > 500
@@ -253,6 +258,8 @@ def validate_blueprint(payload, input_payload):
         feasibility = [chapter["title"] for chapter in normalized_chapters if chapter["family"] == "feasibility"]
         if technical == feasibility:
             raise ProductError("invalid_blueprint", "两份报告不能使用完全相同的目录。")
+    from .product_feasibility import validate_plan
+    guide = validate_plan({**payload, "chapters": normalized_chapters})
     return {
         "purpose": _text(payload["purpose"], "purpose", 5000, required=True),
         "audience": _text(payload["audience"], "audience", 1000, required=True),
@@ -261,6 +268,7 @@ def validate_blueprint(payload, input_payload):
         "missing": _text_list(payload["missing"], "missing", 500, 2000),
         "conflicts": _text_list(payload["conflicts"], "conflicts", 500, 2000),
         "template_version": _template_version(payload["template_version"]),
+        **({"feasibility_guide": guide} if guide is not None else {}),
     }
 
 

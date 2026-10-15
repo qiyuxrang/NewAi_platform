@@ -28,6 +28,7 @@ export interface BlueprintPayload {
   missing: string[];
   conflicts: string[];
   template_version: string;
+  feasibility_guide?: { asset_sha256: string; sections: { section_id: string; status: 'include' | 'pending' | 'not_applicable'; chapter_ids: string[]; reason: string }[] };
 }
 export interface ChapterPayload { chapter_id: string; title: string; paragraphs: string[]; source_ids: string[] }
 export type OutputFamily = "technical-solution" | "feasibility" | "presentation";

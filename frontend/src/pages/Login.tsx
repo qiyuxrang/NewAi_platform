@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Bot, Loader2 } from 'lucide-react'
+import { AlertCircle, Eye, EyeOff, Loader2, LockKeyhole, Mail, ShieldCheck, UserRound } from 'lucide-react'
 import { login, register } from '../lib/api'
+import './login.css'
 
 export default function Login() {
   const navigate = useNavigate()
@@ -9,125 +10,95 @@ export default function Login() {
   const [username, setUsername] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+    if (loading) return
     setError('')
     setLoading(true)
-
     try {
       if (mode === 'login') {
         await login(username, password)
       } else {
         await register(username, email, password)
       }
-      navigate('/dashboard')
+      navigate('/dashboard', { replace: true })
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'An unexpected error occurred')
+      setError(err instanceof Error ? err.message : '操作失败，请重试')
     } finally {
       setLoading(false)
     }
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-dark-bg">
-      <div className="w-full max-w-md rounded-xl border border-dark-border bg-dark-card p-8">
-        {/* Logo */}
-        <div className="mb-8 flex flex-col items-center gap-3">
-          <div className="flex h-12 w-12 items-center justify-center rounded-full bg-accent-blue">
-            <Bot className="h-6 w-6 text-white" />
-          </div>
-          <h1 className="text-xl font-semibold text-dark-text">OpenClaw AI</h1>
-        </div>
+    <main className="enterprise-login">
+      <div className="login-decoration" aria-hidden="true">
+        <span className="login-rings login-rings-left" />
+        <span className="login-rings login-rings-right" />
+        <span className="login-dots login-dots-left" />
+        <span className="login-dots login-dots-right" />
+      </div>
+      <section className="login-card" aria-labelledby="login-title">
+        <header className="login-brand">
+          <img src="/company-logo.png" alt="陕西一二三数字信息技术有限公司" width="320" height="132" />
+          <div className="login-title-row"><h1 id="login-title">企业智能工作平台</h1></div>
+        </header>
 
-        {/* Error */}
-        {error && (
-          <div className="mb-4 rounded-lg bg-accent-red/10 p-3 text-sm text-accent-red">
-            {error}
-          </div>
-        )}
+        {error && <div className="login-error" role="alert">
+          <AlertCircle size={18} aria-hidden="true" /><span>{error}</span>
+        </div>}
 
-        {/* Form */}
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <input
-              type="text"
-              placeholder={mode === 'login' ? '用户名或邮箱' : '用户名'}
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              required
-              className="w-full rounded-lg border border-dark-border bg-dark-bg px-4 py-2.5 text-sm text-dark-text outline-none focus:border-accent-blue"
-            />
-          </div>
-
-          {mode === 'register' && (
-            <div>
-              <input
-                type="email"
-                placeholder="邮箱"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-                className="w-full rounded-lg border border-dark-border bg-dark-bg px-4 py-2.5 text-sm text-dark-text outline-none focus:border-accent-blue"
-              />
+        <form onSubmit={handleSubmit} className="login-form" aria-busy={loading}>
+          <div className="login-field">
+            <label htmlFor="auth-username">用户名{mode === 'login' && ' / 邮箱'}</label>
+            <div className="login-input">
+              <UserRound size={21} aria-hidden="true" />
+              <input id="auth-username" name="username" type="text" placeholder={mode === 'login' ? '请输入用户名或邮箱' : '请输入用户名'}
+                value={username} onChange={e => setUsername(e.target.value)} required autoComplete="username" disabled={loading} />
             </div>
-          )}
-
-          <div>
-            <input
-              type="password"
-              placeholder="密码"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              required
-              className="w-full rounded-lg border border-dark-border bg-dark-bg px-4 py-2.5 text-sm text-dark-text outline-none focus:border-accent-blue"
-            />
           </div>
-
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full rounded-lg bg-accent-blue py-2.5 text-sm font-medium text-white hover:bg-accent-blue/90 disabled:opacity-50"
-          >
-            {loading ? (
-              <Loader2 className="mx-auto h-5 w-5 animate-spin" />
-            ) : mode === 'login' ? (
-              '登录'
-            ) : (
-              '注册'
-            )}
+          {mode === 'register' && <div className="login-field">
+            <label htmlFor="auth-email">邮箱</label>
+            <div className="login-input">
+              <Mail size={21} aria-hidden="true" />
+              <input id="auth-email" name="email" type="email" placeholder="请输入邮箱" value={email}
+                onChange={e => setEmail(e.target.value)} required autoComplete="email" disabled={loading} />
+            </div>
+          </div>}
+          <div className="login-field">
+            <label htmlFor="auth-password">密码</label>
+            <div className="login-input">
+              <LockKeyhole size={21} aria-hidden="true" />
+              <input id="auth-password" name="password" type={showPassword ? 'text' : 'password'}
+                placeholder={mode === 'login' ? '请输入密码' : '请设置至少 8 位密码'} value={password}
+                onChange={e => setPassword(e.target.value)} required minLength={mode === 'register' ? 8 : undefined}
+                autoComplete={mode === 'login' ? 'current-password' : 'new-password'} disabled={loading} />
+              <button type="button" className="login-password-toggle" aria-label={showPassword ? '隐藏密码' : '显示密码'}
+                aria-pressed={showPassword} onClick={() => setShowPassword(!showPassword)}>
+                {showPassword ? <EyeOff size={21} /> : <Eye size={21} />}
+              </button>
+            </div>
+          </div>
+          {mode === 'login' && <p className="login-help">忘记密码？请联系管理员</p>}
+          <button type="submit" className="login-submit" disabled={loading}>
+            {loading && <Loader2 size={20} className="animate-spin" aria-hidden="true" />}
+            {loading ? mode === 'login' ? '正在登录…' : '正在注册…' : mode === 'login' ? '登录' : '创建账号'}
           </button>
         </form>
 
-        {/* Toggle */}
-        <p className="mt-6 text-center text-sm text-dark-muted">
-          {mode === 'login' ? (
-            <>
-              还没有账号？{' '}
-              <button
-                type="button"
-                onClick={() => { setMode('register'); setError('') }}
-                className="text-accent-blue hover:underline"
-              >
-                注册
-              </button>
-            </>
-          ) : (
-            <>
-              已有账号？{' '}
-              <button
-                type="button"
-                onClick={() => { setMode('login'); setError('') }}
-                className="text-accent-blue hover:underline"
-              >
-                登录
-              </button>
-            </>
-          )}
+        <p className="login-switch">
+          {mode === 'login' ? '还没有账号？' : '已有账号？'}
+          <button type="button" disabled={loading} onClick={() => {
+            setMode(mode === 'login' ? 'register' : 'login')
+            setError('')
+            setShowPassword(false)
+          }}>{mode === 'login' ? '注册' : '返回登录'}</button>
         </p>
-      </div>
-    </div>
+        <footer className="login-security"><ShieldCheck size={20} aria-hidden="true" /><span>安全登录 · 企业内部系统</span></footer>
+      </section>
+    </main>
   )
 }

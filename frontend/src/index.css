@@ -38,3 +38,30 @@ body {
   from { transform: translateX(100%); }
   to { transform: translateX(0); }
 }
+
+.enterprise-shell {
+  --color-dark-bg: #f5f8fd;
+  --color-dark-sidebar: #ffffff;
+  --color-dark-card: #ffffff;
+  --color-dark-card-hover: #edf3fc;
+  --color-dark-border: #dfe7f2;
+  --color-dark-text: #19263b;
+  --color-dark-text-secondary: #60718b;
+  --color-accent-blue: #2164ed;
+  --color-accent-green: #16834a;
+  --color-accent-yellow: #9d6a08;
+  --color-accent-red: #c93838;
+  --color-green-400: #16834a;
+  --color-red-400: #c93838;
+  --color-blue-400: #2164ed;
+  color: var(--color-dark-text);
+  background: var(--color-dark-bg);
+  color-scheme: light;
+}
+.enterprise-shell :is(a,button,summary) { transition:background-color .16s,border-color .16s,color .16s; }
+.enterprise-shell > div > header { height:60px; flex-shrink:0; }
+.enterprise-shell > div > main > :is(div,section) { width:100%; max-width:none; margin-inline:0; }
+.enterprise-shell :is(a,button,summary):focus-visible { outline:2px solid var(--color-accent-blue); outline-offset:3px; }
+.enterprise-shell ::-webkit-scrollbar-track { background:var(--color-dark-bg); }
+.enterprise-shell ::-webkit-scrollbar-thumb { background:#c5d1e2; }
+@media(prefers-reduced-motion:reduce) { .enterprise-shell :is(a,button,summary) { transition:none; } }

@@ -4,7 +4,7 @@ export const businessRoleLabels: Record<BusinessRole, string> = {
   unassigned: "未分配", employee: "部门员工", general_manager: "总经理",
 };
 export const departmentLabels: Record<DepartmentCode, string> = {
-  product: "产品事业部", hr: "人事部", engineering: "工程部",
+  product: "产品事业部", hr: "人事部", engineering: "工程部", finance: "财务部",
 };
 
 export function businessAssignmentPayload(

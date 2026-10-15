@@ -68,7 +68,7 @@ class DiagramContentQualityTests(unittest.TestCase):
 
     def test_ids_and_title_outline_numbers_are_not_project_parameters(self):
         self.validate(title="合成网关设计1", source='flowchart LR\nA10000["合成网关"] --> loop3000["日志复核"]')
-        self.validate(source='sequenceDiagram\nparticipant A100\nparticipant B200 as 合成网关\nA100->>B200: 日志复核')
+        self.validate(source='sequenceDiagram\nparticipant A100 as 日志源\nparticipant B200 as 合成网关\nA100->>B200: 日志复核')
 
     def test_cache_contract_binds_content_quality_policy(self):
         original = diagram_contract_hash()

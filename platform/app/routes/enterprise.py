@@ -1,6 +1,7 @@
 """Bind each platform account to its own real portal session."""
 
 import asyncio
+import re
 from tempfile import SpooledTemporaryFile
 
 import httpx
@@ -167,9 +168,12 @@ async def proxy_business(path: str, request: Request, user: User = Depends(get_c
         upstream = await client.send(outgoing, stream=True)
         if upstream.status_code == 401:
             await invalidate(db, user, expected_session)
-        if 300 <= upstream.status_code < 400 or "text/html" in upstream.headers.get("content-type", "").lower():
+        document_preview = (request.method == "GET" and upstream.status_code == 200
+            and re.fullmatch(r"product/knowledge/datasets/[A-Za-z0-9_-]+/documents/[A-Za-z0-9_-]+/preview/", path)
+            and upstream.headers.get("content-security-policy", "").startswith("sandbox;"))
+        if 300 <= upstream.status_code < 400 or ("text/html" in upstream.headers.get("content-type", "").lower() and not document_preview):
             raise HTTPException(502, "企业业务服务响应异常，请检查业务会话")
-        response_headers = {key: upstream.headers[key] for key in ("content-type", "content-disposition", "content-range", "accept-ranges", "retry-after") if key in upstream.headers}
+        response_headers = {key: upstream.headers[key] for key in ("content-type", "content-disposition", "content-range", "accept-ranges", "retry-after", "content-security-policy") if key in upstream.headers}
         response_headers.update({"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "X-Accel-Buffering": "no"})
 
         async def body():

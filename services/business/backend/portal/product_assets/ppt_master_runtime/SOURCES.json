@@ -1,0 +1,161 @@
+{
+  "engine": "ppt-master-native-drawingml",
+  "source_repository": "https://github.com/hugohe3/ppt-master",
+  "source_commit": "d6f6cdfa97eaafd73b9cc2b0343b94a9f3998fc4",
+  "license": "MIT",
+  "license_sha256": "80cefc234c1ec12a8cece4344f16300c634fa03df7891686fcf979e3828f0921",
+  "upstream_modified": false,
+  "verification": "All source files match pinned upstream git blobs after CRLF normalization. Stored SHA256 covers exact vendored bytes.",
+  "files": [
+    {
+      "path": "upstream/scripts/svg_to_pptx/animation_config.py",
+      "source_path": "skills/ppt-master/scripts/svg_to_pptx/animation_config.py",
+      "sha256": "a388598a8975ae967b8c1a731364012964818a79d99c98a41f65a4a70dc32020",
+      "upstream_git_blob_sha1": "a3cdbe427bdef39b7b939e7ac1f35ad764b7817a"
+    },
+    {
+      "path": "upstream/scripts/svg_to_pptx/drawingml_context.py",
+      "source_path": "skills/ppt-master/scripts/svg_to_pptx/drawingml_context.py",
+      "sha256": "616e11b31f86c0545f232af8df16fe6c0c487e9c8c9124a48178262392beae32",
+      "upstream_git_blob_sha1": "373cb3b59fc9b40f74fa268e9089459375ab559c"
+    },
+    {
+      "path": "upstream/scripts/svg_to_pptx/drawingml_converter.py",
+      "source_path": "skills/ppt-master/scripts/svg_to_pptx/drawingml_converter.py",
+      "sha256": "926ca4b1120db5babed066b5cd12ea2132a0fe145301d3a16f41c319c51f4a10",
+      "upstream_git_blob_sha1": "b58245b3a90d6a26667b45806bb971873c8df5dc"
+    },
+    {
+      "path": "upstream/scripts/svg_to_pptx/drawingml_elements.py",
+      "source_path": "skills/ppt-master/scripts/svg_to_pptx/drawingml_elements.py",
+      "sha256": "108f4395b65ebb74968c311dd084219783d14b91b2ed643771115f0da3a92e51",
+      "upstream_git_blob_sha1": "c006523c53cfc08810f50e505047155a9e860bb1"
+    },
+    {
+      "path": "upstream/scripts/svg_to_pptx/drawingml_paths.py",
+      "source_path": "skills/ppt-master/scripts/svg_to_pptx/drawingml_paths.py",
+      "sha256": "68b52e51a07e9e3a6f4b9d5431f5f983b4fff6a1796ede34a07081616fc5fad8",
+      "upstream_git_blob_sha1": "ec2d103669b6b9e14dc14e50f091ab391d36ed9d"
+    },
+    {
+      "path": "upstream/scripts/svg_to_pptx/drawingml_styles.py",
+      "source_path": "skills/ppt-master/scripts/svg_to_pptx/drawingml_styles.py",
+      "sha256": "6b7198329b4e2a9668816281bc622dd0b932396c49525de4be6626fb9b57c763",
+      "upstream_git_blob_sha1": "4693afeeb3dd79cb40fca3d02855d7c531ba95fb"
+    },
+    {
+      "path": "upstream/scripts/svg_to_pptx/drawingml_utils.py",
+      "source_path": "skills/ppt-master/scripts/svg_to_pptx/drawingml_utils.py",
+      "sha256": "e4c991db8e3ef0db2461868a09e49cb5f2212f929c51e45bec4330e6ec6639b9",
+      "upstream_git_blob_sha1": "3919cb886b8e5c92ef074c6242969de94921b3fb"
+    },
+    {
+      "path": "upstream/scripts/svg_to_pptx/pptx_builder.py",
+      "source_path": "skills/ppt-master/scripts/svg_to_pptx/pptx_builder.py",
+      "sha256": "78cc9cbe1ce9c336c0bbf5c9dddefab47dfc2f71bec3968e1f309ac9ce6f931c",
+      "upstream_git_blob_sha1": "55f068cf9774293f5b17f40ba6f136bcf770c8e6"
+    },
+    {
+      "path": "upstream/scripts/svg_to_pptx/pptx_cli.py",
+      "source_path": "skills/ppt-master/scripts/svg_to_pptx/pptx_cli.py",
+      "sha256": "6ca54a41e2ffe98a973d27a193da7c842a9f3d1dbf003442c586fbf798b75cd4",
+      "upstream_git_blob_sha1": "cb6497a9ee28a2d269af894ffe9b97bf4a169e48"
+    },
+    {
+      "path": "upstream/scripts/svg_to_pptx/pptx_dimensions.py",
+      "source_path": "skills/ppt-master/scripts/svg_to_pptx/pptx_dimensions.py",
+      "sha256": "204fafcf879f5883741c7b5b43d13fe90bae6bb3f153f0cd55b6b6e45639a8b7",
+      "upstream_git_blob_sha1": "75f9ac18d8ab21420e9adc0d3496aae9473022d1"
+    },
+    {
+      "path": "upstream/scripts/svg_to_pptx/pptx_discovery.py",
+      "source_path": "skills/ppt-master/scripts/svg_to_pptx/pptx_discovery.py",
+      "sha256": "9ce9ef4e12a792d1f5c43ffac6be14dc56e0d3dcee246bbd7a03e9792b4c9cba",
+      "upstream_git_blob_sha1": "abd4f5c0aa20d876f384c8568a524b3bc4fe1d32"
+    },
+    {
+      "path": "upstream/scripts/svg_to_pptx/pptx_media.py",
+      "source_path": "skills/ppt-master/scripts/svg_to_pptx/pptx_media.py",
+      "sha256": "5d359bfc890d151160a980b46ebc3299efe89972fc5d3972956897c88eef87a3",
+      "upstream_git_blob_sha1": "e54c6a4302468cab7c98911c884ae6a5c86399cc"
+    },
+    {
+      "path": "upstream/scripts/svg_to_pptx/pptx_narration.py",
+      "source_path": "skills/ppt-master/scripts/svg_to_pptx/pptx_narration.py",
+      "sha256": "22c55838989656391de09ee21e137ccfacf8d26770c7bab159ef2573fc437372",
+      "upstream_git_blob_sha1": "38f05314e739e455fdd4ee870c7045ee648431ce"
+    },
+    {
+      "path": "upstream/scripts/svg_to_pptx/pptx_notes.py",
+      "source_path": "skills/ppt-master/scripts/svg_to_pptx/pptx_notes.py",
+      "sha256": "05985b07f269068bdc9def06f1e552c75494e4e269a7f5c23756e56cb920ce6f",
+      "upstream_git_blob_sha1": "2ea290625fb2bbf2841c0a4a538cb3959f1b1fca"
+    },
+    {
+      "path": "upstream/scripts/svg_to_pptx/pptx_slide_xml.py",
+      "source_path": "skills/ppt-master/scripts/svg_to_pptx/pptx_slide_xml.py",
+      "sha256": "e49a983c85941b5681e6d75f4c30a3cb2c043e7ff47a93f249d1de5d6c2f7b51",
+      "upstream_git_blob_sha1": "da326225b6be93a1e217d56fb569084fe4d33bb6"
+    },
+    {
+      "path": "upstream/scripts/svg_to_pptx/tspan_flattener.py",
+      "source_path": "skills/ppt-master/scripts/svg_to_pptx/tspan_flattener.py",
+      "sha256": "3a6c21ef027041e4eb2c617f3c6419d46f86c2bad95efafaad29927b610ee404",
+      "upstream_git_blob_sha1": "45b6d1f5d437adc8300dd69c66e1b9380b2f0a7f"
+    },
+    {
+      "path": "upstream/scripts/svg_to_pptx/use_expander.py",
+      "source_path": "skills/ppt-master/scripts/svg_to_pptx/use_expander.py",
+      "sha256": "eca04178413f970c7742e3db772792a36f5320cc2f7207534625e48d17673576",
+      "upstream_git_blob_sha1": "72289b0d7fe1e9004bd5848252b01fed1fbc71c2"
+    },
+    {
+      "path": "upstream/scripts/svg_to_pptx/__init__.py",
+      "source_path": "skills/ppt-master/scripts/svg_to_pptx/__init__.py",
+      "sha256": "2a1dc6a69f9675081df67fbe0c6d8fbb4a250f8ab27135a43e4020b8173ef4ac",
+      "upstream_git_blob_sha1": "4cc803bf6ee939617bdb275cf4679be95dfef70f"
+    },
+    {
+      "path": "upstream/scripts/svg_quality_checker.py",
+      "source_path": "skills/ppt-master/scripts/svg_quality_checker.py",
+      "sha256": "9a980c456a5d1c98d0e9a06b1e45c986a407fc6f09c7995096b3e704b989885a",
+      "upstream_git_blob_sha1": "94e0401cf5620401d777e57d3c81ec55b7d2a1dd"
+    },
+    {
+      "path": "upstream/scripts/project_utils.py",
+      "source_path": "skills/ppt-master/scripts/project_utils.py",
+      "sha256": "e88518c2796d09b9c20b792b7d0dadec7de1413dc5e3d71665e607a4230c6bd7",
+      "upstream_git_blob_sha1": "f19b0c21ab280cacf01ad9910e5c6249fcaee478"
+    },
+    {
+      "path": "upstream/scripts/error_helper.py",
+      "source_path": "skills/ppt-master/scripts/error_helper.py",
+      "sha256": "ec0518ce1f5cfe35434de4f82d2f6aa373afea0fae1fad6913dda0f15e673e85",
+      "upstream_git_blob_sha1": "7c65b327db3c784c1fc72380f65772d9492c6c41"
+    },
+    {
+      "path": "upstream/scripts/config.py",
+      "source_path": "skills/ppt-master/scripts/config.py",
+      "sha256": "0054c1ac1375071c22cafa4e2b69813a62ee71f2ccbfd225951a702d40c354dc",
+      "upstream_git_blob_sha1": "eabee91386f7d9dd0cc18e3d68db3244ef6d759b"
+    },
+    {
+      "path": "upstream/scripts/update_spec.py",
+      "source_path": "skills/ppt-master/scripts/update_spec.py",
+      "sha256": "dd070005e59cbdaa530cd6f897d2ba9f3ece918a3b49b27d3ae320c82aeac2f0",
+      "upstream_git_blob_sha1": "3da6e92aeda9f08a81efcc16c9ad776c0b743eb8"
+    },
+    {
+      "path": "upstream/scripts/svg_finalize/__init__.py",
+      "source_path": "skills/ppt-master/scripts/svg_finalize/__init__.py",
+      "sha256": "70e938bc248b6788a58fe6275d1a3b12601817440b1d4e689d22d3fe6b81d826",
+      "upstream_git_blob_sha1": "9acef8ee8d050c71245384436c07ce3972f7c5af"
+    },
+    {
+      "path": "upstream/scripts/svg_finalize/flatten_tspan.py",
+      "source_path": "skills/ppt-master/scripts/svg_finalize/flatten_tspan.py",
+      "sha256": "627fd53bec3b716a7b2a475a20bae2fd869451fc2e18cf35e92ba714c35fc6d0",
+      "upstream_git_blob_sha1": "68b1cb30fecb6b49eaf6954e6806032e31dd0912"
+    }
+  ]
+}

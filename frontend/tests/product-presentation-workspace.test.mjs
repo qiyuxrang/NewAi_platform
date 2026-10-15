@@ -147,8 +147,10 @@ test('incomplete delivery offers recovery and real blocking reasons while keepin
     retry_budget: { used: 1, limit: 3, remaining: 2 } }), outputs);
   assert.match(html, />继续生成</);
   assert.match(html, />查看问题</);
-  assert.match(html, /PPT 质量检查尚未通过/);
-  assert.match(html, /图表仍需补生成/);
+  assert.match(html, /草稿已保存，以下问题待修复/);
+  assert.match(html, /<summary>查看全部 2 项交付问题<\/summary>/);
+  // Browser acceptance expands the disclosure and verifies both blocking-code descriptions.
+  assert.doesNotMatch(html, /PPT 质量检查尚未通过|图表仍需补生成/);
   assert.match(html, /草稿 · 待完善/);
   assert.equal((html.match(/>下载文件</g) || []).length, 4);
   assert.doesNotMatch(html, /待审核|批准成果|成果审批/);
