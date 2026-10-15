@@ -119,7 +119,20 @@ const failureMessages: Record<string, string> = {
 };
 
 type VisibleStatus = ProductWorkflowProgress['status'];
-type VisiblePhase = { id: string; title: string; status: VisibleStatus; detail: string; statusLabel?: string };
+type VisiblePhase = { id: string; title: string; status: VisibleStatus; detail: string; statusLabel?: string; startedAt?: string };
+function PhaseElapsed({ startedAt }: { startedAt: string }) {
+  const [now, setNow] = useState(Date.now);
+  const started = Date.parse(startedAt);
+  const valid = Number.isFinite(started) && started <= now;
+  useEffect(() => {
+    if (!valid) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [started, valid]);
+  if (!valid) return null;
+  const seconds = Math.floor((now - started) / 1000);
+  return <p>本阶段已等待 {Math.floor(seconds / 60)} 分 {seconds % 60} 秒</p>;
+}
 function workflowPhases(task: DocumentTask, outputs: DraftOutput[]): VisiblePhase[] {
   const persisted = { ...task.analysis_progress, ...task.checkpoint?.analysis_progress };
   const phase = (key: keyof typeof persisted) => persisted[key];
@@ -150,7 +163,7 @@ function workflowPhases(task: DocumentTask, outputs: DraftOutput[]): VisiblePhas
     { id: 'equipment', title: '分析设备清单', status: phase('equipment')?.status || 'pending', detail: phase('equipment')?.status === 'failed' ? failureMessages[task.error_code] || '设备清单分析失败，请核对设备清单文件后重试。' : phase('equipment')?.detail || '等待服务端提供设备事实分析记录' },
     { id: 'knowledge', title: '知识库检索', status: knowledgeStatus, detail: knowledgeStatus === 'failed' ? failureMessages[task.error_code] || '知识库检索失败，项目资料已保留，请联系管理员核对原因后重试。' : knowledge?.evidence_ready === false ? knowledge.detail : knowledgePhase?.detail || (knowledgeReady ? `知识库检索完成，命中 ${knowledge.ragflow_source_count ?? knowledge.source_count} 项知识来源${knowledge.web_source_count ? `；另有 ${knowledge.web_source_count} 项联网公开参考` : ''}` : knowledge?.detail || '知识检索状态尚未由服务端返回') },
     ...(phase('web_search') ? [{ id: 'web-search', title: '联网补充检索', status: phase('web_search')!.status, detail: phase('web_search')!.detail || '按服务端记录显示' }] : []),
-    { id: 'blueprint', title: '生成项目蓝图', status: phase('blueprint')?.status || (task.blueprint ? 'completed' : 'pending'), detail: phase('blueprint')?.detail || (task.blueprint ? `项目蓝图 v${task.blueprint.version} 已保存` : '等待前置分析完成') },
+    { id: 'blueprint', title: '生成项目蓝图', status: phase('blueprint')?.status || (task.blueprint ? 'completed' : 'pending'), startedAt: phase('blueprint')?.started_at, detail: phase('blueprint')?.detail || (task.blueprint ? `项目蓝图 v${task.blueprint.version} 已保存` : '等待前置分析完成') },
     { id: 'review', title: '本人确认蓝图', status: reviewPhase?.status || (task.blueprint_approved ? 'completed' : task.blueprint && task.state === 'WAITING_REVIEW' ? 'waiting' : 'pending'), detail: reviewPhase?.detail || (task.blueprint_approved ? '蓝图已确认' : `蓝图生成后需人工确认；第 ${currentRound}/${revision.revision_limit} 轮`) },
     ...reportPhases('technical-solution', 'technical', '技术方案'),
     ...reportPhases('feasibility', 'feasibility', '可研报告'),
@@ -273,6 +286,8 @@ export default function ProjectStages(props: Props) {
       <div className="pd-current-task-heading"><Target size={30}/><h3>当前任务：{progressTitle}</h3></div>
       <div className="pd-compact-progress-heading"><strong>后台处理节点</strong><span>已结束 {settledPhases} / {phases.length} · 完成 {finishedPhases}</span></div>
       <p role="status" aria-live="polite">{running && <span className="pd-spinner"/>}{progressTitle}</p>
+      {currentPhase?.detail && <p role="status">{runtimeDetail(currentPhase.detail)}</p>}
+      {task.state === 'RUNNING' && currentPhase?.status === 'running' && currentPhase.startedAt && <PhaseElapsed key={currentPhase.startedAt} startedAt={currentPhase.startedAt}/>}
       {automaticRecovery && <p role="status">临时故障，预计 {formatDate(task.retry_after!)} 后从已保存进度自动恢复。已保存的正文和有效步骤已保留，无需重新提交或审批蓝图。</p>}
       <GenerationSteps task={task}/>
       <details className="pd-runtime-details"><summary>查看完整处理节点</summary><ol className="pd-progress-milestones" aria-label="完整处理链路">{milestones.map((phase, index) => <li key={phase.id} data-status={phase.status} aria-current={phase.status === 'running' || phase.status === 'waiting' ? 'step' : undefined}><span className="pd-milestone-dot" aria-hidden="true">{phase.status === 'completed' ? <ProductIcon name="check"/> : phase.status === 'skipped' ? '—' : phase.status === 'failed' || phase.status === 'blocked' ? '!' : index + 1}</span><strong>{phase.title}</strong><small>{phase.statusLabel || statusLabels[phase.status]}</small></li>)}</ol><ol>{phases.map(phase => <li key={phase.id}><strong>{phase.title}</strong><span>{phase.statusLabel || statusLabels[phase.status]}</span><p>{runtimeDetail(phase.detail)}</p></li>)}</ol></details>

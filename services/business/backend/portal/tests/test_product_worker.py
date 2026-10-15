@@ -28,9 +28,20 @@ def blueprint_model_responses(candidate, *, base_responses=(), **usage):
             if isinstance(response, dict):
                 response = {key: value for key, value in response.items() if key != "feasibility_guide"}
         elif request["action"] == "blueprint_scope":
-            ids = {section["id"] for section in request["guide_batch"]["sections"]}
-            response = {"sections": [entry for entry in candidate["feasibility_guide"]["sections"]
-                                     if entry["section_id"] in ids], "missing": [], "conflicts": []}
+            from portal.product_feasibility import catalog
+            guide = catalog()
+            sections = [section for chapter in guide["chapters"] for section in chapter["sections"]] + guide["appendices"]
+            dispositions = {entry["section_id"]: entry for entry in candidate["feasibility_guide"]["sections"]}
+            chapter_ids = {chapter["id"]: f"F{index + 1}" for index, chapter in enumerate(
+                chapter for chapter in candidate["chapters"] if chapter.get("family") == "feasibility")}
+            reasons, decisions = {}, []
+            for section in request["guide_batch"]["sections"]:
+                entry = dispositions[sections[int(section["id"][1:]) - 1]["id"]]
+                reason_id = reasons.setdefault(entry["reason"], f"R{len(reasons) + 1}")
+                decisions.append([section["id"], {"include": "I", "pending": "P", "not_applicable": "N"}[entry["status"]],
+                                  [chapter_ids[chapter_id] for chapter_id in entry["chapter_ids"]], reason_id])
+            response = {"reasons": [{"id": alias, "text": text} for text, alias in reasons.items()],
+                        "decisions": decisions, "missing": [], "conflicts": []}
         else:
             raise AssertionError(f"Unexpected blueprint action: {request['action']}")
         return {"content": response if isinstance(response, str) else json.dumps(response, ensure_ascii=False), **usage}
@@ -302,20 +313,29 @@ class ProductWorkerTests(PortalTestCase):
         self.assertEqual(set(requests[0]["schema"]),
                          {"purpose", "audience", "chapters", "conditions", "missing", "conflicts", "template_version"})
         scopes = requests[base_call_count:]
-        self.assertTrue(scopes)
+        self.assertEqual(len(scopes), 3)
         self.assertTrue(all(request["action"] == "blueprint_scope" for request in scopes))
         self.assertEqual(model.call_count, base_call_count + len(scopes))
         self.assertTrue(all(call.args[1] == model.call_args_list[0].args[1] for call in model.call_args_list))
         seen = []
         for request in scopes:
-            self.assertEqual(set(request["schema"]), {"sections", "missing", "conflicts"})
+            self.assertEqual(set(request["schema"]), {"reasons", "decisions", "missing", "conflicts"})
             batch = request["guide_batch"]
-            self.assertEqual(set(batch), {"kind", "chapter_id", "chapter_title", "sections"})
-            self.assertTrue(1 <= len(batch["sections"]) <= 8)
-            self.assertTrue(all(set(section) == {"id", "title", "applicability"} for section in batch["sections"]))
+            self.assertEqual(set(batch), {"asset_sha256", "groups", "sections", "chapters"})
+            self.assertEqual(batch["asset_sha256"], candidate["feasibility_guide"]["asset_sha256"])
+            self.assertTrue(1 <= len(batch["sections"]) <= 48)
+            self.assertTrue(all(set(section) == {"id", "group", "title", "applicability"} for section in batch["sections"]))
+            self.assertTrue(all(section["group"] in {group["id"] for group in batch["groups"]} for section in batch["sections"]))
+            self.assertEqual([chapter["id"] for chapter in batch["chapters"]],
+                             [f"F{index + 1}" for index, chapter in enumerate(
+                                 chapter for chapter in candidate["chapters"] if chapter.get("family") == "feasibility")])
             seen.extend(section["id"] for section in batch["sections"])
+        from portal.product_feasibility import catalog
+        guide = catalog()
+        canonical = [section["id"] for chapter in guide["chapters"] for section in chapter["sections"]] + [section["id"] for section in guide["appendices"]]
         expected = [entry["section_id"] for entry in candidate["feasibility_guide"]["sections"]]
-        self.assertCountEqual(seen, expected)
+        self.assertEqual(len(expected), 124)
+        self.assertCountEqual([canonical[int(alias[1:]) - 1] for alias in seen], expected)
         self.assertEqual(len(seen), len(set(seen)))
 
     def queue_blueprint_with_original_conditions(self):

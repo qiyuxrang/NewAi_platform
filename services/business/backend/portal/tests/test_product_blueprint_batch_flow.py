@@ -66,6 +66,7 @@ class BlueprintBatchFlowTests(PortalTestCase):
         self.assertEqual((base.status, first.status, second.status), ("completed", "completed", "retry_wait"))
         self.assertEqual((base.attempts, first.attempts, second.attempts), (1, 1, 1))
         self.assertEqual(DocumentAttempt.objects.get(task=self.task).model_calls, 3)
+        started_at = self.task.checkpoint["analysis_progress"]["blueprint"]["started_at"]
         completed_hashes = (base.output_hash, first.output_hash)
         self.retry_due()
 
@@ -89,10 +90,15 @@ class BlueprintBatchFlowTests(PortalTestCase):
                      for request in requests if request["action"] == "blueprint_scope"]
         self.assertEqual(scope_ids.count(scope_ids[0]), 1)
         self.assertEqual(scope_ids.count(failed_ids), 2)
-        self.assertEqual(model.call_count, 24)
-        self.assertEqual(list(self.task.attempts.order_by("fence").values_list("model_calls", flat=True)), [3, 21])
+        self.assertEqual(model.call_count, 5)
+        self.assertEqual(list(self.task.attempts.order_by("fence").values_list("model_calls", flat=True)), [3, 2])
         self.assertEqual(sum(self.task.attempts.values_list("model_calls", flat=True)), model.call_count)
         self.assertEqual(len(self.task.checkpoint["calls"]), model.call_count)
+        progress = self.task.checkpoint["analysis_progress"]["blueprint"]
+        self.assertEqual((progress["completed_count"], progress["total_count"]), (3, 3))
+        self.assertEqual((progress["completed_sections"], progress["total_sections"]), (124, 124))
+        self.assertTrue(progress["started_at"])
+        self.assertEqual(progress["started_at"], started_at)
 
     @patch("portal.product_worker.generate_for_use")
     def test_technical_chapter_mapping_gets_one_correction_then_fails_without_final_plan(self, model):
@@ -107,7 +113,7 @@ class BlueprintBatchFlowTests(PortalTestCase):
             reply = normal_reply(*args, **kwargs)
             if request["action"] == "blueprint_scope":
                 response = json.loads(reply["content"])
-                response["sections"][0]["chapter_ids"] = [technical_id]
+                response["decisions"][0][2] = [technical_id]
                 reply["content"] = json.dumps(response, ensure_ascii=False)
             return reply
 
@@ -137,8 +143,9 @@ class BlueprintBatchFlowTests(PortalTestCase):
             response = normal_reply(*args, **kwargs)
             if exclude_all and request["action"] == "blueprint_scope":
                 payload = json.loads(response["content"])
-                for entry in payload["sections"]:
-                    entry.update(status="not_applicable", chapter_ids=[], reason="合成回执明确排除此项，供全局校验拒绝。")
+                payload["reasons"] = [{"id": "R1", "text": "合成回执明确排除此项，供全局校验拒绝。"}]
+                for entry in payload["decisions"]:
+                    entry[1:] = ["N", [], "R1"]
                 response["content"] = json.dumps(payload, ensure_ascii=False)
             return response
 
@@ -151,10 +158,10 @@ class BlueprintBatchFlowTests(PortalTestCase):
         self.assertEqual((base.status, base.attempts), ("completed", 1))
         base_hash = base.output_hash
         scopes = self.task.steps.filter(key__startswith="blueprint:scope:")
-        self.assertEqual(scopes.count(), 22)
-        self.assertEqual(scopes.filter(status="pending", error_code="invalid_blueprint").count(), 22)
+        self.assertEqual(scopes.count(), 3)
+        self.assertEqual(scopes.filter(status="pending", error_code="invalid_blueprint").count(), 3)
         self.assertTrue(all(step.output["sections"] and step.output_hash for step in scopes))
-        self.assertEqual(model.call_count, 23)
+        self.assertEqual(model.call_count, 4)
 
         exclude_all = False
         self.task.state = "QUEUED"
@@ -172,8 +179,8 @@ class BlueprintBatchFlowTests(PortalTestCase):
         base.refresh_from_db()
         self.assertEqual((base.status, base.attempts, base.output_hash), ("completed", 1, base_hash))
         self.assertEqual([request["action"] for request in requests].count("blueprint"), 1)
-        self.assertEqual(model.call_count, 45)
-        self.assertEqual(list(self.task.attempts.order_by("fence").values_list("model_calls", flat=True)), [23, 22])
+        self.assertEqual(model.call_count, 7)
+        self.assertEqual(list(self.task.attempts.order_by("fence").values_list("model_calls", flat=True)), [4, 3])
 
     @override_settings(PRODUCT_MAX_MODEL_CALLS=2)
     @patch("portal.product_worker.generate_for_use")

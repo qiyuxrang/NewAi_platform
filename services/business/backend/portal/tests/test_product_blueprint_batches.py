@@ -1,11 +1,15 @@
 """Offline bounded-output contracts; no worker, network, model, or database calls."""
 
 from copy import deepcopy
+import json
 
 from django.test import SimpleTestCase
 
 from portal import product_feasibility as guide
-from portal.product_blueprint_batches import merge_scope_batches, scope_batches, validate_scope_batch
+from portal.product_blueprint_batches import (
+    compact_batches, compact_scope_request, merge_scope_batches, scope_batches,
+    validate_compact_scope, validate_scope_batch,
+)
 from portal.product_service import ProductError
 
 
@@ -146,3 +150,141 @@ class BlueprintScopeBatchTests(SimpleTestCase):
         base["chapters"].append({**base["chapters"][-1], "id": "F2", "title": "无人映射的可研章节"})
         with self.assertRaisesMessage(ProductError, "每个可研章节须对应至少一项实际适用的指南内容"):
             merge_scope_batches(base, self.catalog, self.batches, self.results)
+
+
+class CompactBlueprintScopeTests(SimpleTestCase):
+    setUp = BlueprintScopeBatchTests.setUp
+
+    def compact_results(self, status="I"):
+        return [{"reasons": [{"id": "R1", "text": "本项目明确保留该项论证。"}],
+                 "decisions": [[f"S{batch['start_index'] + index + 1}", status, ["F1"], "R1"]
+                               for index in range(len(batch["sections"]))], "missing": [], "conflicts": []}
+                for batch in compact_batches(self.catalog)]
+
+    def test_compact_catalog_three_batches_aliases_and_response_size(self):
+        batches = compact_batches(self.catalog)
+        self.assertEqual([len(batch["sections"]) for batch in batches], [48, 48, 28])
+        self.assertEqual([section for batch in batches for section in batch["sections"]],
+                         [section for batch in self.batches for section in batch["sections"]])
+        base = deepcopy(self.base)
+        base["chapters"][-1]["id"] = "real-feasibility-chapter"
+        results = self.compact_results()
+        normalized = []
+        for batch, result in zip(batches, results):
+            request = compact_scope_request(batch, base)
+            self.assertEqual(request["chapters"], [{"id": "F1", "title": "建设必要性论证", "scope": "项目范围"}])
+            self.assertEqual([section["id"] for section in request["sections"]],
+                             [row[0] for row in result["decisions"]])
+            self.assertEqual([value for group in batch["groups"] for value in group["section_ids"]],
+                             [section["id"] for section in batch["sections"]])
+            self.assertEqual({section["group"] for section in request["sections"]},
+                             {group["id"] for group in request["groups"]})
+            checked = validate_compact_scope(result, batch, base)
+            self.assertTrue(all(entry["chapter_ids"] == ["real-feasibility-chapter"] for entry in checked["sections"]))
+            self.assertEqual(validate_scope_batch(checked, batch, base), checked)
+            normalized.append(checked)
+        merged = merge_scope_batches(base, self.catalog, batches, normalized)
+        self.assertEqual(len(merged["feasibility_guide"]["sections"]), 124)
+        self.assertEqual(merged["feasibility_guide"]["asset_sha256"], guide.asset_hash())
+        size = lambda value: len(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
+        self.assertLess(size(results), size(normalized) // 2)
+        self.assertLess(max(map(size, results)), 2500)
+
+    def test_compact_pending_normalization_retains_all_56_notes_on_cached_revalidation(self):
+        batch = compact_batches(self.catalog)[0]
+        result = self.compact_results("P")[0]
+        result["missing"] = [f"其他明确缺项{index}" for index in range(8)]
+        checked = validate_compact_scope(result, batch, self.base)
+        self.assertEqual(len(checked["missing"]), 56)
+        self.assertEqual(validate_scope_batch(checked, batch, self.base), checked)
+        result["missing"].append("第九条原始模型缺项")
+        with self.assertRaises(ProductError):
+            validate_compact_scope(result, batch, self.base)
+
+    def test_compact_raw_reason_and_note_budgets_are_independent_of_generated_pending_notes(self):
+        batch = compact_batches(self.catalog)[0]
+        result = self.compact_results("P")[0]
+        result["reasons"] = [{"id": f"R{index + 1}", "text": "理由" * 60} for index in range(10)]
+        result["missing"] = [str(index) * 200 for index in range(4)]
+        checked = validate_compact_scope(result, batch, self.base)
+        self.assertEqual(len(checked["missing"]), 52)
+        self.assertEqual(validate_scope_batch(checked, batch, self.base), checked)
+        for field in ("reasons", "conflicts"):
+            broken = deepcopy(result)
+            if field == "reasons":
+                broken[field].append({"id": "R11", "text": "超出合计理由预算"})
+            else:
+                broken[field].append("超出缺项与冲突合计预算")
+            with self.subTest(field=field), self.assertRaises(ProductError):
+                validate_compact_scope(broken, batch, self.base)
+
+    def test_compact_rejects_missing_duplicate_unknown_boolean_aliases_and_invalid_reasons(self):
+        batch = compact_batches(self.catalog)[0]
+        mutations = [
+            lambda value: value.update(extra=[]),
+            lambda value: value["decisions"].pop(),
+            lambda value: value["decisions"].append(deepcopy(value["decisions"][0])),
+            lambda value: value["decisions"][0].__setitem__(0, "S49"),
+            lambda value: value["decisions"][0].__setitem__(0, True),
+            lambda value: value["decisions"][0].__setitem__(1, True),
+            lambda value: value["decisions"][0].__setitem__(2, [True]),
+            lambda value: value["decisions"][0].__setitem__(3, True),
+            lambda value: value["decisions"][0].__setitem__(2, ["T1"]),
+            lambda value: value["decisions"][0].__setitem__(2, ["F2"]),
+            lambda value: value["decisions"][0].__setitem__(2, ["F1", "F1"]),
+            lambda value: value["decisions"][0].__setitem__(2, []),
+            lambda value: value["decisions"][0].__setitem__(1, "N"),
+            lambda value: value["decisions"][0].__setitem__(3, "R2"),
+            lambda value: value["reasons"].append(deepcopy(value["reasons"][0])),
+            lambda value: value["reasons"][0].update(id=True),
+            lambda value: value["reasons"][0].update(text=" "),
+            lambda value: value["reasons"][0].update(text="长" * 121),
+            lambda value: value.update(reasons=[]),
+            lambda value: value.update(conflicts=["冲突"] * 9),
+        ]
+        for index, mutate in enumerate(mutations):
+            result = self.compact_results()[0]
+            mutate(result)
+            with self.subTest(case=index), self.assertRaises(ProductError):
+                validate_compact_scope(result, batch, self.base)
+        result = self.compact_results()[0]
+        result["decisions"][0][1:3] = ["N", []]
+        checked = validate_compact_scope(result, batch, self.base)
+        self.assertEqual(checked["sections"][0]["status"], "not_applicable")
+        checked["sections"][0]["reason"] = ""
+        with self.assertRaises(ProductError):
+            validate_scope_batch(checked, batch, self.base)
+
+    def test_compact_merge_rejects_forged_order_identity_asset_and_preserves_final_rules(self):
+        batches = compact_batches(self.catalog)
+        normalized = [validate_compact_scope(result, batch, self.base)
+                      for result, batch in zip(self.compact_results(), batches)]
+        mutations = [
+            lambda value: value.reverse(),
+            lambda value: value.pop(),
+            lambda value: value[0].update(start_index=True),
+            lambda value: value[0].update(asset_sha256="0" * 64),
+            lambda value: value[0]["sections"][0].update(id="forged"),
+            lambda value: value[0]["sections"][0].update(title="伪造标题"),
+            lambda value: value[0]["groups"][0].update(chapter_id="forged"),
+        ]
+        for index, mutate in enumerate(mutations):
+            broken = deepcopy(batches)
+            mutate(broken)
+            with self.subTest(case=index), self.assertRaises(ProductError):
+                merge_scope_batches(self.base, self.catalog, broken, normalized)
+        touched_batches = set()
+        for index, result in enumerate(normalized):
+            for entry in result["sections"]:
+                if entry["section_id"].startswith("5.1."):
+                    entry.update(status="not_applicable", chapter_ids=[], reason="本期不建设此项。")
+                    touched_batches.add(index)
+        self.assertGreater(len(touched_batches), 1)
+        with self.assertRaisesMessage(ProductError, "适用的结构目录须保留对应实际子节"):
+            merge_scope_batches(self.base, self.catalog, batches, normalized)
+        base = deepcopy(self.base)
+        base["chapters"].append({**base["chapters"][-1], "id": "F2", "title": "无人映射的可研章节"})
+        normalized = [validate_compact_scope(result, batch, base)
+                      for result, batch in zip(self.compact_results(), batches)]
+        with self.assertRaisesMessage(ProductError, "每个可研章节须对应至少一项实际适用的指南内容"):
+            merge_scope_batches(base, self.catalog, batches, normalized)

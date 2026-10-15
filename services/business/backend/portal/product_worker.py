@@ -496,10 +496,12 @@ def _model(task_id, fence, attempt_id, route, payload, *, retry_invalid_output=T
     if payload["action"] == "blueprint":
         output_contract += "\n本次仅生成两份基础目录及条件，严格只返回schema的七个字段。指南适用性由后续分批调用完成，本次不得输出feasibility_guide或指南逐项取舍。"
     if payload["action"] == "blueprint_scope":
-        output_contract += ("\n本次只判断guide_batch中的小节，根对象仅含sections、missing、conflicts，不能输出基础蓝图或其他批次。"
-                            "每个section_id恰好一次；reason最多160字；missing、conflicts各最多8条、每条最多200字。"
-                            "include和pending必须映射blueprint中已有的可研章节ID，不能映射技术方案章节或新造ID。"
-                            "仅确实不适用时用not_applicable，说明实际范围依据且chapter_ids为空；缺资料用pending并说明缺项。")
+        output_contract += ("\n本次只判断guide_batch.sections中的小节，根对象严格仅含reasons、decisions、missing、conflicts。"
+                            "decisions每行严格为[小节S别名,I或P或N,[可研章节F别名],理由R别名]，每个本批S恰好一次。"
+                            "I=纳入，P=适用但待确认，N=确实不适用；I和P必须映射已有F，N的章节数组必须为空。"
+                            "reasons每项只有id、text，所有取舍都须有实际范围依据；相同依据共用理由，不能为压缩篇幅删除缺项或理由。"
+                            "理由每条最多120字符、合计最多1200字符；missing和conflicts各最多8条、每条最多200字符，二者文本合计最多800字符。"
+                            "不能输出真实章节ID、其他批次、基础蓝图或报告正文。输入压缩表中的缺字段索引只表示原字段缺失，不是不存在该能力的证据。")
     if payload["action"] == "independent_review":
         output_contract += (
             "\n独立复核根对象严格遵循本次schema，普通复核仅有passed和issues，指南逐项复核另含guide_checks。passed必须是JSON布尔值true或false，"
@@ -2281,12 +2283,21 @@ def _execute_claim_action(task_id, fence, attempt_id):
             from .product_service import validate_blueprint
             from .product_blueprint_knowledge import require_blueprint_knowledge
             from . import product_blueprint_batches
+            from . import product_blueprint_context
             from .product_steps import run_step
 
             knowledge = require_blueprint_knowledge(input_revision.payload)
             context = _analyze_blueprint_input(task_id, fence, task, input_revision)
             feedback = _blueprint_revision_feedback(task, input_revision)
-            _analysis_progress(task_id, fence, "blueprint", "running")
+            catalog = product_feasibility.catalog()
+            batches = product_blueprint_batches.compact_batches(catalog)
+            total_sections = sum(len(batch["sections"]) for batch in batches)
+            previous_progress = task.checkpoint.get("analysis_progress", {}).get("blueprint", {})
+            started_at = (previous_progress.get("started_at") if task.checkpoint.get("recovery_mode") else None)
+            started_at = started_at or DocumentAttempt.objects.get(pk=attempt_id).start_at.isoformat()
+            _analysis_progress(task_id, fence, "blueprint", "running", started_at=started_at,
+                detail="正在分析完整资料并编制基础目录", completed_count=0, total_count=len(batches),
+                completed_sections=0, total_sections=total_sections)
 
             allowed_source_ids = sorted({
                 *[str(item.get("row_id")) for item in input_revision.payload.get("items", []) if item.get("row_id") not in (None, "")],
@@ -2306,13 +2317,14 @@ def _execute_claim_action(task_id, fence, attempt_id):
                        "route": _review_route_hash(route),
                        "implementation": digest([Path(__file__).read_text(encoding="utf-8"),
                            Path(product_blueprint_batches.__file__).read_text(encoding="utf-8"),
+                           Path(product_blueprint_context.__file__).read_text(encoding="utf-8"),
                            Path(product_feasibility.__file__).read_text(encoding="utf-8")])}
             scope_step_hashes = []
 
-            def plan_step(key, request, validator):
+            def plan_step(key, request, validator, cache_validator=None):
                 def valid_cache(result):
                     try:
-                        return bool(validator(result))
+                        return bool((cache_validator or validator)(result))
                     except (ProductError, TypeError, KeyError, ValueError):
                         return False
                 step_binding = {**binding, "request": request}
@@ -2339,28 +2351,27 @@ def _execute_claim_action(task_id, fence, attempt_id):
                                          "conditions": [{"text": "string", "type": "program/model/human"}],
                                          "missing": [], "conflicts": [], "template_version": "frozen-original-v1"}},
                              validate_output)
-            catalog = product_feasibility.catalog()
-            batches = product_blueprint_batches.scope_batches(catalog)
-            scope_context = {key: value for key, value in context.items() if key != "knowledge_sources"}
+            scope_context = run_step(task_id, fence, "blueprint:context",
+                {**binding, "context": digest(context), "base": digest(base)},
+                lambda: product_blueprint_context.scope_context(context, base),
+                validate=lambda value: value == product_blueprint_context.scope_context(context, base))
             results = []
+            completed_sections = 0
             for index, batch in enumerate(batches):
                 _analysis_progress(task_id, fence, "blueprint", "running",
-                    detail=f"基础目录已保存，指南适用范围已完成{index}/{len(batches)}批")
+                    detail=f"基础目录已保存，指南适用范围已完成{index}/{len(batches)}批（{completed_sections}/{total_sections}项），正在处理第{index + 1}批",
+                    completed_count=index, total_count=len(batches), completed_sections=completed_sections,
+                    total_sections=total_sections)
                 result = plan_step(f"blueprint:scope:{index + 1}",
-                    {"action": "blueprint_scope", "input": scope_context, "blueprint": base,
-                     "guide_batch": batch,
-                     "chapter_sections": [section for other in batches
-                         if (other["kind"], other["chapter_id"]) == (batch["kind"], batch["chapter_id"])
-                         for section in other["sections"]],
-                     "previous_decisions": [entry for other, result in zip(batches, results)
-                         if (other["kind"], other["chapter_id"]) == (batch["kind"], batch["chapter_id"])
-                         for entry in result["sections"]],
-                     "response_instruction": "仅判断本批小节并映射已有可研章节；按实际项目范围取舍，不得因缺资料删除适用类别。结构父节与其子节须保持一致。公开资料不得补造项目事实。",
-                     "schema": {"sections": [{"section_id": "guide_batch-section-id",
-                         "status": "include/pending/not_applicable", "chapter_ids": ["feasibility-chapter-id"],
-                         "reason": "实际范围依据或待确认缺项，最多160字"}], "missing": [], "conflicts": []}},
-                    lambda value, batch=batch: product_blueprint_batches.validate_scope_batch(value, batch, base))
+                    {"action": "blueprint_scope", "input": scope_context,
+                     "guide_batch": product_blueprint_batches.compact_scope_request(batch, base),
+                     "response_instruction": "逐项判断本批全部S别名，映射已有F别名；实际范围决定取舍，不得因缺资料删除适用类别。I/P保留实际内容，N说明明确范围依据。基础目录仅为组织线索，公开资料不是项目事实；结构父节与子节保持一致。",
+                     "schema": {"reasons": [{"id": "R1", "text": "实际范围依据或待确认缺项；相同依据共用"}],
+                         "decisions": [["S别名", "I/P/N", ["F别名"], "R1"]], "missing": [], "conflicts": []}},
+                    lambda value, batch=batch: product_blueprint_batches.validate_compact_scope(value, batch, base),
+                    cache_validator=lambda value, batch=batch: product_blueprint_batches.validate_scope_batch(value, batch, base))
                 results.append(result)
+                completed_sections += len(batch["sections"])
             try:
                 payload = validate_output(product_blueprint_batches.merge_scope_batches(base, catalog, batches, results))
             except ProductError as error:
@@ -2374,7 +2385,9 @@ def _execute_claim_action(task_id, fence, attempt_id):
                 raise ExecutionError("invalid_blueprint") from error
             _store(task_id, fence, "blueprint", payload, input_revision.sha256)
             _analysis_progress(task_id, fence, 'blueprint', 'completed',
-                knowledge_mode=knowledge["mode"], ragflow_used=knowledge["ragflow_used"])
+                detail=f"指南适用范围{len(batches)}/{len(batches)}批、{completed_sections}项已校验，等待确认蓝图",
+                completed_count=len(batches), total_count=len(batches), completed_sections=completed_sections,
+                total_sections=completed_sections, knowledge_mode=knowledge["mode"], ragflow_used=knowledge["ragflow_used"])
             return _finish(task_id, fence, attempt_id, "WAITING_REVIEW", "BLUEPRINT")
         blueprint = current_revision(task, "blueprint")
         if (blueprint is None or blueprint.input_hash != input_revision.sha256

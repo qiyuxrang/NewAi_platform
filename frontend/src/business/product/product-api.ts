@@ -98,6 +98,7 @@ export interface ArtifactVerification {
 export interface TaskSummary { id: string; title: string; state: string; stage: string; version: number; created_at?: string; updated_at?: string; owner_name?: string; reviewer_name?: string | null; pending_action?: string; error_code?: string }
 export type ProductWorkflowPhase = 'documents' | 'equipment' | 'knowledge' | 'web_search' | 'blueprint' | 'review' | 'outputs' | 'writing_technical' | 'writing_feasibility' | 'review_technical' | 'review_feasibility' | 'diagrams_technical' | 'diagrams_feasibility' | 'render_technical' | 'render_feasibility' | 'presentation';
 export interface ProductWorkflowProgress {
+  started_at?: string;
   status: 'pending' | 'running' | 'completed' | 'failed' | 'blocked' | 'waiting' | 'skipped';
   updated_at?: string;
   source_count?: number;
