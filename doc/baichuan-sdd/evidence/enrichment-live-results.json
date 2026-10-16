@@ -1,0 +1,180 @@
+{
+  "overall": "PASS",
+  "executed_at": "2026-10-16T08:33:40.228340+00:00",
+  "scope": "Existing local 3080 -> 8080 -> 8100; actual existing users, no API stubbing, no company mutations",
+  "checks": [
+    {
+      "identity": "manager_user",
+      "scope": "14 list pages and all 114 updated full details via authenticated gateway",
+      "companies": 1283,
+      "details_matched": 114,
+      "website_count": 87,
+      "result": "PASS"
+    },
+    {
+      "identity": "manager_user",
+      "source_company_id": "BC0226",
+      "width": 1440,
+      "safe_official_button": true,
+      "public_people_match": true,
+      "no_horizontal_overflow": true,
+      "result": "PASS"
+    },
+    {
+      "identity": "manager_user",
+      "source_company_id": "BC0226",
+      "width": 1920,
+      "safe_official_button": true,
+      "public_people_match": true,
+      "no_horizontal_overflow": true,
+      "result": "PASS"
+    },
+    {
+      "identity": "manager_user",
+      "source_company_id": "BC0053",
+      "width": 1440,
+      "safe_official_button": true,
+      "public_people_match": true,
+      "no_horizontal_overflow": true,
+      "result": "PASS"
+    },
+    {
+      "identity": "manager_user",
+      "source_company_id": "BC0053",
+      "width": 1920,
+      "safe_official_button": true,
+      "public_people_match": true,
+      "no_horizontal_overflow": true,
+      "result": "PASS"
+    },
+    {
+      "identity": "manager_user",
+      "source_company_id": "BC0039",
+      "width": 1440,
+      "safe_official_button": true,
+      "public_people_match": true,
+      "no_horizontal_overflow": true,
+      "result": "PASS"
+    },
+    {
+      "identity": "manager_user",
+      "source_company_id": "BC0039",
+      "width": 1920,
+      "safe_official_button": true,
+      "public_people_match": true,
+      "no_horizontal_overflow": true,
+      "result": "PASS"
+    },
+    {
+      "identity": "manager_user",
+      "scope": "newly added official website actual network popup",
+      "hostname": "www.xingyingenergy.com",
+      "result": "PASS"
+    },
+    {
+      "identity": "manager_user",
+      "source_company_id": "BC0136",
+      "width": 1440,
+      "safe_official_button": true,
+      "public_people_match": true,
+      "no_horizontal_overflow": true,
+      "result": "PASS"
+    },
+    {
+      "identity": "manager_user",
+      "source_company_id": "BC0136",
+      "width": 1920,
+      "safe_official_button": true,
+      "public_people_match": true,
+      "no_horizontal_overflow": true,
+      "result": "PASS"
+    },
+    {
+      "identity": "product_user",
+      "scope": "14 list pages and all 114 updated full details via authenticated gateway",
+      "companies": 1283,
+      "details_matched": 114,
+      "website_count": 87,
+      "result": "PASS"
+    },
+    {
+      "identity": "product_user",
+      "source_company_id": "BC0226",
+      "width": 1440,
+      "safe_official_button": true,
+      "public_people_match": true,
+      "no_horizontal_overflow": true,
+      "result": "PASS"
+    },
+    {
+      "identity": "product_user",
+      "source_company_id": "BC0226",
+      "width": 1920,
+      "safe_official_button": true,
+      "public_people_match": true,
+      "no_horizontal_overflow": true,
+      "result": "PASS"
+    },
+    {
+      "identity": "product_user",
+      "source_company_id": "BC0053",
+      "width": 1440,
+      "safe_official_button": true,
+      "public_people_match": true,
+      "no_horizontal_overflow": true,
+      "result": "PASS"
+    },
+    {
+      "identity": "product_user",
+      "source_company_id": "BC0053",
+      "width": 1920,
+      "safe_official_button": true,
+      "public_people_match": true,
+      "no_horizontal_overflow": true,
+      "result": "PASS"
+    },
+    {
+      "identity": "product_user",
+      "source_company_id": "BC0039",
+      "width": 1440,
+      "safe_official_button": true,
+      "public_people_match": true,
+      "no_horizontal_overflow": true,
+      "result": "PASS"
+    },
+    {
+      "identity": "product_user",
+      "source_company_id": "BC0039",
+      "width": 1920,
+      "safe_official_button": true,
+      "public_people_match": true,
+      "no_horizontal_overflow": true,
+      "result": "PASS"
+    },
+    {
+      "identity": "product_user",
+      "scope": "newly added official website actual network popup",
+      "hostname": "www.xingyingenergy.com",
+      "result": "PASS"
+    },
+    {
+      "identity": "product_user",
+      "source_company_id": "BC0136",
+      "width": 1440,
+      "safe_official_button": true,
+      "public_people_match": true,
+      "no_horizontal_overflow": true,
+      "result": "PASS"
+    },
+    {
+      "identity": "product_user",
+      "source_company_id": "BC0136",
+      "width": 1920,
+      "safe_official_button": true,
+      "public_people_match": true,
+      "no_horizontal_overflow": true,
+      "result": "PASS"
+    }
+  ],
+  "page_errors": []
+}

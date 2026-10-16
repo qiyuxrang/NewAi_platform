@@ -168,6 +168,7 @@ def prepare_blueprint_knowledge(task_id, fence):
     from .product_knowledge_service import authorize, configuration, retrieve
     from .product_models import DocumentTask
     from .product_service import append_revision, current_revision
+    from .product_worker import _renew
 
     task = DocumentTask.objects.select_related("owner").get(pk=task_id)
     if task.state != DocumentTask.State.RUNNING or task.fence != fence:
@@ -195,6 +196,7 @@ def prepare_blueprint_knowledge(task_id, fence):
                              if source.get("provider") == "ragflow"
                              or source.get("fact_scope") == "PUBLIC_REFERENCE"]
     else:
+        _renew(task_id, fence)
         hits = retrieve(query, [], scope, configuration(), blueprint=True)
         knowledge_sources = [{
             "id": f"ragflow:{source['id']}",
@@ -223,6 +225,7 @@ def prepare_blueprint_knowledge(task_id, fence):
         _analysis_progress(task_id, fence, "web_search", "running", **{key: value for key, value in web.items() if key != "status"})
         try:
             for query in queries:
+                _renew(task_id, fence)
                 web["attempted_queries"].append(query)
                 public_sources = search_public_references([query])
                 known = {source["id"] for source in knowledge_sources}

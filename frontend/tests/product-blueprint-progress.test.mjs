@@ -36,9 +36,13 @@ test('blueprint progress is visible without expanding details and elapsed time u
   const phase = workflowPhases(task, []).find(item => item.id === 'blueprint');
   assert.equal(phase.detail, detail);
   assert.equal(phase.startedAt, task.analysis_progress.blueprint.started_at);
-  const visible = text.slice(text.indexOf('<section className="pd-compact-progress"'), text.indexOf('<GenerationSteps task={task}/>'));
+  const start = text.indexOf('<section className="pd-compact-progress"');
+  const end = text.indexOf('</section>', start);
+  assert.ok(start >= 0 && end > start);
+  const visible = text.slice(start, end);
   assert.match(visible, /runtimeDetail\(currentPhase\.detail\)/);
   assert.doesNotMatch(visible, /<details/);
+  assert.match(visible, /aria-haspopup="dialog"[^>]*>查看处理详情/);
   assert.match(visible, /task\.state === 'RUNNING' && currentPhase\?\.status === 'running' && currentPhase\.startedAt && <PhaseElapsed key=\{currentPhase\.startedAt\}/);
 
   let timer = PhaseElapsed({ startedAt: phase.startedAt });

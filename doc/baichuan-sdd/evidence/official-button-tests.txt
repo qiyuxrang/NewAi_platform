@@ -1,0 +1,27 @@
+✔ API preserves validated field errors while retaining three-argument ApiError compatibility (20.4376ms)
+✔ fixed qualification dictionary, any/grade exclusivity and URL retain server validation (0.7302ms)
+✔ websites reject unsafe protocols and credentials; snapshots retain child IDs and expected version (0.3244ms)
+✔ post-save membership uses exact grades, OR within and AND across categories, without personnel inference (0.2551ms)
+✔ both entrypoints share the product feature while preserving capability restrictions (0.1914ms)
+✔ detail preserves source statements and line breaks, linking only safe HTTP(S) evidence without surrounding punctuation (47.2582ms)
+✔ details hide empty fields and metadata, preserve all sources in one closed disclosure and expose safe official links (32.8312ms)
+✔ detail business tiles use only explicit areas, keep all labels and limit photos to decoration (29.2354ms)
+✔ the supplied company logo belongs only to its exact company, while sparse Wanbang retains actual structured fields (26.038ms)
+✔ actual addresses and websites show contacts independently, and editing follows permission (22.3759ms)
+✔ the top website action stays visible without a safe URL, and adding one uses the authorized editor (18.7219ms)
+✔ clipboard success and rejection report their real outcome without leaking status to another website (56.6448ms)
+✔ qualification cards retain each declared status and certificate and use category icons (22.7777ms)
+✔ checkbox selection updates immediately while the router still exposes the previous URL (37.0203ms)
+✔ list exposes actual safe websites, extra contacts and server page controls without inventing fields (30.9705ms)
+✔ stale success and stale failure cannot replace the latest query, and loading never reports zero (39.3074ms)
+✔ a filtered page beyond the last page preserves the total and explains the empty page (34.1283ms)
+✔ editor submits a complete atomic snapshot, keeps inputs on conflict, and serializes cleared dates to null (35.7708ms)
+✔ server field errors appear at the affected company input and retain its draft value (24.2921ms)
+ℹ tests 19
+ℹ suites 0
+ℹ pass 19
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 861.8523

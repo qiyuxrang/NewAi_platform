@@ -21,7 +21,7 @@ from rest_framework.response import Response
 
 from .product_service import product_user_allowed
 from .security import audit
-from .tender_manual_refresh import ActiveRefresh, enqueue, serialize, schedule_status
+from .tender_manual_refresh import ActiveRefresh, enqueue, serialize, schedule_status, recovery_required
 from .tender_classification import INDUSTRIES, NOTICE_CATEGORIES, PROVINCES
 from .tender_models import (TenderConsumerHeartbeat, TenderFetchRun, TenderManualRefresh,
                             TenderNotice, TenderOpportunity, TenderOpportunityUserState, TenderSource)
@@ -546,11 +546,17 @@ def _refresh_availability():
     enabled_sources = set(TenderSource.objects.filter(
         code__in=SOURCE_CODES, enabled=True).values_list("code", flat=True))
     sources_ready = bool(enabled_sources)
+    needs_recovery = recovery_required()
     return {
         "enabled": enabled,
         "consumer_online": consumer_online,
         "sources_ready": sources_ready,
-        "available": enabled and consumer_online and sources_ready,
+        "available": enabled and consumer_online and sources_ready and not needs_recovery,
+        "recovery_required": needs_recovery,
+        "unavailable_reason": ("上次采集中断，须由后台确认旧执行已停止后恢复。" if needs_recovery
+                               else "后台未启用手动刷新。" if not enabled
+                               else "采集服务当前离线。" if not consumer_online
+                               else "采集来源尚未就绪。" if not sources_ready else ""),
     }
 
 

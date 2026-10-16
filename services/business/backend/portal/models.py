@@ -222,3 +222,4 @@ from .engineering_models import EngineeringJob, EngineeringPreparation, Engineer
 from .agent_models import (AgentProject, AgentAttachment, AgentConversation, AgentMessage, AgentWorkTask,
                            AgentRequirement, AgentRun, AgentRootAction, AgentEvent,
                            AgentBusinessReference, AgentSkillInstallation)
+from .baichuan_models import Company, CompanyQualification, CompanyPerson

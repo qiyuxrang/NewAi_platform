@@ -31,7 +31,11 @@ else:
     if not database_path.is_absolute():
         database_path = BASE_DIR / database_path
     database_path.parent.mkdir(parents=True, exist_ok=True)
-    DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": database_path}}
+    # Reserve the write lock before atomic read/write work; DEFERRED upgrades can
+    # fail immediately despite busy_timeout when another writer is waiting.
+    # ponytail: SQLite serializes transactions; use PostgreSQL for sustained concurrent writes.
+    DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": database_path,
+                              "OPTIONS": {"timeout": 30, "transaction_mode": "IMMEDIATE"}}}
 AUTH_USER_MODEL = "portal.User"
 AUTH_PASSWORD_VALIDATORS = [{"NAME": "django.contrib.auth.password_validation.UserAttributeSimilarityValidator"}, {"NAME": "django.contrib.auth.password_validation.MinimumLengthValidator", "OPTIONS": {"min_length": 12}}, {"NAME": "django.contrib.auth.password_validation.CommonPasswordValidator"}, {"NAME": "django.contrib.auth.password_validation.NumericPasswordValidator"}]
 LANGUAGE_CODE = "zh-hans"
@@ -83,6 +87,12 @@ except ValueError:
 if not 1 <= MODEL_MAX_PENDING_PER_MODEL <= 100:
     raise ImproperlyConfigured("模型并发上限必须位于1至100之间")
 PRODUCT_P1_ENABLED = os.environ.get("PORTAL_PRODUCT_P1_ENABLED") == "1"
+# Baichuan stays closed until the deployment's shared scope is explicitly set.
+PORTAL_BAICHUAN_SCOPE_CONFIRMED = os.environ.get("PORTAL_BAICHUAN_SCOPE_CONFIRMED") == "1"
+PORTAL_BAICHUAN_READ_USER_IDS = tuple(filter(None, os.environ.get("PORTAL_BAICHUAN_READ_USER_IDS", "").split(",")))
+PORTAL_BAICHUAN_WRITE_USER_IDS = tuple(filter(None, os.environ.get("PORTAL_BAICHUAN_WRITE_USER_IDS", "").split(",")))
+PORTAL_BAICHUAN_READ_ROLE_CODES = tuple(filter(None, os.environ.get("PORTAL_BAICHUAN_READ_ROLE_CODES", "").split(",")))
+PORTAL_BAICHUAN_WRITE_ROLE_CODES = tuple(filter(None, os.environ.get("PORTAL_BAICHUAN_WRITE_ROLE_CODES", "").split(",")))
 AGENT_PLATFORM_ENABLED = os.environ.get("PORTAL_AGENT_ENABLED") == "1"
 AGENT_RUNTIME_URL = os.environ.get("PORTAL_AGENT_RUNTIME_URL", "")
 AGENT_RUNTIME_SERVICE_TOKEN = os.environ.get("PORTAL_AGENT_RUNTIME_SERVICE_TOKEN", "")
@@ -152,6 +162,12 @@ if PRODUCT_TECHNICAL_TARGET_CHARACTERS < 50000 or PRODUCT_FEASIBILITY_TARGET_CHA
 if not 1 <= PRODUCT_MAX_MODEL_CALLS <= 1000:
     raise ImproperlyConfigured("产品模型调用上限必须位于1至1000之间")
 PRODUCT_ENFORCE_OUTPUT_LENGTH = True
+try:
+    PRODUCT_WRITING_CONCURRENCY = int(os.environ.get("PORTAL_PRODUCT_WRITING_CONCURRENCY", "12"))
+except ValueError:
+    raise ImproperlyConfigured("产品章节写作并发数必须为整数") from None
+if not 1 <= PRODUCT_WRITING_CONCURRENCY <= 32:
+    raise ImproperlyConfigured("产品章节写作并发数必须位于1至32之间")
 PRODUCT_STEP_MAX_ATTEMPTS = int(os.environ.get("PORTAL_PRODUCT_STEP_MAX_ATTEMPTS", "3"))
 PRODUCT_STEP_RETRY_BASE_SECONDS = int(os.environ.get("PORTAL_PRODUCT_STEP_RETRY_BASE_SECONDS", "5"))
 PRODUCT_STEP_RETRY_MAX_SECONDS = int(os.environ.get("PORTAL_PRODUCT_STEP_RETRY_MAX_SECONDS", "60"))

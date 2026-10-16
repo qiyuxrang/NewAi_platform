@@ -3,11 +3,13 @@ import { getAccessToken } from '../lib/api.ts'
 export class ApiError extends Error {
   readonly status: number
   readonly code?: string
-  constructor(status: number, message: string, code?: string) {
+  readonly errors?: Record<string, string>
+  constructor(status: number, message: string, code?: string, errors?: Record<string, string>) {
     super(message)
     this.name = 'ApiError'
     this.status = status
     this.code = code
+    this.errors = errors
   }
 }
 
@@ -31,8 +33,10 @@ async function authenticatedFetch(path: string, options: RequestInit = {}): Prom
   headers.set('Authorization', `Bearer ${token}`)
   const response = await fetch(businessPath(path), { ...options, headers, credentials: 'omit' })
   if (!response.ok) {
-    const detail = await response.json().catch(() => null) as { detail?: unknown; code?: unknown } | null
-    throw new ApiError(response.status, typeof detail?.detail === 'string' ? detail.detail : `业务请求失败 (${response.status})`, typeof detail?.code === 'string' ? detail.code : undefined)
+    const detail = await response.json().catch(() => null) as { detail?: unknown; code?: unknown; errors?: unknown } | null
+    const errors = detail?.errors && typeof detail.errors === 'object' && !Array.isArray(detail.errors)
+      ? Object.fromEntries(Object.entries(detail.errors).filter((entry): entry is [string, string] => typeof entry[1] === 'string')) : undefined
+    throw new ApiError(response.status, typeof detail?.detail === 'string' ? detail.detail : `业务请求失败 (${response.status})`, typeof detail?.code === 'string' ? detail.code : undefined, errors)
   }
   return response
 }

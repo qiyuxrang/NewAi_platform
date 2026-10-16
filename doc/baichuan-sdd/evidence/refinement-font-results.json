@@ -1,0 +1,43 @@
+{
+  "overall": "PASS",
+  "executed_at": "2026-10-16T06:39:08.780666+00:00",
+  "checks": [
+    {
+      "identity": "manager_user",
+      "width": 1440,
+      "result": "PASS",
+      "body": 16,
+      "section_title": 24,
+      "company_title": 32,
+      "official_host_single_line": true
+    },
+    {
+      "identity": "manager_user",
+      "width": 1920,
+      "result": "PASS",
+      "body": 16,
+      "section_title": 24,
+      "company_title": 38,
+      "official_host_single_line": true
+    },
+    {
+      "identity": "product_user",
+      "width": 1440,
+      "result": "PASS",
+      "body": 16,
+      "section_title": 24,
+      "company_title": 32,
+      "official_host_single_line": true
+    },
+    {
+      "identity": "product_user",
+      "width": 1920,
+      "result": "PASS",
+      "body": 16,
+      "section_title": 24,
+      "company_title": 38,
+      "official_host_single_line": true
+    }
+  ],
+  "page_errors": []
+}

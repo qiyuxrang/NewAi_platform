@@ -5,6 +5,7 @@ import logging
 
 from django.conf import settings
 from django.db import IntegrityError, OperationalError, transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from .security import audit
@@ -28,6 +29,12 @@ def consumer_online(now=None):
         slot=1, updated_at__gt=(now or timezone.now()) - timedelta(seconds=15)).exists()
 
 
+def recovery_required(now=None):
+    expired = Q(lease_until__isnull=True) | Q(lease_until__lte=now or timezone.now())
+    return any(model.objects.filter(expired, state='RUNNING').exists()
+               for model in (TenderManualRefresh, TenderFetchRun))
+
+
 def schedule_status():
     now = timezone.now()
     enabled = bool(getattr(settings, 'PORTAL_TENDER_INGESTION_ENABLED', False)
@@ -36,7 +43,7 @@ def schedule_status():
     slot = now.astimezone(BEIJING).replace(minute=0, second=0, microsecond=0)
     # At startup the current slot is due immediately; never replay old slots.
     next_run = (slot + timedelta(hours=1) if TenderManualRefresh.objects.filter(
-        scheduled_for=slot).exists() else now) if enabled and consumer_online(now) else None
+        scheduled_for=slot).exists() else now) if enabled and consumer_online(now) and not recovery_required(now) else None
     return {'enabled': enabled, 'interval_minutes': 60,
             'lookback_days': getattr(settings, 'TENDER_LOOKBACK_DAYS', 30),
             'next_run_at': next_run.isoformat() if next_run else None}
@@ -61,6 +68,8 @@ def _enqueue_due(*, now=None):
     slot = moment.astimezone(BEIJING).replace(minute=0, second=0, microsecond=0)
     if TenderManualRefresh.objects.filter(state__in=['QUEUED', 'RUNNING']).exists():
         return None
+    if recovery_required(moment):
+        return None
     if TenderManualRefresh.objects.filter(scheduled_for=slot).exists():
         return None
     codes = list(TenderSource.objects.filter(code__in=VERIFIED_SOURCES, enabled=True)
@@ -81,6 +90,8 @@ def enqueue(actor, source_codes: list[str]) -> TenderManualRefresh:
         raise ValueError('刷新未启用')
     if not consumer_online():
         raise ValueError('后台消费者未运行')
+    if recovery_required():
+        raise ValueError('上次采集中断，须由后台确认旧执行已停止后恢复')
     if not source_codes or len(set(source_codes)) != len(source_codes) or set(source_codes) - VERIFIED_SOURCES:
         raise ValueError('来源必须非空、唯一且均已验收')
     if TenderSource.objects.filter(code__in=source_codes, enabled=True).count() != len(source_codes):
@@ -98,7 +109,7 @@ def enqueue(actor, source_codes: list[str]) -> TenderManualRefresh:
 
 def serialize(batch: TenderManualRefresh) -> dict:
     state = batch.state
-    if state == batch.State.RUNNING and batch.lease_until and batch.lease_until <= timezone.now():
+    if state == batch.State.RUNNING and (batch.lease_until is None or batch.lease_until <= timezone.now()):
         state = batch.State.INTERRUPTED
     safe_results = {code: {key: value for key, value in result.items()
                            if key in ('source_code', 'state', 'run_id', 'complete', 'listed',

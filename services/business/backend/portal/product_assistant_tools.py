@@ -176,6 +176,25 @@ class AssistantTools:
         # Only fixed public additions may accompany literal current-question terms; never fall back to the whole question.
         terms = list(dict.fromkeys(part for term in QUERY_SEPARATORS.split(query) if term
                                   for part in re.split(pattern, term if term in self.question else term.rstrip(".:")) if part))
+        projected = []
+        for term in terms:
+            if term in self.question or term in additions:
+                projected.append(term)
+                continue
+            # Only rejoin literal Chinese phrases; bound segmentation and forbid single-character assembly.
+            if len(term) > 64 or not re.fullmatch(r"[\u4e00-\u9fff]+", term):
+                return None
+            segments = [None] * (len(term) + 1)
+            segments[0] = []
+            for end in range(2, len(term) + 1):
+                for start in range(end - 1):
+                    if segments[start] is not None and term[start:end] in self.question:
+                        segments[end] = segments[start] + [term[start:end]]
+                        break
+            if segments[-1] is None:
+                return None
+            projected.extend(segments[-1])
+        terms = list(dict.fromkeys(projected))
         if (not terms or any(term not in self.question and term not in additions for term in terms)
                 or not any(term in self.question and term not in additions for term in terms)):
             return None
@@ -322,7 +341,8 @@ class AssistantTools:
         if name == "web_search":
             query = self._public_query(args.get("query", self.question))
             if query is None:
-                return {"error": "public_query_only", "detail": PUBLIC_QUERY_GUIDANCE + "请删除不允许的补词，不要改搜完整问题。"}
+                return {"error": "public_query_only", "detail": "搜索词包含本轮未提供的词，已停止本次搜索。", "guidance": PUBLIC_QUERY_GUIDANCE
+                    + "如果主题仅在历史对话中，请先用中文请用户补充本轮可公开检索的关键词；不得自动外发历史企业资料，也不要改搜完整问题。"}
             found = web.search_public_query(query)
             self.allowed_urls.update(item["url"] for item in found)
             return {"sources": [self.add_source({"type": "web", "title": item["title"],

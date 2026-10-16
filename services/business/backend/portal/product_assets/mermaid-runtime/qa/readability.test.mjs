@@ -28,8 +28,8 @@ test("actual cropped reading units preserve source and reuse every panel",{skip:
     const first=await render();
     assert.equal(first.blockedNetworkRequests,0);assert.equal(first.securityLevel,"strict");
     const long=first.figures[0];assert.equal(long.sourceSha256,createHash("sha256").update(source).digest("hex"));
-    assert.equal(first.layoutVersion,"word-readable-v2");
-    assert.equal(long.layout.panels.length,2);assert.equal(long.layout.labelsFullyContained,true);
+    assert.equal(first.layoutVersion,"word-readable-v3");
+    assert.equal(long.layout.panels.length,1);assert.equal(long.layout.labelsFullyContained,true);
     assert.equal(long.layout.nodeCount,8);assert.ok(long.layout.labelCount>=10);assert.ok(long.layout.edgeCount>=7);
     const times=new Map();
     for(const figure of first.figures){
@@ -43,7 +43,7 @@ test("actual cropped reading units preserve source and reuse every panel",{skip:
     for(const name of await fs.readdir(path.join(root,".bitmap-cache")))if(name.endsWith(".png"))times.set(name,(await fs.stat(path.join(root,".bitmap-cache",name))).mtimeMs);
     const second=await render();assert.deepEqual(second.figures,first.figures);
     for(const [name,time]of times)assert.equal((await fs.stat(path.join(root,".bitmap-cache",name))).mtimeMs,time);
-    const extra=long.layout.panels[1];await fs.writeFile(path.join(root,extra.path),"corrupt published panel");
+    const extra=long.layout.panels[0];await fs.writeFile(path.join(root,extra.path),"corrupt published panel");
     const third=await render();assert.deepEqual(third.figures,first.figures);
     assert.equal(createHash("sha256").update(await fs.readFile(path.join(root,extra.path))).digest("hex"),extra.imageSha256);
     const layoutFiles=(await fs.readdir(path.join(root,".bitmap-cache"))).filter(name=>name.endsWith(".layout.json"));
@@ -60,7 +60,7 @@ test("actual cropped reading units preserve source and reuse every panel",{skip:
     assert.deepEqual(withoutBitmapHashes(afterOldCache.figures),withoutBitmapHashes(first.figures));
     for(const [index,figure]of afterOldCache.figures.entries()){
       assert.equal(figure.sourceSha256,createHash("sha256").update(diagrams[index].source).digest("hex"));
-      assert.equal(figure.layout.version,"word-readable-v2");assert.ok(figure.layout.panels.length<=2);
+      assert.equal(figure.layout.version,"word-readable-v3");assert.ok(figure.layout.panels.length<=2);
       assert.equal(figure.imageSha256,figure.layout.panels[0].imageSha256);
       for(const panel of figure.layout.panels){
         const actual=await fs.readFile(path.join(root,panel.path));
@@ -69,7 +69,7 @@ test("actual cropped reading units preserve source and reuse every panel",{skip:
     }
     for(const name of layoutFiles){
       const refreshed=JSON.parse(await fs.readFile(path.join(root,".bitmap-cache",name),"utf8"));
-      assert.equal(refreshed.version,"word-readable-v2");assert.ok(refreshed.panels.length<=2);
+      assert.equal(refreshed.version,"word-readable-v3");assert.ok(refreshed.panels.length<=2);
       assert.equal(refreshed.obsoleteLayoutSentinel,undefined);
     }
     const tooLong=path.join(root,"too-long");await fs.mkdir(tooLong);
@@ -97,7 +97,7 @@ test("actual cropped reading units preserve source and reuse every panel",{skip:
     const rejected=spawnSync(process.execPath,[path.join(runtime,"render.mjs"),path.join(tooNarrow,"content.json"),path.join(tooNarrow,"private.json")],{env:process.env,encoding:"utf8",windowsHide:true,timeout:60000});
     assert.equal(rejected.status,2);const failedLayout=JSON.parse(rejected.stderr);
     assert.equal(failedLayout.reason,"diagram_layout_unreadable");assert.equal(failedLayout.detail,"font_below_minimum");
-    assert.equal(failedLayout.figure_id,"D1");assert.equal(failedLayout.directionCandidates.length,2);
+    assert.equal(failedLayout.figure_id,"D1");assert.equal(failedLayout.directionCandidates.length,3);
     assert.ok(failedLayout.directionCandidates.every(item=>item.minFontPt<10.5&&item.nodeCount===7&&item.edgeCount===6));
     assert.equal(await fs.stat(path.join(tooNarrow,"wide.png")).then(()=>true,()=>false),false);
     assert.equal(await fs.stat(path.join(tooNarrow,"private.json")).then(()=>true,()=>false),false);

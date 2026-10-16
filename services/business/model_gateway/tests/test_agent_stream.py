@@ -73,6 +73,44 @@ class AgentStreamTests(unittest.TestCase):
                                                                  "reasoning_content": "private-thinking"}}]}
         self.assertNotIn("private-thinking", str(agent_protocol.parse_response(json.dumps(response), {"lookup"})))
 
+    def test_complete_native_calls_accept_stop_and_tool_calls_in_both_protocols(self):
+        for reason in ("stop", "tool_calls"):
+            with self.subTest(reason=reason):
+                wire = (chunk({"content": "Checking"})
+                        + chunk({"tool_calls": [{"index": 0, **CALL}]}) + chunk({}, reason)
+                        + frame({"choices": [], "usage": {"prompt_tokens": 12, "completion_tokens": 5}})
+                        + frame("[DONE]"))
+                stream, connection = self.stream(wire, tool_choice="required")
+                self.assertEqual(list(stream), [{"delta": "Checking"}, {"done": True, **RESULT}])
+                self.assertEqual(json.loads(connection.request.call_args.kwargs["body"])["tool_choice"], "required")
+                response = {"choices": [{"finish_reason": reason, "message": {
+                    "role": "assistant", "content": "Checking", "tool_calls": [CALL]}}],
+                    "usage": {"prompt_tokens": 12, "completion_tokens": 5}}
+                self.assertEqual(agent_protocol.parse_response(json.dumps(response), {"lookup"}), RESULT)
+
+    def test_native_stop_preserves_call_validation_and_finish_boundaries(self):
+        invalid_calls = [[], [{**CALL, "id": "invalid id"}],
+                         [{**CALL, "function": {"name": "unregistered", "arguments": "{}"}}],
+                         [{**CALL, "function": {"name": "lookup", "arguments": '{"q":'}}]]
+        cases = [(reason, [CALL]) for reason in ("length", "content_filter", "unknown")]
+        cases += [("tool_calls", [])] + [("stop", calls) for calls in invalid_calls]
+        for reason, calls in cases:
+            with self.subTest(reason=reason, calls=calls):
+                wire = (chunk({"tool_calls": [{"index": index, **call} for index, call in enumerate(calls)]})
+                        + chunk({}, reason) + frame("[DONE]"))
+                stream, _ = self.stream(wire)
+                with self.assertRaises(GatewayError) as caught:
+                    list(stream)
+                self.assertEqual(caught.exception.code, "invalid_response")
+                response = {"choices": [{"finish_reason": reason, "message": {
+                    "role": "assistant", "content": None, "tool_calls": calls}}]}
+                with self.assertRaises(ValueError):
+                    agent_protocol.parse_response(json.dumps(response), {"lookup"})
+        stream, _ = self.stream(chunk({"tool_calls": [{"index": 0, **CALL}]}) + chunk({}, "stop"))
+        with self.assertRaises(GatewayError) as caught:
+            list(stream)
+        self.assertEqual(caught.exception.code, "invalid_response")
+
     def test_none_omits_provider_tools_after_strict_history_validation(self):
         messages = [{"role": "system", "content": "trusted rules"}] + self.messages + [
             {"role": "assistant", "content": "Earlier answer"}, {"role": "user", "content": "Continue"},

@@ -1,0 +1,121 @@
+✔ API preserves validated field errors while retaining three-argument ApiError compatibility (49.5179ms)
+✔ fixed qualification dictionary, any/grade exclusivity and URL retain server validation (1.0729ms)
+✔ websites reject unsafe protocols and credentials; snapshots retain child IDs and expected version (0.435ms)
+✔ post-save membership uses exact grades, OR within and AND across categories, without personnel inference (0.3375ms)
+✔ both entrypoints share the product feature while preserving capability restrictions (0.3588ms)
+✔ detail preserves source statements and line breaks, linking only safe HTTP(S) evidence without surrounding punctuation (130.6744ms)
+✔ details hide empty fields and metadata, preserve all sources in one closed disclosure and expose safe official links (104.3969ms)
+✔ checkbox selection updates immediately while the router still exposes the previous URL (138.7392ms)
+✔ list exposes actual safe websites, extra contacts and server page controls without inventing fields (103.4319ms)
+✔ stale success and stale failure cannot replace the latest query, and loading never reports zero (137.9187ms)
+✔ a filtered page beyond the last page preserves the total and explains the empty page (67.3858ms)
+✔ editor submits a complete atomic snapshot, keeps inputs on conflict, and serializes cleared dates to null (109.8156ms)
+✔ server field errors appear at the affected company input and retain its draft value (53.7188ms)
+✔ answer requests accept SSE and JSON errors, preserve retry identity, and never retry automatically (1124.0538ms)
+✔ every department owns one assistant path while existing employee and manager permissions stay scoped (6.1609ms)
+✔ department assistant renders the shared component once without invoking HR or engineering workspaces (203.8544ms)
+✔ one authenticated GET carries encoded search and preserves server filtered metrics, distribution and full records (18.3599ms)
+✔ unknown amounts stay unknown; missing, blank, negative and unavailable values never create a donut (21.9132ms)
+✔ source mode keeps five genuine metrics, forbids money charts despite yuan label and never infers year from cutoff (10.0119ms)
+✔ 401 and 403 remain real errors and never load board content or write grants (1.4059ms)
+✔ filter changes discard stale responses and permission revocation unmounts previously visible data (917.3616ms)
+✔ permission first, ledger then latest published revision snapshot; no GM board or writes (7.7271ms)
+✔ 401/403 and missing finance grant stop with real errors; no subsequent finance request (1.5172ms)
+✔ unknown values do not become zero, standard received amount stays required and source recognition is per record (12.9277ms)
+✔ pure books prevent actively mixing new modes; existing mixed records retain their individual contracts (0.6005ms)
+✔ source form keeps seven main fields, monthly actual/plan and unknown year/unit without cutoff inference (11.3411ms)
+✔ editing retains baseline record mode and refuses either direction of conversion without writing (8.6119ms)
+✔ verified own authors only: unknown, other, duplicate metadata and changed draft actor block selection (14.3824ms)
+✔ single record update preserves full fields and exact expected_revision; metadata PATCH does not import or overwrite all records (1.135ms)
+✔ own publication uses can_edit despite can_publish false; exact selection and concurrent checksum failures never auto retry (2.4633ms)
+✔ 409 retains draft; manual reconcile keeps local changes and latest untouched fields, refuses lost authors or deleted records (0.8265ms)
+✔ truncated history does not fake a zero published baseline; racing version read produces 409 (1.7729ms)
+✔ page saves dirty cutoff with exact PATCH revision and does not expose submit or return actions (422.892ms)
+✔ page preserves unsaved fields through 409 and refresh, manually reconciles, and unmounts ledger on real 403 (254.5538ms)
+WebSocket server error: Port 24678 is already in use
+✔ records keep their own source mode, real zero and every original field (2.1228ms)
+✔ state and returned permissions independently govern every operation (0.259ms)
+✔ forms expose real required fields, source precision and unknown engineering progress (22.9617ms)
+✔ API reads permissions first and uses single-record revisions without bulk replacement or retry (7.8082ms)
+✔ dirty guards preserve router state when browser back or forward is cancelled and clean up (0.7741ms)
+✔ enterprise login keeps native validation, accessible password control and original company branding (11.9418ms)
+✔ assistant code blocks retain explicit foreground and theme-aware background (34.9436ms)
+✔ manager entries keep order/defaults and finance/entry guards do not expand access (1.8755ms)
+✔ business root is additive; request, upload, auth, preview and download semantics are retained (69.5974ms)
+✔ manager keeps fixed shared shell on every route; employee product workbench remains intact (134.3193ms)
+✔ manager BI uses API statistics, preserves unknown values and stays absent for employees (22.0562ms)
+✔ assistant capabilities stay independent and cancellation preserves live streams and completion races (2874.117ms)
+✔ blueprint progress is visible without expanding details and elapsed time uses only a valid stage start (259.9137ms)
+WebSocket server error: Port 24678 is already in use
+✔ dual report groups have separate budget denominators and one joint approval (84.6448ms)
+✔ legacy blueprint remains a shared directory without adding a family field (30.1764ms)
+✔ manual blueprint starts with distinct report directories, unique IDs and original conditions (1.2209ms)
+✔ saved body with the wrong report family is excluded even when title and sources match (59.708ms)
+WebSocket server error: Port 24678 is already in use
+✔ assistant Markdown shows public links without enabling OpenClaw file access or remote images (16.9084ms)
+✔ document search sends authenticated, encoded dataset and server pagination without retrieving chunks (3.153ms)
+✔ preview decodes full HTML and plain text directly, preserves first and last paragraphs and never creates blob URLs (1.2593ms)
+✔ closing during slow text decoding cancels the preview without returning stale content (1.1661ms)
+✔ 430 and 445 page manifests retain every consecutive page and render only sized placeholders before observation (98.3062ms)
+✔ PDF batches enforce exact order, manifest sizes, page count, end marker and data JPEG without rejecting base64 padding (1.0984ms)
+✔ first and final PDF batches use authenticated three-page requests; cancellation and real API failures survive (4.8686ms)
+✔ srcDoc keeps safe server HTML and escapes all plain text, with CSP and no script or same-origin permissions (0.8885ms)
+✔ access revocation, oversized and unsupported previews retain server errors instead of returning partial text (0.8707ms)
+✔ list and reader expose separate pending states, document title, return, close and original download controls (2.8026ms)
+✔ left and right separators follow physical drag direction, enforce limits and support keyboard extremes (0.6348ms)
+✔ knowledge-only hide controls keep both left panes mounted and restore controls outside the hidden panes (94.1909ms)
+✔ all routes keep the workbench stable without page fades (15.2954ms)
+WebSocket server error: Port 24678 is already in use
+✔ persisted plan is readable before export, with exact backend counts and no approval gate (30.0659ms)
+✔ new attempt style is separated from saved file style and failures retain all downloads (77.8874ms)
+✔ legacy or invalid progress never invents page counts or an automatic style (190.4873ms)
+✔ server permission locks style regeneration while saved exports stay available (48.9378ms)
+✔ finished retrieval is blocked when backend evidence is insufficient, while legacy snapshots remain readable (45.2472ms)
+✔ delivered outputs do not require legacy approval or expose a second review tail (103.7758ms)
+✔ incomplete delivery offers recovery and real blocking reasons while keeping all saved downloads (24.4927ms)
+✔ project actions enforce permission, versions, failure retention, refresh, delete confirmation and pagination (49.1779ms)
+✔ retrieval dropdown separates recorded sources, bounds excerpts and handles missing history (209.9293ms)
+✔ department return path is allowlisted and visual milestones retain real generation states (198.6384ms)
+✔ current files remain downloadable during running or failed tasks with honest quality warnings (198.2684ms)
+✔ quality warning survives before file generation and exhausted recovery remains disabled (25.349ms)
+✔ pending diagram repair uses the authorized original retry action without hiding existing files (122.9344ms)
+✔ running and failed projects expose saved TXT draft alongside copied text (31.3927ms)
+✔ one processing dialog owns the single node list and output errors have one recovery entry (17.7714ms)
+✖ persisted review failures identify the paused stage and explain the error on the main card (3.429ms)
+✔ draft API URL carries family and input/blueprint versions (0.1952ms)
+✔ automatic recovery and cached steps have readable labels without internal hashes (7.2396ms)
+✔ legacy payload without step fields renders normally; stale and unapproved text is hidden (9.8529ms)
+WebSocket server error: Port 24678 is already in use
+✔ project refresh preserves safe snapshots, rejects obsolete responses and highlights only changed files (1130.5109ms)
+✔ feature changes preserve the boundary and recover errors only when the reset key changes (2.816ms)
+ℹ tests 85
+ℹ suites 0
+ℹ pass 84
+ℹ fail 1
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 5601.2554
+
+✖ failing tests:
+
+test at frontend\tests\product-saved-draft.test.mjs:169:1
+✖ persisted review failures identify the paused stage and explain the error on the main card (3.429ms)
+  AssertionError [ERR_ASSERTION]: The input did not match the regular expression /<li[^>]*data-status="failed"[^>]*>(?:(?!<li)[\s\S])*?<h3>总编复核<\/h3>/. Input:
+
+  '<ol class="pd-progress-node-list" aria-label="完整处理链路"><li data-status="pending"><span class="pd-progress-node-index" aria-hidden="true">1</span><div><div class="pd-progress-node-heading"><h3>解析项目背景</h3><span>等待开始</span></div><p>等待服务端提供背景材料解析记录</p></div></li><li data-status="pending"><span class="pd-progress-node-index" aria-hidden="true">2</span><div><div class="pd-progress-node-heading"><h3>分析设备清单</h3><span>等待开始</span></div><p>等待服务端提供设备事实分析记录</p></div></li><li data-status="pending"><span class="pd-progress-node-index" aria-hidden="true">3</span><div><div class="pd-progress-node-heading"><h3>知识库检索</h3><span>等待开始</span></div><p>知识检索状态尚未由服务端返回</p></div></li><li data-status="completed"><span class="pd-progress-node-index" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-check" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span><div><div class="pd-progress-node-heading"><h3>生成项目蓝图</h3><span>已完成</span></div><p>项目蓝图 第 2 版 已保存</p></div></li><li data-status="completed"><span class="pd-progress-node-index" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-check" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span><div><div class="pd-progress-node-heading"><h3>本人确认蓝图</h3><span>已完成</span></div><p>蓝图已确认</p></div></li><li data-status="completed"><span class="pd-progress-node-index" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-check" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span><div><div class="pd-progress-node-heading"><h3>技术方案正文</h3><span>正文已生成</span></div><p>蓝图确认后开始正文编制</p></div></li><li data-status="completed"><span class="pd-progress-node-index" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-check" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span><div><div class="pd-progress-node-heading"><h3>可研报告正文</h3><span>正文已生成</span></div><p>蓝图确认后开始正文编制</p></div></li><li data-status="failed"><span class="pd-progress-node-index" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-circle-alert" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="8" y2="12"></line><line x1="12" x2="12.01" y1="16" y2="16"></line></svg></span><div><div class="pd-progress-node-heading"><h3>总编复核</h3><span>处理失败</span></div><p>处理已暂停：invalid_model_output。</p></div></li><li data-status="running" aria-current="step"><span class="pd-progress-node-index" aria-hidden="true">9</span><div><div class="pd-progress-node-heading"><h3>技术方案图表渲染</h3><span>处理中</span></div><p>等待服务端提供图表渲染记录</p></div></li><li data-status="pending"><span class="pd-progress-node-index" aria-hidden="true">10</span><div><div class="pd-progress-node-heading"><h3>技术方案文档排版</h3><span>等待开始</span></div><p>等待 Word 排版与文件保存记录</p></div></li><li data-status="pending"><span class="pd-progress-node-index" aria-hidden="true">11</span><div><div class="pd-progress-node-heading"><h3>可研报告图表渲染</h3><span>等待开始</span></div><p>等待服务端提供图表渲染记录</p></div></li><li data-status="pending"><span class="pd-progress-node-index" aria-hidden="true">12</span><div><div class="pd-progress-node-heading"><h3>可研报告文档排版</h3><span>等待开始</span></div><p>等待 Word 排版与文件保存记录</p></div></li><li data-status="waiting"><span class="pd-progress-node-index" aria-hidden="true">13</span><div><div class="pd-progress-node-heading"><h3>汇报 PPT</h3><span>等待确认</span></div><p>等待两份报告文件完成后制作汇报文稿</p></div></li><li data-status="pending"><span class="pd-progress-node-index" aria-hidden="true">14</span><div><div class="pd-progress-node-heading"><h3>项目成果下载</h3><span>等待开始</span></div><p>每份已保存的当前成果均可独立下载；草稿质量与正式交付状态单独显示</p></div></li></ol>'
+
+      at TestContext.<anonymous> (file:///C:/Users/BJRunner/Desktop/MultiUserClaw/frontend/tests/product-saved-draft.test.mjs:183:12)
+      at Test.runInAsyncScope (node:async_hooks:228:14)
+      at Test.run (node:internal/test_runner/test:1118:25)
+      at Test.processPendingSubtests (node:internal/test_runner/test:787:18)
+      at Test.postRun (node:internal/test_runner/test:1247:19)
+      at Test.run (node:internal/test_runner/test:1175:12)
+      at async Test.processPendingSubtests (node:internal/test_runner/test:787:7) {
+    generatedMessage: true,
+    code: 'ERR_ASSERTION',
+    actual: '<ol class="pd-progress-node-list" aria-label="完整处理链路"><li data-status="pending"><span class="pd-progress-node-index" aria-hidden="true">1</span><div><div class="pd-progress-node-heading"><h3>解析项目背景</h3><span>等待开始</span></div><p>等待服务端提供背景材料解析记录</p></div></li><li data-status="pending"><span class="pd-progress-node-index" aria-hidden="true">2</span><div><div class="pd-progress-node-heading"><h3>分析设备清单</h3><span>等待开始</span></div><p>等待服务端提供设备事实分析记录</p></div></li><li data-status="pending"><span class="pd-progress-node-index" aria-hidden="true">3</span><div><div class="pd-progress-node-heading"><h3>知识库检索</h3><span>等待开始</span></div><p>知识检索状态尚未由服务端返回</p></div></li><li data-status="completed"><span class="pd-progress-node-index" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-check" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span><div><div class="pd-progress-node-heading"><h3>生成项目蓝图</h3><span>已完成</span></div><p>项目蓝图 第 2 版 已保存</p></div></li><li data-status="completed"><span class="pd-progress-node-index" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-check" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span><div><div class="pd-progress-node-heading"><h3>本人确认蓝图</h3><span>已完成</span></div><p>蓝图已确认</p></div></li><li data-status="completed"><span class="pd-progress-node-index" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-check" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span><div><div class="pd-progress-node-heading"><h3>技术方案正文</h3><span>正文已生成</span></div><p>蓝图确认后开始正文编制</p></div></li><li data-status="completed"><span class="pd-progress-node-index" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-check" aria-hidden="true"><path d="M20 6 9 17l-5-5"></path></svg></span><div><div class="pd-progress-node-heading"><h3>可研报告正文</h3><span>正文已生成</span></div><p>蓝图确认后开始正文编制</p></div></li><li data-status="failed"><span class="pd-progress-node-index" aria-hidden="true"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="lucide lucide-circle-alert" aria-hidden="true"><circle cx="12" cy="12" r="10"></circle><line x1="12" x2="12" y1="8" y2="12"></line><line x1="12" x2="12.01" y1="16" y2="16"></line></svg></span><div><div class="pd-progress-node-heading"><h3>总编复核</h3><span>处理失败</span></div><p>处理已暂停：invalid_model_output。</p></div></li><li data-status="running" aria-current="step"><span class="pd-progress-node-index" aria-hidden="true">9</span><div><div class="pd-progress-node-heading"><h3>技术方案图表渲染</h3><span>处理中</span></div><p>等待服务端提供图表渲染记录</p></div></li><li data-status="pending"><span class="pd-progress-node-index" aria-hidden="true">10</span><div><div class="pd-progress-node-heading"><h3>技术方案文档排版</h3><span>等待开始</span></div><p>等待 Word 排版与文件保存记录</p></div></li><li data-status="pending"><span class="pd-progress-node-index" aria-hidden="true">11</span><div><div class="pd-progress-node-heading"><h3>可研报告图表渲染</h3><span>等待开始</span></div><p>等待服务端提供图表渲染记录</p></div></li><li data-status="pending"><span class="pd-progress-node-index" aria-hidden="true">12</span><div><div class="pd-progress-node-heading"><h3>可研报告文档排版</h3><span>等待开始</span></div><p>等待 Word 排版与文件保存记录</p></div></li><li data-status="waiting"><span class="pd-progress-node-index" aria-hidden="true">13</span><div><div class="pd-progress-node-heading"><h3>汇报 PPT</h3><span>等待确认</span></div><p>等待两份报告文件完成后制作汇报文稿</p></div></li><li data-status="pending"><span class="pd-progress-node-index" aria-hidden="true">14</span><div><div class="pd-progress-node-heading"><h3>项目成果下载</h3><span>等待开始</span></div><p>每份已保存的当前成果均可独立下载；草稿质量与正式交付状态单独显示</p></div></li></ol>',
+    expected: /<li[^>]*data-status="failed"[^>]*>(?:(?!<li)[\s\S])*?<h3>总编复核<\/h3>/,
+    operator: 'match',
+    diff: 'simple'
+  }

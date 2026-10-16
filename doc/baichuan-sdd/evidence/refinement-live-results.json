@@ -1,0 +1,63 @@
+{
+  "overall": "PASS",
+  "scope": "existing local platform 3080 -> gateway8080 -> portal8100 -> real initialized SQLite; existing accounts and real HTTP login; no API interception or company test writes",
+  "executed_at": "2026-10-16T06:36:18.827460+00:00",
+  "refinement": "latest list and detail reference layouts; 22px company names; numbered server pagination and page sizes; no empty metadata; one closed provenance panel; official address, popup and actual clipboard",
+  "checks": [
+    {
+      "check": "existing authorized identity real HTTP full pagination, all names, combinations and detail",
+      "result": "PASS",
+      "identity": "manager_user",
+      "total": 1283,
+      "pages": 14,
+      "can_create": true,
+      "can_edit": true
+    },
+    {
+      "check": "existing authorized identity real HTTP full pagination, all names, combinations and detail",
+      "result": "PASS",
+      "identity": "product_user",
+      "total": 1283,
+      "pages": 14,
+      "can_create": true,
+      "can_edit": true
+    },
+    {
+      "check": "non-target existing HR identity denied",
+      "result": "PASS",
+      "status": 403
+    },
+    {
+      "check": "real list numbered pagination, page sizes and actual extra contacts",
+      "result": "PASS",
+      "identity": "manager_user"
+    },
+    {
+      "check": "new reference detail: real sourced company profile, two columns, actual business areas, enlarged fonts, contacts, safe official popup and actual clipboard; injected clipboard failure stays truthful",
+      "result": "PASS",
+      "identity": "manager_user"
+    },
+    {
+      "check": "real browser on existing platform: full count, fixed shell, multi-grade AND, last page, name search, return, person/phone/source and official popup, refresh",
+      "result": "PASS",
+      "identity": "manager_user"
+    },
+    {
+      "check": "real list numbered pagination, page sizes and actual extra contacts",
+      "result": "PASS",
+      "identity": "product_user"
+    },
+    {
+      "check": "new reference detail: real sourced company profile, two columns, actual business areas, enlarged fonts, contacts, safe official popup and actual clipboard; injected clipboard failure stays truthful",
+      "result": "PASS",
+      "identity": "product_user"
+    },
+    {
+      "check": "real browser on existing platform: full count, fixed shell, multi-grade AND, last page, name search, return, person/phone/source and official popup, refresh",
+      "result": "PASS",
+      "identity": "product_user"
+    }
+  ],
+  "page_errors": [],
+  "url": "http://127.0.0.1:3080/departments/product/baichuan"
+}

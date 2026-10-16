@@ -3,14 +3,14 @@ from copy import deepcopy
 from datetime import timedelta
 
 from django.conf import settings
-from django.db import transaction
 from django.utils import timezone
 
 from .product_models import DocumentStep
+from .product_parallel import atomic
 from .product_service import digest
 
 
-TRANSIENT_ERRORS = frozenset({"timeout", "gateway_unavailable", "busy", "rate_limited", "internal_error",
+TRANSIENT_ERRORS = frozenset({"timeout", "gateway_unavailable", "upstream_error", "busy", "rate_limited", "internal_error",
                               "office_render_timeout", "office_render_failed", "output_truncated"})
 
 
@@ -28,7 +28,7 @@ def run_step(task_id, fence, key, binding, operation, *, validate=None):
     from .product_worker import _guard
 
     input_hash = digest(binding)
-    with transaction.atomic():
+    with atomic():
         task = _guard(task_id, fence)
         step, _ = DocumentStep.objects.get_or_create(task=task, key=key[:160], input_hash=input_hash)
         if step.status == "failed" and task.checkpoint.get("recovery_mode") is True:
@@ -55,10 +55,14 @@ def run_step(task_id, fence, key, binding, operation, *, validate=None):
         office_failed = (code == "document_render_failed" and isinstance(diagnostic, dict)
                          and diagnostic.get("stage") == "office_render"
                          and diagnostic.get("reason") == "renderer_failed")
-        transient = code in TRANSIENT_ERRORS or timed_out or office_failed
+        format_diagnostic = getattr(error, "json_output_diagnostic", {})
+        invalid_json = (code == "invalid_model_output" and isinstance(format_diagnostic, dict)
+                        and format_diagnostic.get("reason") in
+                        {"invalid_json", "duplicate_key", "nonfinite_number", "invalid_root"})
+        transient = code in TRANSIENT_ERRORS or timed_out or office_failed or invalid_json
         terminal_child = getattr(error, "_product_failed_step", None) is not None
         retry_after = None
-        with transaction.atomic():
+        with atomic():
             _guard(task_id, fence)
             step = DocumentStep.objects.select_for_update().get(pk=step.pk)
             if isinstance(error, StepRetryPending):
@@ -77,7 +81,7 @@ def run_step(task_id, fence, key, binding, operation, *, validate=None):
             raise StepRetryPending(retry_after, code) from error
         error._product_failed_step = step.pk
         raise
-    with transaction.atomic():
+    with atomic():
         _guard(task_id, fence)
         step = DocumentStep.objects.select_for_update().get(pk=step.pk)
         step.status, step.output, step.output_hash = "completed", deepcopy(output), digest(output)

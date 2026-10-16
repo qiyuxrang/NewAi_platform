@@ -1,0 +1,8 @@
+{
+  "overall": "PASS",
+  "accepted_facts": 484,
+  "normalized_evidence_substring_matches": 484,
+  "independently_reviewed_items": 281,
+  "rejected_or_deferred": 19,
+  "details_private": true
+}

@@ -97,7 +97,11 @@ def summary(conversation):
 
 def detail(request, conversation):
     visible(request, conversation)
-    return {**summary(conversation), "turns": conversation.turns}
+    turns = [{**turn, "answer": "上次回答未完成，请重新发送具体问题。", "outcome": "incomplete",
+              "sources": [], "activities": []}
+             if turn.get("assistant") and service.incomplete_response(turn.get("answer", "")) else turn
+             for turn in conversation.turns]
+    return {**summary(conversation), "turns": turns}
 
 
 def stream_event(payload):

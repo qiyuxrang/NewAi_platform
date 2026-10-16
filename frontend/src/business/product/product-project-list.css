@@ -54,7 +54,16 @@
 .pp-page .pp-badge.neutral { color: #8490a1; background: #f1f3f6; }
 .pp-page .pp-row-actions { display: flex; align-items: center; gap: 9px; white-space: nowrap; }
 .pp-page .pp-row-actions a { display: inline-flex; align-items: center; gap: 6px; text-decoration: none; font-size: 14px; color: #1677ef; }
-.pp-page .pp-row-actions button { border: none; background: transparent; color: #9ca7b6; padding: 2px; display: flex; cursor: not-allowed; }
+.pp-page .pp-row-actions button { border: none; background: transparent; color: #697b94; padding: 6px; display: flex; cursor: pointer; border-radius: 4px; }
+.pp-page .pp-row-actions button:hover { background: #edf5ff; color: #1677ef; }
+.pp-page .pp-row-actions button:disabled { opacity: .5; cursor: wait; }
+.pp-project-menu { position: fixed; inset: auto; margin: 0; width: 148px; padding: 5px; border: 1px solid #dfe5ed; border-radius: 6px; background: white; box-shadow: 0 5px 20px #152b4826; }
+.pp-page .pp-project-menu button { width: 100%; display: flex; align-items: center; gap: 9px; padding: 10px; font-size: 14px; text-align: left; color: #425068; }
+.pp-page .pp-project-menu .pp-delete-project { color: #c13b3b; }
+.pp-page .pp-project-title { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.pp-page .pp-project-title .pp-project-name { min-width: 0; }
+.pp-page .pp-pinned { display: inline-flex; align-items: center; gap: 3px; flex-shrink: 0; padding: 3px 5px; border-radius: 4px; background: #edf5ff; color: #1677ef; font-size: 11px; }
+.pp-page .pp-action-error { color: #b42318; font-size: 14px; }
 .pp-page .pp-pagination { display: flex; align-items: center; justify-content: space-between; gap: 20px; min-height: 64px; font-size: 14px; color: #7b8799; }
 .pp-page .pp-pagination > div { display: flex; align-items: center; gap: 9px; }
 .pp-page .pp-pagination button { height: 33px; width: 33px; display: flex; align-items: center; justify-content: center; padding: 0; border: 1px solid #dfe5ed; background: white; color: #6c798c; border-radius: 5px; }

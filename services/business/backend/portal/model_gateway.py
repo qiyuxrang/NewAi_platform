@@ -17,6 +17,7 @@ from django.utils import timezone
 from django.utils.crypto import salted_hmac
 
 from .integration import NoRedirect
+from .product_parallel import atomic as serialized_atomic, db_lock
 from .model_messages import TEXT_REQUEST_LIMIT
 from .model_response_format import (supports_chapter_response_format, validate_response_format,
                                     validate_generation_profile, validate_profile_usage)
@@ -33,6 +34,7 @@ ERROR_MESSAGES = {
     "upstream_auth": "模型服务密钥无效或无访问权限。",
     "timeout": "模型服务请求超时。",
     "upstream_error": "模型服务调用失败。",
+    "upstream_invalid_request": "模型服务拒绝调用参数，请检查模型配置和请求格式。",
     "invalid_response": "模型服务返回格式不符合协议。",
     "response_too_large": "模型服务返回内容过大。",
     "output_truncated": "模型输出被截断，请调整章节或令牌限制后由人工重试。",
@@ -49,10 +51,25 @@ ERROR_MESSAGES = {
 
 
 class GatewayError(Exception):
-    def __init__(self, code, message=None, status=502):
+    def __init__(self, code, message=None, status=502, *, diagnostic=None):
         self.code = code if isinstance(code, str) and code in ERROR_MESSAGES else "upstream_error"
         self.message = ERROR_MESSAGES[self.code]
         self.status = status
+        self.diagnostic = {}
+        if isinstance(diagnostic, dict):
+            upstream_status = diagnostic.get("upstream_status")
+            if type(upstream_status) is int and 100 <= upstream_status <= 599:
+                self.diagnostic["upstream_status"] = upstream_status
+            upstream_code = diagnostic.get("upstream_code")
+            if (isinstance(upstream_code, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,79}", upstream_code)
+                    and not upstream_code.lower().startswith(("sk-", "sk_"))):
+                self.diagnostic["upstream_code"] = upstream_code
+            if isinstance(diagnostic.get("upstream_stage"), str) and diagnostic["upstream_stage"] in {"dns", "connect", "response_headers", "response_body", "tls"}:
+                self.diagnostic["upstream_stage"] = diagnostic["upstream_stage"]
+            if isinstance(diagnostic.get("upstream_exception"), str) and diagnostic["upstream_exception"] in {"OSError", "TimeoutError", "gaierror", "SSLError", "SSLCertVerificationError",
+                    "ConnectionRefusedError", "ConnectionResetError", "ConnectionAbortedError", "BrokenPipeError",
+                    "RemoteDisconnected", "IncompleteRead"}:
+                self.diagnostic["upstream_exception"] = diagnostic["upstream_exception"]
         super().__init__(self.message)
 
 
@@ -139,6 +156,23 @@ def _gateway_request(payload, endpoint=None):
     return request, model_timeout + (30 if model_timeout > 60 else 5)
 
 
+def _gateway_http_error(error):
+    try:
+        data = json.loads(error.read(8192))
+        code = data.get("code", "upstream_error") if isinstance(data, dict) else "upstream_error"
+        diagnostic = data.get("diagnostic") if isinstance(data, dict) else None
+    except (ValueError, AttributeError):
+        code, diagnostic = "upstream_error", None
+    finally:
+        error.close()
+    statuses = {"unconfigured": 503, "unauthorized": 503, "missing_key": 503,
+                "busy": 429, "rate_limited": 429, "timeout": 504, "target_not_allowed": 403,
+                "invalid_request": 400, "upstream_invalid_request": 400,
+                "request_too_large": 413, "unsupported_protocol": 400}
+    return GatewayError(code, status=statuses.get(code, 502) if isinstance(code, str) else 502,
+                        diagnostic=diagnostic)
+
+
 def fetch_model_catalog(provider):
     provider.full_clean()
     request, timeout = _gateway_request({"provider": {
@@ -158,13 +192,7 @@ def fetch_model_catalog(provider):
             raise ValueError
         return identifiers
     except HTTPError as error:
-        try:
-            code = json.loads(error.read(8192)).get("code", "upstream_error")
-        except (ValueError, AttributeError):
-            code = "upstream_error"
-        finally:
-            error.close()
-        raise GatewayError(code if isinstance(code, str) and code in ERROR_MESSAGES else "upstream_error") from None
+        raise _gateway_http_error(error) from None
     except (URLError, TimeoutError, OSError, HTTPException):
         raise GatewayError("gateway_unavailable", status=503) from None
     except (ValueError, TypeError, KeyError, UnicodeError):
@@ -197,16 +225,7 @@ def _request_gateway(payload):
             validate_profile_usage(result, payload["model"]["max_output_tokens"])
         return result
     except HTTPError as error:
-        try:
-            code = json.loads(error.read(8192)).get("code", "upstream_error")
-        except (ValueError, AttributeError):
-            code = "upstream_error"
-        finally:
-            error.close()
-        statuses = {"unconfigured": 503, "unauthorized": 503, "missing_key": 503,
-                    "busy": 429, "rate_limited": 429, "timeout": 504, "target_not_allowed": 403,
-                    "invalid_request": 400, "request_too_large": 413, "unsupported_protocol": 400}
-        raise GatewayError(code, status=statuses.get(code, 502) if isinstance(code, str) else 502) from None
+        raise _gateway_http_error(error) from None
     except (URLError, TimeoutError, OSError, HTTPException):
         raise GatewayError("gateway_unavailable", status=503) from None
     except (ValueError, TypeError, KeyError):
@@ -274,16 +293,7 @@ def _request_gateway_stream(payload):
             raise GatewayError("invalid_response")
         yield from _stream_events(response, monotonic() + timeout)
     except HTTPError as error:
-        try:
-            code = json.loads(error.read(8192)).get("code", "upstream_error")
-        except (ValueError, AttributeError):
-            code = "upstream_error"
-        finally:
-            error.close()
-        statuses = {"unconfigured": 503, "unauthorized": 503, "missing_key": 503,
-                    "busy": 429, "rate_limited": 429, "timeout": 504, "target_not_allowed": 403,
-                    "invalid_request": 400, "request_too_large": 413, "unsupported_protocol": 400}
-        raise GatewayError(code, status=statuses.get(code, 502) if isinstance(code, str) else 502) from None
+        raise _gateway_http_error(error) from None
     except (URLError, TimeoutError, OSError, HTTPException):
         raise GatewayError("gateway_unavailable", status=503) from None
     finally:
@@ -442,7 +452,7 @@ def validate_model_selection(user, purpose_code, selection=None, required_capabi
 
 def _reserve(user, model, purpose, route, config_version=""):
     from .models import GatewayModel, ModelCallLog, User
-    with transaction.atomic():
+    with serialized_atomic():
         if connection.vendor == "sqlite":
             # SELECT FOR UPDATE is ignored by SQLite. Reserve its write lock
             # before reading limits so competing writers wait using the busy
@@ -530,8 +540,9 @@ def _invoke(user, model, messages, purpose, route=None, config_version="", selec
         raise GatewayError("internal_error") from None
     finally:
         record.duration_ms = max(0, int((monotonic() - started) * 1000))
-        record.save(update_fields=["status", "duration_ms", "prompt_tokens", "completion_tokens"])
-        audit(user, "model_test" if purpose == "test" else "model_call", record.pk, result=record.status)
+        with db_lock:
+            record.save(update_fields=["status", "duration_ms", "prompt_tokens", "completion_tokens"])
+            audit(user, "model_test" if purpose == "test" else "model_call", record.pk, result=record.status)
 
 
 def generate_for_use(user, purpose_code, messages, model_selection=None, *, response_format=None,

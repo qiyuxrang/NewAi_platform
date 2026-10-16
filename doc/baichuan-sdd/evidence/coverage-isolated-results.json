@@ -1,0 +1,115 @@
+{
+  "overall": "PASS",
+  "executed_at": "2026-10-16T03:36:13.950849+00:00",
+  "scope": "private fresh SQLite; real source; synthetic identities; existing JWT/proxy/CSRF/React; no production writes",
+  "database": "C:\\Users\\BJRunner\\Desktop\\MultiUserClaw\\.runtime\\baichuan-browser-p8e7ocyc\\portal.sqlite3",
+  "checks": [
+    {
+      "check": "full-source zero-write preview",
+      "result": "PASS",
+      "companies": 1283,
+      "people": 112,
+      "valid_companies": 1283,
+      "rejected_companies": 0,
+      "create": 1283,
+      "skip": 0,
+      "issues": 0
+    },
+    {
+      "check": "atomic full-source apply and idempotent repeat",
+      "result": "PASS",
+      "companies": 1283,
+      "qualifications": 1460,
+      "people": 112,
+      "repeat_skipped": 1283
+    },
+    {
+      "check": "all original declarations, phones and enrichment retained",
+      "result": "PASS",
+      "names": 1283,
+      "raw_claims": 1462,
+      "evidence": 289,
+      "people": 112,
+      "cs1_declarations": 82,
+      "unclassified_ccrc": 2
+    },
+    {
+      "check": "all API pages and 1283 complete API details; shared manager/product read-only roles",
+      "result": "PASS",
+      "pages": 14,
+      "details": 1283
+    },
+    {
+      "check": "server all-data exact/OR/AND filtering",
+      "result": "PASS",
+      "query": "cs=1",
+      "total": 78
+    },
+    {
+      "check": "server all-data exact/OR/AND filtering",
+      "result": "PASS",
+      "query": "cs=1,2",
+      "total": 95
+    },
+    {
+      "check": "server all-data exact/OR/AND filtering",
+      "result": "PASS",
+      "query": "electronic=1,2&cmmi=3",
+      "total": 12
+    },
+    {
+      "check": "server all-data exact/OR/AND filtering",
+      "result": "PASS",
+      "query": "labor=any",
+      "total": 316
+    },
+    {
+      "check": "role-only viewer cannot create; no real account grant",
+      "result": "PASS"
+    },
+    {
+      "check": "real browser full-source list, last page and fixed PC shell",
+      "result": "PASS",
+      "role": "M"
+    },
+    {
+      "check": "real browser CS1, multi-grade and combination, detail return",
+      "result": "PASS",
+      "role": "M",
+      "total": 16
+    },
+    {
+      "check": "real browser evidence/person/phone and official new-tab URL",
+      "result": "PASS",
+      "role": "M",
+      "source_links": 11
+    },
+    {
+      "check": "real browser full-source list, last page and fixed PC shell",
+      "result": "PASS",
+      "role": "P"
+    },
+    {
+      "check": "real browser CS1, multi-grade and combination, detail return",
+      "result": "PASS",
+      "role": "P",
+      "total": 16
+    },
+    {
+      "check": "real browser evidence/person/phone and official new-tab URL",
+      "result": "PASS",
+      "role": "P",
+      "source_links": 11
+    },
+    {
+      "check": "browser console errors absent",
+      "result": "PASS",
+      "errors": []
+    }
+  ],
+  "external_url_navigation": [
+    "https://www.ylykt.com.cn/index",
+    "https://www.ylykt.com.cn/index"
+  ],
+  "manifest_sha256": "20ab7b245ffbab719cb176f8c7910aab185c6b671475b60c49827928c83469fa"
+}

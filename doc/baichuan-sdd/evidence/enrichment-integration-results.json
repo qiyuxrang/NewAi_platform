@@ -1,0 +1,53 @@
+{
+  "overall": "PASS",
+  "executed_at": "2026-10-16T08:31:09.983497+00:00",
+  "companies_updated": 114,
+  "accepted_facts": 484,
+  "rejected_facts": 19,
+  "research_company_coverage": 1283,
+  "counts": {
+    "portal_company": 1283,
+    "portal_companyqualification": 1460,
+    "portal_companyperson": 125
+  },
+  "new_people": 13,
+  "original_qualifications_people_account_roles_modules_preserved": true,
+  "actual_changed_business_fields": {
+    "address": 54,
+    "description": 87,
+    "email": 44,
+    "phone": 12,
+    "website": 54
+  },
+  "business_fields_total": 251,
+  "private_evidence_directory": "C:\\Users\\BJRunner\\.agent-reach\\baichuan-20261016",
+  "backup_created": true,
+  "scope": "One complete research pass over all 1283 company records; accepted original-page facts applied through existing versioned authenticated API; public data gaps remain",
+  "current_data_coverage": {
+    "website": 87,
+    "phone": 1026,
+    "email": 46,
+    "address": 58,
+    "companies_with_people": 91
+  },
+  "source_ledgers": [
+    {
+      "shard": 0,
+      "companies": 428,
+      "ledger_sha256": "56e8337e2a350f6e1f868c7b6247f64049061a811e0dcf52fa633ac84a1ceb49",
+      "fact_sha256": "ca7703d4c5b70e2c419cf14b0d339baa282dac1b362a308f654b656b53d85b13"
+    },
+    {
+      "shard": 1,
+      "companies": 428,
+      "ledger_sha256": "585123251e7c4e4eb05d1f74bbc9a332eb62f61f4df8690fd1d2ac9e530c7487",
+      "fact_sha256": "4c0d03a3e24e0f9416326a328c6194227b51f976f92ad86b7c4a38127a5ab56c"
+    },
+    {
+      "shard": 2,
+      "companies": 427,
+      "ledger_sha256": "e34450ed24f3b28b453c05d660194996ce64a085f41b60096cade3df42f7e90c",
+      "fact_sha256": "8681726f858a17fcd9f4a943daaebc93a76b05db93db041e1284fc8f039e16da"
+    }
+  ]
+}

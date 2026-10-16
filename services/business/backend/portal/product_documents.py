@@ -209,10 +209,7 @@ def content_document(task, input_revision, blueprint, chapters, family="technica
         if key:
             unique_pending.setdefault(key, value)
     pending = list(unique_pending.values())
-    if pending:
-        blocks.append({"id": "PENDING_HEADING", "type": "heading", "level": 1, "text": "待确认事项", "source_ids": ["SINPUT"], "requirement_ids": []})
-        for index, value in enumerate(pending, start=1):
-            blocks.append({"id": f"PENDING_TEXT{index}", "type": "paragraph", "text": value, "source_ids": ["SINPUT"], "requirement_ids": []})
+    # Keep unresolved source records for human review without appending a report chapter.
     return {"version": 1, "family": family,
             "metadata": {"id": "T" + str(task.pk).replace("-", ""),
                          "title": _family_document_title(task.title, family),

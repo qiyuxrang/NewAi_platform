@@ -1,0 +1,24 @@
+ M frontend/src/business/product/ProductKnowledge.tsx
+ M frontend/src/business/product/TenderOpportunities.tsx
+ M frontend/tests/product-assistant.test.mjs
+ M services/business/backend/config/settings.py
+ M services/business/backend/portal/product_assistant_model.py
+ M services/business/backend/portal/product_assistant_runtime.py
+ M services/business/backend/portal/product_assistant_tools.py
+ M services/business/backend/portal/product_knowledge_api.py
+ M services/business/backend/portal/product_knowledge_service.py
+ M services/business/backend/portal/tender_api.py
+ M services/business/backend/portal/tender_manual_refresh.py
+ M services/business/backend/portal/tests/test_product_assistant_model.py
+ M services/business/backend/portal/tests/test_product_assistant_runtime.py
+ M services/business/backend/portal/tests/test_product_assistant_tools_efficiency.py
+ M services/business/backend/portal/tests/test_product_knowledge_api.py
+ M services/business/backend/portal/tests/test_tender_runtime_api.py
+ M services/business/harness/runner.mjs
+ M services/business/harness/runner.test.mjs
+ M services/business/model_gateway/agent_protocol.py
+ M services/business/model_gateway/tests/test_agent_stream.py
+ M services/business/pyproject.toml
+?? doc/baichuan-sdd/
+?? services/business/backend/portal/baichuan_models.py
+?? services/business/backend/portal/tests/test_sqlite_transactions.py

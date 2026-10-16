@@ -1,4 +1,4 @@
-"""Isolated real worker calls, checkpoint reuse and draft guide enforcement."""
+"""Isolated real worker calls, checkpoint reuse and approved guide requirements."""
 import json
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -80,30 +80,27 @@ class FeasibilityFlowTests(PortalTestCase):
         self.assertEqual(model.call_count, 2)
 
     @patch('portal.product_worker.generate_for_use', side_effect=covered_reply)
-    def test_draft_runs_guide_review_and_reuses_only_verified_checkpoint(self, model):
+    def test_draft_skips_guide_review_and_reuses_bound_program_checks(self, model):
         chapters = [self.saved_chapter()]
         first = _ensure_content_review(self.task, self.fence, self.attempt_id,
             self.input_revision, self.blueprint, chapters, 'feasibility')
         self.assertEqual(first.payload['model_review']['status'], 'not_run')
-        self.assertTrue(first.payload['guide_review']['guide_coverage']['complete'])
+        self.assertNotIn('guide_review', first.payload)
         self.assertTrue(first.payload['full_document_human_review_required'])
         self.assertFalse(first.payload['passed'])
         self.assertTrue(_content_review_current(self.task, first, self.input_revision, self.blueprint, chapters))
-        calls = model.call_count
+        model.assert_not_called()
         second = _ensure_content_review(self.task, self.fence, self.attempt_id,
             self.input_revision, self.blueprint, chapters, 'feasibility')
         self.assertEqual(first.pk, second.pk)
-        self.assertEqual(model.call_count, calls)
+        model.assert_not_called()
 
         self.task.refresh_from_db()
-        self.task.checkpoint['content_review_batches']['feasibility']['batches'][0]['guide_checks'][0]['evidence'][0]['quote'] = '伪造证据'
+        self.task.checkpoint['content_review_batches'] = {'feasibility': {'batches': [{'guide_checks': '旧的无效回执'}]}}
         self.task.save(update_fields=['checkpoint'])
-        # The completed review has its own valid receipts; a poisoned resume
-        # checkpoint must not erase it, and must never be reused in a rescan.
+        # Draft delivery binds program checks, without requiring old AI receipts.
         self.assertTrue(_content_review_current(self.task, first, self.input_revision, self.blueprint, chapters))
-        _review_family(self.task_id, self.fence, self.attempt_id, self.task,
-            self.input_revision, self.blueprint, chapters, 'feasibility', guide_only=True)
-        self.assertGreater(model.call_count, calls)
+        model.assert_not_called()
 
     @override_settings(PRODUCT_MAX_MODEL_CALLS=1)
     @patch('portal.product_worker.generate_for_use')

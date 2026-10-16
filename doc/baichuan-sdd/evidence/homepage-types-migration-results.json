@@ -1,0 +1,15 @@
+{
+  "overall": "PASS",
+  "at": "2026-10-16T09:17:50.716802+00:00",
+  "migration": "0045_company_website_kind",
+  "existing_columns_and_records_preserved": true,
+  "counts": {
+    "portal_company": 1283,
+    "portal_companyqualification": 1460,
+    "portal_companyperson": 125,
+    "portal_user": 12,
+    "portal_role": 6,
+    "portal_module": 4
+  },
+  "new_default": "corporate"
+}

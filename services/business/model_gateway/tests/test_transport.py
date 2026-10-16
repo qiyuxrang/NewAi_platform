@@ -8,10 +8,11 @@ import threading
 import time
 import traceback
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import MagicMock, patch
 
 from backend.portal.model_messages import TEXT_REQUEST_LIMIT
-from backend.portal.model_response_format import chapter_response_format
+from backend.portal.model_response_format import chapter_response_format, review_response_format
 from model_gateway import transport
 from model_gateway.errors import GatewayError
 
@@ -54,6 +55,7 @@ class TransportProtocolSimulationTests(unittest.TestCase):
         response.status = status
         response.getheader.side_effect = lambda name, default=None: (headers or {}).get(name, default)
         response.read1.side_effect = io.BytesIO(encoded).read1
+        response.read.side_effect = io.BytesIO(encoded).read
         return response
 
     def exchange(self, response):
@@ -71,6 +73,25 @@ class TransportProtocolSimulationTests(unittest.TestCase):
         return ({**self.provider, "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1"},
                 {**self.model, "model_name": "qwen3.8-flash", "max_output_tokens": 4096, "timeout_seconds": 120},
                 chapter_response_format({"id": "c", "title": "approved", "source_ids": ["s"]}))
+
+    def test_review_contract_serialized_with_unchanged_budget_and_provider_gates(self):
+        provider, model, _ = self.chapter_configuration()
+        specification = {"passed": "boolean", "issues": ["string"]}
+        for schema in (specification, {**specification, "guide_checks": [{
+                "id": "exact-guide-requirement-id", "status": "covered/partial/not_seen/not_applicable/pending",
+                "evidence": [{"chapter_id": "saved-chapter-id", "quote": "exact-sent-body-quote"}], "reason": "string"}]}):
+            output_format = review_response_format(schema)
+            body, timeout = transport._request(provider, model, self.messages, None, response_format=output_format)
+            request = json.loads(body)
+            self.assertEqual(request["response_format"], output_format)
+            self.assertEqual(request["max_tokens"], 4096)
+            self.assertEqual(timeout, 120)
+            self.assertIs(request["enable_thinking"], False)
+            for p, m, options in ((self.provider, model, {}), (provider, self.model, {}),
+                                   (provider, model, {"generation_profile": "bounded_chapter_v1"}),
+                                   (provider, model, {"stream": True}), (provider, model, {"agent_tools": []})):
+                self.assert_code("invalid_request", lambda: transport._request(
+                    p, m, self.messages, None, response_format=output_format, **options))
 
     def test_bounded_profile_real_serialization_token_limits_and_none_compatibility(self):
         provider, model, output_format = self.chapter_configuration()
@@ -346,7 +367,7 @@ class TransportProtocolSimulationTests(unittest.TestCase):
         }), patch.object(transport, "_PinnedHTTPConnection") as factory:
             connection = factory.return_value
             connection.getresponse.return_value = response
-            self.assert_code("upstream_error")
+            self.assert_code("invalid_response")
         self.dns.assert_not_called()
         connection.request.assert_called_once()
         connection.getresponse.assert_called_once()
@@ -420,7 +441,9 @@ class TransportProtocolSimulationTests(unittest.TestCase):
             try:
                 for unused in range(2):
                     self.assert_code("timeout", lambda: transport._resolve("api.example", time.monotonic() + 0.02))
-                self.assert_code("busy", lambda: transport._resolve("api.example", time.monotonic() + 1))
+                error = self.assert_code("timeout", lambda: transport._resolve("api.example", time.monotonic() + 0.02))
+                self.assertEqual(error.status, 504)
+                self.assertEqual(error.diagnostic, {"upstream_stage": "dns", "upstream_exception": "TimeoutError"})
                 self.assertEqual(self.dns.call_count, 2)
             finally:
                 release.set()
@@ -429,19 +452,104 @@ class TransportProtocolSimulationTests(unittest.TestCase):
                     self.assertTrue(slots.acquire(timeout=1))
                     self.addCleanup(slots.release)
 
-    def test_status_mapping_no_redirect_retry_or_error_body_read(self):
+    def test_dns_burst_waits_for_two_bounded_workers_and_all_short_lookups_complete(self):
+        started = threading.Barrier(12)
+        lock = threading.Lock()
+        active, maximum = 0, 0
+
+        def lookup(*args, **kwargs):
+            nonlocal active, maximum
+            with lock:
+                active += 1
+                maximum = max(maximum, active)
+            try:
+                time.sleep(0.02)
+                return [PUBLIC]
+            finally:
+                with lock:
+                    active -= 1
+
+        def resolve():
+            started.wait(timeout=3)
+            return transport._resolve("api.example", time.monotonic() + 3)
+
+        self.dns.side_effect = lookup
+        with patch.object(transport, "_DNS_SLOTS", threading.BoundedSemaphore(2)) as slots:
+            with ThreadPoolExecutor(max_workers=12) as pool:
+                futures = [pool.submit(resolve) for _ in range(12)]
+                self.assertEqual([future.result(timeout=5) for future in futures], [PUBLIC] * 12)
+            self.assertEqual(self.dns.call_count, 12)
+            self.assertEqual((active, maximum), (0, 2))
+            for unused in range(2):
+                self.assertTrue(slots.acquire(timeout=1))
+                self.addCleanup(slots.release)
+            self.assertFalse(slots.acquire(blocking=False))
+
+    def test_status_mapping_no_redirect_retry_or_unbounded_error_body_read(self):
         connection = self.exchange(self.response())
-        for status, code in ((301, "upstream_error"), (302, "upstream_error"), (307, "upstream_error"),
-                             (308, "upstream_error"), (401, "upstream_auth"), (403, "upstream_auth"),
+        for status, code in ((301, "invalid_response"), (302, "invalid_response"), (307, "invalid_response"),
+                             (308, "invalid_response"), (401, "upstream_auth"), (403, "upstream_auth"),
+                             (400, "upstream_invalid_request"), (404, "upstream_invalid_request"),
+                             (422, "upstream_invalid_request"), (408, "upstream_error"), (425, "upstream_error"),
                              (429, "rate_limited"), (500, "upstream_error"), (503, "upstream_error")):
             with self.subTest(status=status):
                 response = self.response(SECRET.encode(), status, {"Location": "http://127.0.0.1/"})
                 connection.reset_mock()
                 connection.getresponse.return_value = response
-                self.assert_code(code)
+                error = self.assert_code(code)
+                self.assertEqual(error.diagnostic, {"upstream_status": status})
                 connection.request.assert_called_once()
                 response.read1.assert_not_called()
+                if status >= 400:
+                    response.read.assert_called_once_with(8193)
+                else:
+                    response.read.assert_not_called()
                 connection.close.assert_called_once()
+
+    def test_upstream_identifiers_survive_but_raw_body_and_credentials_do_not(self):
+        connection = self.exchange(self.response())
+        for vendor_code, expected in (("InvalidParameter", "InvalidParameter"),
+                                      (SECRET, None), ("sk-private", None), ("bad code", None),
+                                      ("x" * 81, None), ({"nested": "secret"}, None)):
+            response = self.response({"error": {"code": vendor_code,
+                                     "message": SECRET + " private-prompt-sentinel"}}, status=400)
+            connection.getresponse.return_value = response
+            error = self.assert_code("upstream_invalid_request")
+            self.assertEqual(error.diagnostic, {"upstream_status": 400,
+                                             **({"upstream_code": expected} if expected else {})})
+            self.assertNotIn(SECRET, str(error.diagnostic))
+            self.assertNotIn("private-prompt-sentinel", str(error.diagnostic))
+        for body in (b"x" * 8193, b"not-json", b'{"error":{"code":"a","code":"b"}}'):
+            response = self.response(body, status=503)
+            connection.getresponse.return_value = response
+            self.assertEqual(self.assert_code("upstream_error").diagnostic, {"upstream_status": 503})
+        response = self.response(status=400)
+        response.read.side_effect = socket.timeout()
+        connection.getresponse.return_value = response
+        self.assertEqual(self.assert_code("upstream_invalid_request").diagnostic, {"upstream_status": 400})
+
+    def test_catalog_and_stream_share_permanent_http_failure_classification(self):
+        for call in (lambda: transport.list_models(self.provider),
+                     lambda: list(transport.stream_completion(self.provider, self.model, self.messages))):
+            response = self.response({"code": "InvalidParameter", "message": SECRET}, status=422)
+            self.exchange(response)
+            error = self.assert_code("upstream_invalid_request", call)
+            self.assertEqual(error.diagnostic, {"upstream_status": 422, "upstream_code": "InvalidParameter"})
+
+    def test_network_failures_keep_safe_stage_and_exception_without_messages(self):
+        connection = self.exchange(self.response())
+        for operation, exception, stage in (
+                (connection.request, ssl.SSLCertVerificationError("private TLS message"), "tls"),
+                (connection.request, ConnectionRefusedError("private address"), "connect"),
+                (connection.getresponse, transport.http.client.RemoteDisconnected("private headers"), "response_headers")):
+            operation.side_effect = exception
+            error = self.assert_code("upstream_error")
+            self.assertEqual(error.diagnostic, {"upstream_stage": stage, "upstream_exception": type(exception).__name__})
+            self.assertNotIn("private", str(error.diagnostic))
+            operation.side_effect = None
+        self.dns.side_effect = socket.gaierror("private hostname")
+        error = self.assert_code("upstream_error")
+        self.assertEqual(error.diagnostic, {"upstream_stage": "dns", "upstream_exception": "gaierror"})
 
     def test_request_shape_size_and_configuration(self):
         with patch.object(transport, "_PinnedHTTPSConnection") as connection:

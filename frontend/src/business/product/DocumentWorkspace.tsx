@@ -1,12 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../api";
 import { CenterLink, Field } from "../shared";
-import { artifactDownload, artifactHistoryDownload, continueConversation, createConversationTask, draftDownload, draftHistoryDownload, getDraftOutputs, getTask, getTaskHistory, listTasks, updateTask, uploadSource } from "./product-api";
+import { artifactDownload, artifactHistoryDownload, createConversationTask, draftDownload, draftHistoryDownload, getDraftOutputs, getTask, getTaskHistory, listTasks, updateTask, uploadSource } from "./product-api";
 import type { BlueprintPayload, DocumentTask, DraftOutput, ReportRevision, ReviewCategory, TaskHistory, TaskInput, TaskSummary } from "./product-api";
 import "./product-workspace.css";
 import ProjectStages from "./ProjectStages";
 import { SOURCE_ACCEPT, updateSource } from "./product-api";
-import { outputStatus, useUnsavedWarning } from "./workbench-state";
+import { outputStatus } from "./workbench-state";
 import { outputBasisChanged, stableTaskSnapshot } from './project-refresh';
 
 const pretty = (value: unknown) => JSON.stringify(value, null, 2);
@@ -198,11 +198,6 @@ export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, busines
   const [conflict, setConflict] = useState(false);
   const [notice, setNotice] = useState("");
   const [pollRound, setPollRound] = useState(0);
-  const [conversationMessage, setConversationMessage] = useState("");
-  const [conversationFiles, setConversationFiles] = useState<File[]>([]);
-  const [conversationAccepted, setConversationAccepted] = useState(false);
-  const [conversationError, setConversationError] = useState("");
-  useUnsavedWarning(business && Boolean(conversationMessage || conversationFiles.length));
   const locked = useRef(false);
   const initial = useRef(false);
   const mounted = useRef(false);
@@ -362,47 +357,13 @@ export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, busines
       category: issueResolutions[issue.issue_hash].category as ReviewCategory,
       reason: issueResolutions[issue.issue_hash].reason.trim(), source_ids: issueResolutions[issue.issue_hash].source_ids })) });
   }
-  async function continueTask() {
-    if (locked.current || !task || conflict || disabled("add_source") || (!conversationMessage.trim() && conversationFiles.length === 0)) return;
-    locked.current = true; setBusy(true); setConversationError(""); reading.current?.abort(); related.current?.abort();
-    const controller = new AbortController(); mutation.current = controller;
-    try {
-      let nextTask = task;
-      if (conversationMessage.trim() && !conversationAccepted) {
-        const result = await continueConversation(id, { expected_version: nextTask.version, message: conversationMessage.trim() }, controller.signal);
-        if (controller.signal.aborted) return;
-        nextTask = result.task; receive(nextTask); setConversationAccepted(true);
-      }
-      let remaining = [...conversationFiles];
-      while (remaining.length) {
-        nextTask = await uploadSource(id, remaining[0], nextTask.version, controller.signal, business && task.intake_mode === 'equipment_background' ? 'background' : undefined);
-        if (controller.signal.aborted) return;
-        remaining = remaining.slice(1); setConversationFiles(remaining); receive(nextTask);
-      }
-      receive(nextTask);
-      setConversationMessage(""); setConversationAccepted(false);
-      setNotice("补充要求和资料已保存；确认蓝图后系统会生成三件套草稿。");
-    } catch (reason) {
-      if (!controller.signal.aborted && mounted.current) {
-        setConversationError(errorMessage(reason));
-        if (reason instanceof ApiError && reason.status === 409) setConflict(true);
-        hideInaccessible(reason);
-      }
-    } finally { locked.current = false; if (mounted.current) setBusy(false); }
-  }
   function decision(target: "blueprint" | "report" | "artifact", choice: "approve" | "revise", record?: ReportRevision) {
     const revision = target === "blueprint" ? task?.blueprint : target === "report" ? record : artifact;
     if (revision) void send("decisions/", { target, target_id: revision.id, sha256: revision.sha256, decision: choice, comment });
   }
   if (business) return <>
     {error && <div className="pd-feedback" role="alert">{error}</div>}{notice && <p className="pd-inline-notice" role="status">{notice}</p>}
-    <ProjectStages task={task} outputs={outputs} outputsLoaded={outputsLoaded} history={history} outputsError={outputsError} historyError={historyError} busy={busy} conflict={conflict} disabled={disabled} onAction={send} onReload={() => void perform(async () => {}, true)} onUpload={(file, purpose) => perform(signal => uploadSource(id, file, task.version, signal, purpose))} onSourceAction={(sourceId, endpoint, body) => perform(signal => updateSource(sourceId, endpoint, body, signal))} composer={<form className="product-composer wb-followup" onSubmit={event => { event.preventDefault(); void continueTask(); }}>
-      {conversationError && <p role="alert">{conversationError}</p>}
-      {conversationAccepted && conversationFiles.length > 0 && <p role="note">补充要求已保存，继续上传剩余 {conversationFiles.length} 份资料。</p>}
-      <label className="sr-only" htmlFor={`wb-message-${id}`}>补充项目要求或资料路径</label><textarea id={`wb-message-${id}`} rows={2} maxLength={10000} placeholder={disabled('add_source') ? '当前阶段暂不可补充资料，请查看处理进度或审核提示。' : '继续补充项目要求、资料路径或上传附件…'} value={conversationMessage} disabled={disabled('add_source') || conversationAccepted} onChange={event => setConversationMessage(event.target.value)}/>
-      {!!conversationFiles.length && <ul className="product-file-chips">{conversationFiles.map((file, index) => <li key={`${file.name}-${index}`}>{file.name}{!conversationAccepted && <button type="button" aria-label={`移除 ${file.name}`} onClick={() => setConversationFiles(files => files.filter((_, i) => i !== index))}>×</button>}</li>)}</ul>}
-      <div className="product-composer-actions"><button className="button secondary" type="button" disabled={disabled('add_source') || conversationAccepted} onClick={() => document.getElementById(`wb-files-${id}`)?.click()}>＋ 添加背景资料</button><input className="sr-only" id={`wb-files-${id}`} type="file" multiple accept={SOURCE_ACCEPT} disabled={disabled('add_source') || conversationAccepted} onChange={event => { setConversationFiles(files => [...files, ...Array.from(event.target.files || [])]); event.target.value = ''; }}/><small>对话补充会保存新的项目版本</small><button className="button primary" disabled={disabled('add_source') || (!conversationMessage.trim() && !conversationFiles.length)}>{busy ? '正在保存…' : conversationAccepted ? '继续上传' : '发送 ↑'}</button></div>
-    </form>}/>
+    <ProjectStages task={task} outputs={outputs} outputsLoaded={outputsLoaded} history={history} outputsError={outputsError} historyError={historyError} busy={busy} conflict={conflict} disabled={disabled} onAction={send} onReload={() => void perform(async () => {}, true)} onUpload={(file, purpose) => perform(signal => uploadSource(id, file, task.version, signal, purpose))} onSourceAction={(sourceId, endpoint, body) => perform(signal => updateSource(sourceId, endpoint, body, signal))}/>
   </>;
   const progress = task.artifacts.length ? 4 : task.blueprint ? 3 : task.sources.length ? 2 : 1;
   return <>
@@ -412,14 +373,6 @@ export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, busines
       <div className="user-message"><p>{task.input?.requirements || task.input?.background || "已通过资料创建任务。"}</p></div>
       <div className="assistant-message"><span aria-hidden="true">✓</span><div><strong>{status(task.state)}</strong><p>当前阶段：{status(task.stage)} · 服务端版本 {task.version}</p>{task.error_code && <p role="alert">处理受阻：{task.error_code}</p>}</div></div>
       {Object.keys(task.blockers || {}).length > 0 && <div className="assistant-message"><span aria-hidden="true">!</span><div><strong>还需要授权或确认</strong>{Object.values(task.blockers).map(blocker => <p key={`${blocker.code}-${blocker.detail}`}>{blocker.detail}</p>)}</div></div>}
-      <form className="product-composer product-followup-composer" onSubmit={event => { event.preventDefault(); void continueTask(); }}>
-        {conversationError && <p role="alert">{conversationError}</p>}
-        {conversationAccepted && conversationFiles.length > 0 && <p role="note">要求已保存，仍有 {conversationFiles.length} 个附件待上传；重试不会再次提交要求。</p>}
-        <label className="sr-only" htmlFor={`task-message-${id}`}>继续补充要求或资料路径</label>
-        <textarea id={`task-message-${id}`} rows={3} placeholder="继续补充要求、资料路径，或只添加附件……" value={conversationMessage} disabled={busy || conversationAccepted} onChange={event => setConversationMessage(event.target.value)} />
-        {conversationFiles.length > 0 && <ul className="product-file-chips" aria-label="待补充附件">{conversationFiles.map(file => <li key={`${file.name}-${file.size}`}>{file.name}</li>)}</ul>}
-        <div className="product-composer-actions"><label className="button secondary" htmlFor={`task-files-${id}`}>＋ 添加资料</label><input className="sr-only" id={`task-files-${id}`} type="file" multiple accept={SOURCE_ACCEPT} onChange={event => setConversationFiles(Array.from(event.target.files || []))} /><button className="button primary" disabled={busy || (!conversationMessage.trim() && conversationFiles.length === 0)}>{busy ? "正在保存…" : conversationAccepted ? "继续上传剩余资料" : "发送"}</button></div>
-      </form>
     </main>
     <aside className="product-task-aside" aria-label="任务概览">
       <section><h3>共享项目底稿 <span>{task.sources.length}</span></h3>{task.sources.length ? <><ul>{task.sources.map(source => <li key={source.id}>{source.original_name}</li>)}</ul><p>以上资料由三个成果共同复用。</p></> : <p>尚未添加附件；路径资料由后端校验后形成快照。</p>}</section>

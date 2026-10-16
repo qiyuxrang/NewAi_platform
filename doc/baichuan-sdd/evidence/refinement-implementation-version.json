@@ -1,0 +1,30 @@
+{
+  "version": "V1.3 working tree, uncommitted",
+  "executed_at": "2026-10-16T06:44:18.050777+00:00",
+  "files": [
+    {
+      "path": "frontend/src/business/product/Baichuan.tsx",
+      "sha256": "f483d9384a26b49c07af39a80883c106d47767f199b9038ddb2d2c70e47c2fcc"
+    },
+    {
+      "path": "frontend/src/business/product/CompanyDetail.tsx",
+      "sha256": "1b438e896ff4d168f83e7fb223053da82649e3717157c2fcb8876eac7f19be3d"
+    },
+    {
+      "path": "frontend/src/business/product/Baichuan.css",
+      "sha256": "4e842fd5ded4205cf532bcba7b923e340446e57be9ab5245d71e5a2a9e6c498f"
+    },
+    {
+      "path": "frontend/tests/baichuan.test.mjs",
+      "sha256": "64b607fdea52086791f5a97e6104be8aa22b92c3da027130aebc618d442e9987"
+    },
+    {
+      "path": "services/business/backend/portal/baichuan_service.py",
+      "sha256": "9b8c7db9f25a0ce608ae8304e042f0a3d355399b68f2ef796de1b9a049c1ce4d"
+    },
+    {
+      "path": "services/business/backend/portal/tests/test_baichuan.py",
+      "sha256": "5f853daa3e7d1ca96b7c4cc41a200959e4c8c557b3e4480796a3e6213797493c"
+    }
+  ]
+}

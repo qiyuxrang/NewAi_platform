@@ -89,8 +89,6 @@ class SQLiteReservationTests(unittest.TestCase):
         def observe(execute, sql, params, many, context):
             if statements is not None:
                 statements.append(sql)
-            if started and sql.lstrip().upper().startswith(("SELECT", "UPDATE")):
-                started.set()
             result = execute(sql, params, many, context)
             if inserted and sql.lstrip().upper().startswith("INSERT INTO \"PORTAL_MODELCALLLOG\""):
                 inserted.set()
@@ -100,6 +98,8 @@ class SQLiteReservationTests(unittest.TestCase):
 
         try:
             with connection.execute_wrapper(observe):
+                if started:
+                    started.set()
                 return model_gateway._reserve(user or self.user, self.model, purpose,
                                                self.route if route else None, "isolated-version")
         finally:

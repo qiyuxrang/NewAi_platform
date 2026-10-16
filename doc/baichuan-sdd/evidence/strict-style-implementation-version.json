@@ -1,0 +1,59 @@
+{
+  "version": "V1.4 working tree, uncommitted",
+  "baseline_commit": "8df87c96a311c215f5368c6b7e9cc5b3765cf636",
+  "executed_at": "2026-10-16T07:18:18.437940+00:00",
+  "files": [
+    {
+      "path": "frontend/src/business/product/CompanyDetail.tsx",
+      "sha256": "ca58e500a6050eeffbcd8ec9a9e4089b688c29b9024b67c8a709fa880f4dc841"
+    },
+    {
+      "path": "frontend/src/business/product/Baichuan.css",
+      "sha256": "9e94234529da83f2beecce2b8c96d76230e71fe6adb9d0e4579a90d0218f7360"
+    },
+    {
+      "path": "frontend/tests/baichuan.test.mjs",
+      "sha256": "4c44ea6d57003e3fee4dce2f6fdf67e1d9d774ae0adb4e2b2473a389b5fcd999"
+    },
+    {
+      "path": "frontend/tests/baichuan-browser.py",
+      "sha256": "69008709e10ae62a4c83442b5450593e0021642494509d5f2f3913c99ed09a6b"
+    },
+    {
+      "path": "frontend/src/business/product/assets/baichuan/business-architecture.png",
+      "sha256": "c364dad907013be8dd832a7205d6360a5a1f92134cf03e1123335ca944cb1b9f"
+    },
+    {
+      "path": "frontend/src/business/product/assets/baichuan/business-city.png",
+      "sha256": "a06eec009c1a2a0e86beef73559e6a3515697b62c5f79f8c0de73bbcbeb992dc"
+    },
+    {
+      "path": "frontend/src/business/product/assets/baichuan/business-iot.png",
+      "sha256": "45d74c69921750d2fec87d3db7bbff620ade75d5b76812d2cc028210c44920bd"
+    },
+    {
+      "path": "frontend/src/business/product/assets/baichuan/business-lighting.png",
+      "sha256": "8d6e5e2d3160209293ff454935176ee14c1777307fadd2ebd3c3e2087ef36a1b"
+    },
+    {
+      "path": "frontend/src/business/product/assets/baichuan/business-network.png",
+      "sha256": "8962ae1af2cace3d6a8362fec747a5dffd93e43d7ad10f03eb3c8a1fe87286ef"
+    },
+    {
+      "path": "frontend/src/business/product/assets/baichuan/business-park.png",
+      "sha256": "264dd95c3a8276629fc961e0103db4a836e67deeec48d2ac8acc7a87f64e7534"
+    },
+    {
+      "path": "frontend/src/business/product/assets/baichuan/hero-architecture.png",
+      "sha256": "6876ae91743266dccb7e8a88f29b66ee398cce28f449562c1ffacb2fa652f3b4"
+    },
+    {
+      "path": "frontend/src/business/product/assets/baichuan/ksznkj-logo.png",
+      "sha256": "647624f812934cd3dfe60299079b89e576310f0c46b0ae5ec639306f138a6ebf"
+    },
+    {
+      "path": "frontend/src/business/product/assets/baichuan/source.json",
+      "sha256": "670391b04dcc67edb9c67a577327c4e50785ca4a1b721cabcc14fa89b6e5c106"
+    }
+  ]
+}

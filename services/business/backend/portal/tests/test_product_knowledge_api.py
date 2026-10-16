@@ -81,6 +81,29 @@ class _ProductKnowledgeApiFixture:
 
 
 class ProductKnowledgeApiTests(_ProductKnowledgeApiFixture, PortalTestCase):
+    def test_incomplete_assistant_history_is_displayed_without_rewriting_stored_turns(self):
+        item = self.create()
+        base = {"question": "旧问题", "assistant": True, "outcome": "answered",
+                "sources": [{"id": "K1", "title": "旧来源"}],
+                "activities": [{"id": "A1", "tool": "answer", "status": "completed"}]}
+        placeholders = ["[Tool call omitted]",
+            "[System: The AI model's output was truncated or didn't complete successfully. "
+            "Please continue generating the remaining content from where it was interrupted.]"]
+        turns = [{**base, "answer": answer, "request_id": str(uuid.uuid4())} for answer in placeholders]
+        turns += [{**base, "answer": "正常回答", "request_id": str(uuid.uuid4())},
+                  {**base, "answer": "", "outcome": "empty", "sources": [], "request_id": str(uuid.uuid4())},
+                  {**base, "assistant": False, "answer": placeholders[0], "request_id": str(uuid.uuid4())}]
+        Conversation.objects.filter(pk=item.pk).update(turns=turns, version=len(turns))
+        response = self.request(api.conversation, conversation=item)
+        self.assertEqual(response.status_code, 200)
+        for original, displayed in zip(turns[:2], response.data["turns"][:2]):
+            self.assertEqual(displayed, {**original, "answer": "上次回答未完成，请重新发送具体问题。",
+                                        "outcome": "incomplete", "sources": [], "activities": []})
+        self.assertEqual(response.data["turns"][2:], turns[2:])
+        self.assert_unchanged(item, version=len(turns), turns=turns)
+        self.outbound.assert_not_called()
+        self.gateway.assert_not_called()
+
     def test_permissions_and_non_owner_never_call_external_services(self):
         item = self.create()
         for view, conversation in ((api.status, None), (api.datasets, None),

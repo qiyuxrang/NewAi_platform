@@ -1,0 +1,37 @@
+C:\Users\BJRunner\Desktop\MultiUserClaw\frontend\tests\baichuan-browser.py:64: StarletteDeprecationWarning: starlette.middleware.wsgi is deprecated and will be removed in a future release. Please refer to https://github.com/abersheeran/a2wsgi as a replacement.
+  from starlette.middleware.wsgi import WSGIMiddleware
+Forbidden: /api/product/baichuan/companies/
+Forbidden: /api/product/baichuan/companies/
+Service Unavailable: /api/product/tasks/
+Service Unavailable: /api/product/tasks/
+Service Unavailable: /api/product/tasks/
+Service Unavailable: /api/product/tasks/
+Service Unavailable: /api/product/tasks/
+Service Unavailable: /api/product/tasks/
+Bad Request: /api/product/baichuan/companies/88c7377e-e6ae-4644-932e-6f7daa8beb9c/
+Conflict: /api/product/baichuan/companies/88c7377e-e6ae-4644-932e-6f7daa8beb9c/
+Service Unavailable: /api/product/tasks/
+Service Unavailable: /api/product/tasks/
+Service Unavailable: /api/product/tasks/
+Service Unavailable: /api/product/tasks/
+Service Unavailable: /api/product/tasks/
+Service Unavailable: /api/product/tasks/
+Forbidden: /api/product/baichuan/companies/
+Service Unavailable: /api/product/tasks/
+Forbidden: /api/product/baichuan/companies/
+Service Unavailable: /api/product/tasks/
+Service Unavailable: /api/product/tasks/
+Service Unavailable: /api/product/tasks/
+Service Unavailable: /api/product/tasks/
+Service Unavailable: /api/product/tasks/
+Service Unavailable: /api/product/tasks/
+Service Unavailable: /api/product/tasks/
+Not Found: /api/product/baichuan/companies/00000000-0000-0000-0000-000000000001/
+Not Found: /api/product/baichuan/companies/00000000-0000-0000-0000-000000000001/
+Service Unavailable: /api/product/tasks/
+Service Unavailable: /api/product/tasks/
+Service Unavailable: /api/product/tasks/
+Service Unavailable: /api/product/tasks/
+基础模块与角色已就绪；没有创建默认账号或覆盖已有授权。
+PASS: 14 browser/integration checks; screenshots: C:\Users\BJRunner\Desktop\MultiUserClaw\doc\baichuan-sdd\evidence\browser
+EXIT_CODE: 0

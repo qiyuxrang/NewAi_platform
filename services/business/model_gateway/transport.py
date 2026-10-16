@@ -24,12 +24,15 @@ RESPONSE_LIMIT = 1024 * 1024
 _DNS_SLOTS = threading.BoundedSemaphore(2)
 _KEY_NAME = re.compile(r"PORTAL_MODEL_KEY_[A-Z0-9_]+", re.ASCII)
 _CATALOG_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/-]{0,199}", re.ASCII)
+_NETWORK_EXCEPTIONS = frozenset({"OSError", "TimeoutError", "gaierror", "SSLError", "SSLCertVerificationError",
+                               "ConnectionRefusedError", "ConnectionResetError", "ConnectionAbortedError",
+                               "BrokenPipeError", "RemoteDisconnected", "IncompleteRead"})
 _LOCAL_HTTP_BASE_URL = re.compile(
     r"http://127\.0\.0\.1:19880/api/v1/openai/[0-9a-f]{32}", re.ASCII,
 )
 
 
-def _error(code, status=502):
+def _error(code, status=502, *, diagnostic=None):
     messages = {
         "invalid_request": "模型调用参数或配置无效。",
         "target_not_allowed": "模型服务地址不在安全允许范围内。",
@@ -40,11 +43,42 @@ def _error(code, status=502):
         "upstream_auth": "模型服务身份验证失败。",
         "rate_limited": "模型服务请求过于频繁，请稍后重试。",
         "upstream_error": "模型服务调用失败。",
+        "upstream_invalid_request": "模型服务拒绝调用参数，请检查模型配置和请求格式。",
         "invalid_response": "模型服务返回格式无效。",
         "response_too_large": "模型服务返回内容超过大小限制。",
         "output_truncated": "模型输出因长度限制被截断，未作为完整成果保存。",
     }
-    return GatewayError(code, messages[code], status=status)
+    return GatewayError(code, messages[code], status=status, diagnostic=diagnostic)
+
+
+def _upstream_http_error(response, key):
+    status = response.status
+    code = ("upstream_auth" if status in (401, 403) else "rate_limited" if status == 429 else
+            "upstream_error" if status in (408, 425) or 500 <= status < 600 else
+            "upstream_invalid_request" if 400 <= status < 500 else "invalid_response")
+    diagnostic = {"upstream_status": status}
+    # Only machine error identifiers leave the transport; vendor messages can echo prompts or credentials.
+    try:
+        if status >= 400 and response.getheader("Content-Encoding", "identity").lower() == "identity":
+            body = response.read(8193)
+            if len(body) <= 8192:
+                data = json.loads(body, object_pairs_hook=_unique_object, parse_constant=_invalid_constant)
+                error = data.get("error", data) if isinstance(data, dict) else None
+                value = error.get("code") if isinstance(error, dict) else None
+                if (isinstance(value, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,79}", value)
+                        and key not in value and not value.lower().startswith(("sk-", "sk_"))):
+                    diagnostic["upstream_code"] = value
+    except Exception:
+        pass
+    return _error(code, 400 if code == "upstream_invalid_request" else 429 if status == 429 else 502,
+                  diagnostic=diagnostic)
+
+
+def _network_diagnostic(stage, exception_name):
+    diagnostic = {"upstream_stage": "tls" if exception_name in ("SSLError", "SSLCertVerificationError") else stage}
+    if isinstance(exception_name, str) and exception_name in _NETWORK_EXCEPTIONS:
+        diagnostic["upstream_exception"] = exception_name
+    return diagnostic
 
 
 def _public_ip(value):
@@ -110,31 +144,31 @@ def _remaining(deadline):
 
 
 def _resolve(hostname, deadline):
-    if not _DNS_SLOTS.acquire(blocking=False):
-        raise _error("busy", 503)
+    if not _DNS_SLOTS.acquire(timeout=_remaining(deadline)):
+        raise _error("timeout", 504, diagnostic=_network_diagnostic("dns", "TimeoutError"))
     result = queue.Queue(maxsize=1)
 
     def lookup():
         try:
             result.put((True, socket.getaddrinfo(hostname, 443, type=socket.SOCK_STREAM)))
-        except Exception:
-            result.put((False, None))
+        except Exception as error:
+            result.put((False, type(error).__name__))
         finally:
             _DNS_SLOTS.release()
 
     worker = threading.Thread(target=lookup, daemon=True, name="model-gateway-dns")
     try:
         worker.start()
-    except Exception:
+    except Exception as error:
         _DNS_SLOTS.release()
-        raise _error("upstream_error") from None
+        raise _error("upstream_error", diagnostic=_network_diagnostic("dns", type(error).__name__)) from None
     try:
         success, addresses = result.get(timeout=_remaining(deadline))
     except queue.Empty:
-        raise _error("timeout", 504) from None
+        raise _error("timeout", 504, diagnostic=_network_diagnostic("dns", "TimeoutError")) from None
     _remaining(deadline)
     if not success or not addresses:
-        raise _error("upstream_error")
+        raise _error("upstream_error", diagnostic=_network_diagnostic("dns", addresses))
     for family, socktype, protocol, canonname, sockaddr in addresses:
         if family not in (socket.AF_INET, socket.AF_INET6) or socktype != socket.SOCK_STREAM:
             raise _error("target_not_allowed")
@@ -359,6 +393,7 @@ def _parse_response(body, *, generation_profile=None, requested=None):
 
 def list_models(provider):
     connection = response = watchdog = None
+    stage = "connect"
     deadline = time.monotonic() + 20
     try:
         if provider.get("protocol") != "openai_chat":
@@ -382,16 +417,14 @@ def list_models(provider):
         connection.request("GET", parsed.path.rstrip("/") + "/models", headers={
             "Authorization": "Bearer " + key, "Accept": "application/json", "Accept-Encoding": "identity",
         })
+        stage = "response_headers"
         response = connection.getresponse()
         _remaining(deadline)
-        if response.status in (401, 403):
-            raise _error("upstream_auth")
-        if response.status == 429:
-            raise _error("rate_limited", 429)
         if response.status != 200:
-            raise _error("upstream_error")
+            raise _upstream_http_error(response, key)
         if response.getheader("Content-Encoding", "identity").lower() != "identity":
             raise _error("invalid_response")
+        stage = "response_body"
         body = response.read(262145)
         _remaining(deadline)
         if len(body) > 262144:
@@ -410,12 +443,12 @@ def list_models(provider):
         raise
     except (ValueError, UnicodeError, RecursionError):
         raise _error("invalid_response") from None
-    except (TimeoutError, socket.timeout):
-        raise _error("timeout", 504) from None
-    except Exception:
+    except (TimeoutError, socket.timeout) as error:
+        raise _error("timeout", 504, diagnostic=_network_diagnostic(stage, type(error).__name__)) from None
+    except Exception as error:
         if time.monotonic() >= deadline:
-            raise _error("timeout", 504) from None
-        raise _error("upstream_error") from None
+            raise _error("timeout", 504, diagnostic=_network_diagnostic(stage, type(error).__name__)) from None
+        raise _error("upstream_error", diagnostic=_network_diagnostic(stage, type(error).__name__)) from None
     finally:
         if watchdog is not None:
             watchdog.cancel()
@@ -428,6 +461,7 @@ def list_models(provider):
 def chat_completion(provider, model, messages, max_output_tokens=None, *, agent_tools=None, tool_choice=None,
                     response_format=None, generation_profile=None):
     connection = response = watchdog = deadline = None
+    stage = "connect"
     try:
         options = {"response_format": response_format} if response_format is not None else {}
         if generation_profile is not None:
@@ -457,14 +491,11 @@ def chat_completion(provider, model, messages, max_output_tokens=None, *, agent_
         connection.request("POST", parsed.path.rstrip("/") + "/chat/completions", body=payload,
                            headers={"Authorization": "Bearer " + key, "Content-Type": "application/json",
                                     "Accept": "application/json", "Accept-Encoding": "identity"})
+        stage = "response_headers"
         response = connection.getresponse()
         _remaining(deadline)
-        if response.status == 429:
-            raise _error("rate_limited", 429)
-        if response.status in (401, 403):
-            raise _error("upstream_auth")
         if not 200 <= response.status < 300:
-            raise _error("upstream_error")
+            raise _upstream_http_error(response, key)
         if response.getheader("Content-Encoding", "identity").lower() != "identity":
             raise _error("invalid_response")
         length = response.getheader("Content-Length")
@@ -474,6 +505,7 @@ def chat_completion(provider, model, messages, max_output_tokens=None, *, agent_
             if int(length) > RESPONSE_LIMIT:
                 raise _error("response_too_large")
         body = bytearray()
+        stage = "response_body"
         while True:
             _remaining(deadline)
             chunk = response.read1(min(65536, RESPONSE_LIMIT + 1 - len(body)))
@@ -499,12 +531,12 @@ def chat_completion(provider, model, messages, max_output_tokens=None, *, agent_
         return result
     except GatewayError:
         raise
-    except (TimeoutError, socket.timeout):
-        raise _error("timeout", 504) from None
-    except Exception:
+    except (TimeoutError, socket.timeout) as error:
+        raise _error("timeout", 504, diagnostic=_network_diagnostic(stage, type(error).__name__)) from None
+    except Exception as error:
         if deadline is not None and time.monotonic() >= deadline:
-            raise _error("timeout", 504) from None
-        raise _error("upstream_error") from None
+            raise _error("timeout", 504, diagnostic=_network_diagnostic(stage, type(error).__name__)) from None
+        raise _error("upstream_error", diagnostic=_network_diagnostic(stage, type(error).__name__)) from None
     finally:
         if watchdog is not None:
             watchdog.cancel()
@@ -600,6 +632,7 @@ class StreamingCompletion:
 
     def _run(self):
         response = watchdog = deadline = None
+        stage = "connect"
         try:
             payload, timeout = _request(self.provider, self.model, self.messages,
                                         self.max_output_tokens, stream=True,
@@ -631,15 +664,12 @@ class StreamingCompletion:
                                     headers={"Authorization": "Bearer " + key, "Content-Type": "application/json",
                                              "Accept": "text/event-stream", "Accept-Encoding": "identity"})
             self._ensure_open()
+            stage = "response_headers"
             response = self.connection.getresponse()
             self._ensure_open()
             _remaining(deadline)
-            if response.status == 429:
-                raise _error("rate_limited", 429)
-            if response.status in (401, 403):
-                raise _error("upstream_auth")
             if not 200 <= response.status < 300:
-                raise _error("upstream_error")
+                raise _upstream_http_error(response, key)
             if (response.getheader("Content-Encoding", "identity").lower() != "identity"
                     or response.getheader("Content-Type", "").split(";", 1)[0].strip().lower() != "text/event-stream"):
                 raise _error("invalid_response")
@@ -649,6 +679,7 @@ class StreamingCompletion:
             if length is not None and int(length) > RESPONSE_LIMIT:
                 raise _error("response_too_large")
             pending = bytearray()
+            stage = "response_body"
             event = None
             total = 0
             finished = done = saw_content = False
@@ -720,12 +751,12 @@ class StreamingCompletion:
                 yield {"done": True, **assembled}
         except GatewayError:
             raise
-        except (TimeoutError, socket.timeout):
-            raise _error("timeout", 504) from None
-        except Exception:
+        except (TimeoutError, socket.timeout) as error:
+            raise _error("timeout", 504, diagnostic=_network_diagnostic(stage, type(error).__name__)) from None
+        except Exception as error:
             if deadline is not None and time.monotonic() >= deadline:
-                raise _error("timeout", 504) from None
-            raise _error("upstream_error") from None
+                raise _error("timeout", 504, diagnostic=_network_diagnostic(stage, type(error).__name__)) from None
+            raise _error("upstream_error", diagnostic=_network_diagnostic(stage, type(error).__name__)) from None
         finally:
             if watchdog is not None:
                 watchdog.cancel()

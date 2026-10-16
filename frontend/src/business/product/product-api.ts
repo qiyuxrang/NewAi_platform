@@ -18,7 +18,7 @@ export interface TaskInput {
   items: { row_id: string | number; name: string; quantity: string | number; unit: string; source_item_id?: string; source_location?: SourceLocation; source_id?: string }[];
   background: string;
   conditions: string[];
-  knowledge_sources?: { id: string; location: string }[];
+  knowledge_sources?: { id: string; location?: string; provider?: string; title?: string; text?: string; url?: string; fact_scope?: string }[];
 }
 export interface BlueprintPayload {
   purpose: string;
@@ -95,7 +95,7 @@ export interface ArtifactVerification {
   content_checks: ContentChecks;
   comment: string;
 }
-export interface TaskSummary { id: string; title: string; state: string; stage: string; version: number; created_at?: string; updated_at?: string; owner_name?: string; reviewer_name?: string | null; pending_action?: string; error_code?: string }
+export interface TaskSummary { id: string; title: string; state: string; stage: string; version: number; created_at?: string; updated_at?: string; owner_name?: string; reviewer_name?: string | null; pending_action?: string; error_code?: string; is_pinned?: boolean; can_manage?: boolean }
 export type ProductWorkflowPhase = 'documents' | 'equipment' | 'knowledge' | 'web_search' | 'blueprint' | 'review' | 'outputs' | 'writing_technical' | 'writing_feasibility' | 'review_technical' | 'review_feasibility' | 'diagrams_technical' | 'diagrams_feasibility' | 'render_technical' | 'render_feasibility' | 'presentation';
 export interface ProductWorkflowProgress {
   started_at?: string;
@@ -198,6 +198,12 @@ export async function listTasks(signal: AbortSignal): Promise<{ tasks: TaskSumma
   return Array.isArray(result) ? { tasks: result } : result;
 }
 export const getTask = (id: string, signal: AbortSignal) => apiRequest<DocumentTask>(pathFor(id), { signal });
+export const pinTask = (id: string, expected_version: number, pinned: boolean) => apiRequest<unknown>(`${pathFor(id)}pin/`, {
+  method: "POST", body: JSON.stringify({ expected_version, pinned }),
+});
+export const deleteTask = (id: string, expected_version: number) => apiRequest<unknown>(pathFor(id), {
+  method: "DELETE", body: JSON.stringify({ expected_version }),
+});
 export const createTask = (body: CreateTask, key: string, signal: AbortSignal) => apiRequest<DocumentTask>(root, {
   method: "POST", body: JSON.stringify(body), headers: { "Idempotency-Key": key }, signal,
 });

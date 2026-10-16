@@ -1,0 +1,24 @@
+✔ API preserves validated field errors while retaining three-argument ApiError compatibility (23.7232ms)
+✔ fixed qualification dictionary, any/grade exclusivity and URL retain server validation (1.3547ms)
+✔ websites reject unsafe protocols and credentials; snapshots retain child IDs and expected version (0.3791ms)
+✔ post-save membership uses exact grades, OR within and AND across categories, without personnel inference (0.2286ms)
+✔ both entrypoints share the product feature while preserving capability restrictions (0.5029ms)
+✔ detail preserves source statements and line breaks, linking only safe HTTP(S) evidence without surrounding punctuation (43.1228ms)
+✔ long company, qualification and person sources default to closed native disclosure while business fields stay visible (31.2391ms)
+✔ checkbox selection updates immediately while the router still exposes the previous URL (51.8795ms)
+✔ stale success and stale failure cannot replace the latest query, and loading never reports zero (41.0622ms)
+✔ a filtered page beyond the last page preserves the total and explains the empty page (36.4054ms)
+✔ editor submits a complete atomic snapshot, keeps inputs on conflict, and serializes cleared dates to null (53.3826ms)
+✔ server field errors appear at the affected company input and retain its draft value (37.5899ms)
+✔ manager entries keep order/defaults and finance/entry guards do not expand access (2.4779ms)
+✔ business root is additive; request, upload, auth, preview and download semantics are retained (33.9411ms)
+✔ manager keeps fixed shared shell on every route; employee product workbench remains intact (100.6486ms)
+✔ all routes keep the workbench stable without page fades (9.8569ms)
+ℹ tests 16
+ℹ suites 0
+ℹ pass 16
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1544.1572

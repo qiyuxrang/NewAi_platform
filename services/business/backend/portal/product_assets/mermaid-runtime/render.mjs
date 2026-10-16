@@ -9,7 +9,7 @@ import { controlledContext } from "./browser-policy.mjs";
 import { bitmapBinding, confined, loadBitmap, saveBitmap, sha256 } from "./bitmap-cache.mjs";
 
 const runtimeDirectory = path.dirname(fileURLToPath(import.meta.url));
-const layoutVersion = "word-readable-v2";
+const layoutVersion = "word-readable-v3";
 let failureReason = "runtime_manifest_invalid";
 let failureEvidence = {};
 async function main() {
@@ -110,7 +110,8 @@ async function main() {
       const layout=await page.evaluate(async ({diagram,anchor,widthMm})=>{
         const host=document.querySelector("#canvas"); host.replaceChildren();
         const graph=document.createElement("div"); graph.className="mermaid"; graph.textContent=diagram; host.append(graph);
-        window.mermaid.initialize({startOnLoad:false,securityLevel:"strict",htmlLabels:false,theme:"base",themeVariables:{fontSize:"20px",primaryColor:"#E7F0FF",primaryBorderColor:"#246BCE",primaryTextColor:"#000000",secondaryColor:"#E5FAF5",secondaryTextColor:"#000000",tertiaryColor:"#FFF2D8",tertiaryTextColor:"#000000",textColor:"#000000",lineColor:"#246BCE"},fontFamily:"Microsoft YaHei, Noto Sans CJK SC, sans-serif",flowchart:{htmlLabels:false,curve:"linear",nodeSpacing:24,rankSpacing:32,padding:12},sequence:{actorFontSize:20,messageFontSize:20,noteFontSize:20,diagramMarginX:8,diagramMarginY:8}});
+        const config={startOnLoad:false,securityLevel:"strict",htmlLabels:false,theme:"base",themeVariables:{fontSize:"20px",primaryColor:"#E7F0FF",primaryBorderColor:"#246BCE",primaryTextColor:"#000000",secondaryColor:"#E5FAF5",secondaryTextColor:"#000000",tertiaryColor:"#FFF2D8",tertiaryTextColor:"#000000",textColor:"#000000",lineColor:"#246BCE"},fontFamily:"Microsoft YaHei, Noto Sans CJK SC, sans-serif",flowchart:{htmlLabels:false,curve:"linear",nodeSpacing:24,rankSpacing:32,padding:12},sequence:{actorFontSize:20,messageFontSize:20,noteFontSize:20,diagramMarginX:8,diagramMarginY:8}};
+        window.mermaid.initialize(config);
         await window.mermaid.parse(diagram);
         await window.mermaid.run({nodes:[graph]});
         if (window.mermaid.mermaidAPI.getConfig().securityLevel!=="strict") throw new Error("diagram security configuration changed");
@@ -148,28 +149,42 @@ async function main() {
         const sourceDirection=diagram.match(/^\s*flowchart\s+(TB|TD|BT|LR|RL)\b/)?.[1] || "sequence";
         let direction=sourceDirection;
         const original=measure(),directionCandidates=[{direction:sourceDirection,...original}];
+        const fitsWhole=value=>value.minFontPt*Math.min(1,190/value.heightMm)>=10.5;
+        let selected=original,compact=false;
+        const renderDirection=async(value)=>{
+          graph.removeAttribute("data-processed");graph.textContent=diagram.replace(/^(\s*flowchart\s+)(?:TB|TD|LR|RL)\b/,"$1"+value);
+          await window.mermaid.run({nodes:[graph]});svg=graph.querySelector("svg");await document.fonts.ready;
+          if (!svg || (anchor && !svg.textContent.includes(anchor))) throw new Error("invalid relayout");
+          exposeClusterTitles();
+        };
+        const sameContent=value=>["labelCount","nodeCount","edgeCount"].every(key=>value[key]===original[key]);
+        // Reduce empty ranks before cutting a complete mechanism into images.
+        if (["TB","TD","LR","RL"].includes(sourceDirection) && (original.heightMm>190 || !fitsWhole(original))) {
+          window.mermaid.initialize({...config,flowchart:{...config.flowchart,nodeSpacing:16,rankSpacing:16,padding:8}});
+          await renderDirection(sourceDirection);
+          const candidate=measure();directionCandidates.push({direction:sourceDirection,compact:true,...candidate});
+          if (sameContent(candidate) && candidate.minFontPt>=10.5 && candidate.heightMm<original.heightMm) {
+            selected=candidate;compact=true;
+          } else {window.mermaid.initialize(config);await renderDirection(sourceDirection);}
+        }
         // ponytail: one orthogonal candidate; broader search only for proven layout failures.
-        if (["TB","TD","LR","RL"].includes(sourceDirection) && (original.minFontPt<10.5 || original.heightMm>190)) {
+        if (["TB","TD","LR","RL"].includes(sourceDirection) && !fitsWhole(selected)) {
           const alternative=["LR","RL"].includes(sourceDirection) ? "TB" : "LR";
-          const renderDirection=async(value)=>{
-            graph.removeAttribute("data-processed");graph.textContent=diagram.replace(/^(\s*flowchart\s+)(?:TB|TD|LR|RL)\b/,"$1"+value);
-            await window.mermaid.run({nodes:[graph]});svg=graph.querySelector("svg");await document.fonts.ready;
-            if (!svg || (anchor && !svg.textContent.includes(anchor))) throw new Error("invalid relayout");
-            exposeClusterTitles();
-          };
           await renderDirection(alternative);
-          const candidate=measure();directionCandidates.push({direction:alternative,...candidate});
-          const sameContent=["labelCount","nodeCount","edgeCount"].every(key=>candidate[key]===original[key]);
-          if (sameContent && candidate.minFontPt>=10.5 && (original.minFontPt<10.5 ||
-              Math.ceil(candidate.heightMm/190)<Math.ceil(original.heightMm/190))) direction=alternative;
+          const candidate=measure();directionCandidates.push({direction:alternative,compact,...candidate});
+          if (sameContent(candidate) && candidate.minFontPt>=10.5 && (fitsWhole(candidate) || selected.minFontPt<10.5 ||
+              Math.ceil(candidate.heightMm/190)<Math.ceil(selected.heightMm/190))) direction=alternative;
           else await renderDirection(sourceDirection);
         }
         const bounds=svg.getBBox(),padding=12;
         const width=Math.ceil(Math.max(320,bounds.width+padding*2));
-        const outputWidthMm=Math.min(widthMm,width*25.4/96);
+        const naturalWidthMm=Math.min(widthMm,width*25.4/96);
         const text=[...svg.querySelectorAll("text")].filter(node=>node.textContent.trim());
         if (!text.length) throw new Error("missing diagram labels");
         const font=Math.min(18,...text.map(node=>parseFloat(getComputedStyle(node).fontSize)));
+        const naturalFontPt=font*naturalWidthMm*72/25.4/width;
+        const wholeWidthMm=Math.min(naturalWidthMm,190*width/Math.ceil(bounds.height+padding*2));
+        const outputWidthMm=naturalFontPt*wholeWidthMm/naturalWidthMm>=10.5 ? wholeWidthMm : naturalWidthMm;
         const minFontPt=font*outputWidthMm*72/25.4/width;
         const unreadable=(detail,extra={})=>({failure:{detail,sourceDirection,direction,directionCandidates,minFontPt,...extra}});
         if (!Number.isFinite(minFontPt) || minFontPt<10.5) return unreadable("font_below_minimum");
@@ -196,7 +211,9 @@ async function main() {
           .filter(box=>box.width>0 && box.height>0).map(box=>({start:box.y-4,end:box.y+box.height+4,isNode:box.isNode})).sort((a,b)=>a.start-b.start);
         const bands=[];
         for(const box of protectedBoxes){const last=bands.at(-1); if(last && box.start<=last.end){last.end=Math.max(last.end,box.end);last.isNode ||= box.isNode;}else bands.push({...box});}
-        const maximumHeight=190*96/25.4*width/(outputWidthMm*96/25.4)-48;
+        // Reserve the continuation title only for genuinely split images.
+        const fullHeight=190*width/outputWidthMm;
+        const maximumHeight=bounds.height+padding*2<=fullHeight+.01 ? fullHeight+.01 : fullHeight-48;
         const regions=[];let start=bounds.y-padding,end=bounds.y+bounds.height+padding;
         while(end-start>maximumHeight){
           const candidates=bands.slice(0,-1).map((band,index)=>({cut:(band.end+bands[index+1].start)/2,index}))
@@ -221,7 +238,7 @@ async function main() {
           unit.append(image);host.append(unit);
           return {index:index+1,total:regions.length,width_mm:outputWidthMm,min_font_pt:minFontPt,css_width:width,css_height:unit.getBoundingClientRect().height};
         });
-        return {panels,direction,sourceDirection,directionCandidates,labelCount:text.length,nodeCount:svg.querySelectorAll(".node").length,
+        return {panels,direction,sourceDirection,compact,directionCandidates,labelCount:text.length,nodeCount:svg.querySelectorAll(".node").length,
           edgeCount:svg.querySelectorAll(".edgePath,.flowchart-link,.messageLine0,.messageLine1").length,
           labelsFullyContained:true,contentBounds:{width:bounds.width,height:bounds.height},minFontPt};
       },{diagram,anchor:inputDiagram.anchor_text,widthMm}).catch(error=>{

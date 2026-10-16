@@ -114,12 +114,12 @@ test('saved body with the wrong report family is excluded even when title and so
   const technical = render(task, 'technical-solution');
   assert.match(technical, /已保存的正文内容 · 1 章/);
   assert.match(technical, /<summary>共同标题<\/summary>/);
-  assert.doesNotMatch(technical, /有效技术正文/, 'Body paragraphs stay unmounted until the chapter is expanded.');
+  assert.match(technical, /有效技术正文/, 'The first valid chapter opens for immediate reading.');
   assert.doesNotMatch(technical, /有效可研正文|串入技术报告的可研稿|串入可研报告的技术稿/);
   const feasibility = render(task, 'feasibility');
   assert.match(feasibility, /已保存的正文内容 · 1 章/);
   assert.match(feasibility, /<summary>共同标题<\/summary>/);
-  assert.doesNotMatch(feasibility, /有效可研正文/, 'Body paragraphs stay unmounted until the chapter is expanded.');
+  assert.match(feasibility, /有效可研正文/, 'The first valid chapter opens for immediate reading.');
   assert.doesNotMatch(feasibility, /有效技术正文|串入技术报告的可研稿|串入可研报告的技术稿/);
   assert.deepEqual(task, original);
 });

@@ -313,7 +313,7 @@ def task_for(user, task_id, write=False, review=False):
         DocumentTask.objects.filter(pk=task_id).update(version=F("version"))
     if not product_user_allowed(user):
         raise ProductError("not_found", "对象不存在。", 404)
-    queryset = DocumentTask.objects.select_related("owner", "reviewer")
+    queryset = DocumentTask.objects.filter(deleted_at__isnull=True).select_related("owner", "reviewer")
     if write:
         queryset = queryset.select_for_update(of=("self",))
     try:

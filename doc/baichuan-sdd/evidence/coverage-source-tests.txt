@@ -1,0 +1,12 @@
+test_all_claims_visible_and_unknown_scope_excluded (portal.tests.test_baichuan_source.BaichuanSourceTests.test_all_claims_visible_and_unknown_scope_excluded) ... ok
+test_fact_provenance_and_explicit_people_link_no_phone_inference (portal.tests.test_baichuan_source.BaichuanSourceTests.test_fact_provenance_and_explicit_people_link_no_phone_inference) ... ok
+test_only_explicit_official_homepage_and_no_candidate_means_empty (portal.tests.test_baichuan_source.BaichuanSourceTests.test_only_explicit_official_homepage_and_no_candidate_means_empty) ... ok
+test_phone_truncation_preserves_whole_numbers_and_full_source (portal.tests.test_baichuan_source.BaichuanSourceTests.test_phone_truncation_preserves_whole_numbers_and_full_source) ... ok
+test_prepare_requires_fresh_outputs_and_preserves_inputs (portal.tests.test_baichuan_source.BaichuanSourceTests.test_prepare_requires_fresh_outputs_and_preserves_inputs) ... ok
+test_reject_orphans_duplicates_oversize_and_count_drift (portal.tests.test_baichuan_source.BaichuanSourceTests.test_reject_orphans_duplicates_oversize_and_count_drift) ... ok
+test_scope_grade_official_subject_and_malformed_homepage_boundaries (portal.tests.test_baichuan_source.BaichuanSourceTests.test_scope_grade_official_subject_and_malformed_homepage_boundaries) ... ok
+
+----------------------------------------------------------------------
+Ran 7 tests in 0.013s
+
+OK

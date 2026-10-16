@@ -202,6 +202,9 @@ class DraftFirstWorkerTests(PortalTestCase):
         self.task.save(update_fields=["checkpoint"])
         def respond(*args, **kwargs):
             request = json.loads(args[2][1]["content"])
+            if request["action"] == "independent_review":
+                self.assertEqual(request["family"], "cross-report")
+                return {"content": json.dumps({"passed": True, "issues": []})}
             self.assertEqual(request["action"], "chapter")
             chapter = request["chapter"]
             return {"content": json.dumps({"chapter_id": chapter["id"], "title": chapter["title"],
@@ -210,7 +213,9 @@ class DraftFirstWorkerTests(PortalTestCase):
         run_once()
         self.task.refresh_from_db()
         self.assertEqual((self.task.state, self.task.stage, self.task.error_code), ("WAITING_REVIEW", "FINAL_REVIEW", ""))
-        self.assertEqual(model.call_count, 6)
+        self.assertEqual(sum(json.loads(call.args[2][1]["content"])["action"] == "chapter"
+                             for call in model.call_args_list), 6)
+        model_calls_before_repair = model.call_count
         artifacts = list(self.task.artifacts.order_by("version"))
         self.assertEqual({artifact.family for artifact in artifacts}, {"technical-solution", "feasibility", "presentation"})
         failed_steps = list(self.task.steps.filter(key__startswith="diagram:", status="failed"))
@@ -262,7 +267,7 @@ class DraftFirstWorkerTests(PortalTestCase):
             artifact.refresh_from_db()
             self.assertTrue(output_current(self.task, artifact))
             self.assertEqual(artifact.sha256, previous_hashes[artifact.pk])
-        self.assertEqual(model.call_count, 6)
+        self.assertEqual(model.call_count, model_calls_before_repair)
 
 
 @override_settings(PRODUCT_OFFICE_RENDER_ENABLED=False)

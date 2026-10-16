@@ -1,0 +1,27 @@
+✔ API preserves validated field errors while retaining three-argument ApiError compatibility (20.4264ms)
+✔ fixed qualification dictionary, any/grade exclusivity and URL retain server validation (0.7599ms)
+✔ websites reject unsafe protocols and credentials; snapshots retain child IDs and expected version (0.4226ms)
+✔ post-save membership uses exact grades, OR within and AND across categories, without personnel inference (0.3289ms)
+✔ both entrypoints share the product feature while preserving capability restrictions (0.2009ms)
+✔ checkbox selection updates immediately while the router still exposes the previous URL (50.2918ms)
+✔ stale success and stale failure cannot replace the latest query, and loading never reports zero (32.9508ms)
+✔ a filtered page beyond the last page preserves the total and explains the empty page (26.3244ms)
+✔ editor submits a complete atomic snapshot, keeps inputs on conflict, and serializes cleared dates to null (39.9522ms)
+✔ server field errors appear at the affected company input and retain its draft value (27.2988ms)
+✔ every department owns one assistant path while existing employee and manager permissions stay scoped (1.2064ms)
+✔ department assistant renders the shared component once without invoking HR or engineering workspaces (99.7157ms)
+✔ manager entries keep order/defaults and finance/entry guards do not expand access (0.9866ms)
+✔ business root is additive; request, upload, auth, preview and download semantics are retained (25.2089ms)
+✔ manager keeps fixed shared shell on every route; employee product workbench remains intact (65.9054ms)
+✔ all routes keep the workbench stable without page fades (5.0634ms)
+ℹ tests 16
+ℹ suites 0
+ℹ pass 16
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1603.3317
+
+COMMAND: node --test frontend/tests/baichuan.test.mjs frontend/tests/manager-workspace.test.mjs frontend/tests/product-layout.test.mjs frontend/tests/department-assistant.test.mjs
+EXIT_CODE: 0

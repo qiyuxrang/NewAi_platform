@@ -133,6 +133,14 @@ test('assistant capabilities stay independent and cancellation preserves live st
     assert.equal(view.input().props.disabled, false);
     view.hooks.dispose();
 
+    view = await setup(true, { turns: [{ question: '旧问题', answer: '上次回答未完成，请重新发送具体问题。', outcome: 'incomplete', request_id: 'incomplete-1', sources: [], activities: [], assistant: true }] });
+    await view.replay();
+    const incompleteBadge = find(view.render(), node => node.type === 'span' && text(node) === '回答未完成');
+    assert.match(incompleteBadge.props.className, /neutral/);
+    assert.ok(find(view.render(), node => node.type === 'p' && node.props.className === 'pk-no-answer' && text(node) === '上次回答未完成，请重新发送具体问题。'));
+    assert.equal(find(view.render(), node => node.props?.content === '上次回答未完成，请重新发送具体问题。'), undefined);
+    view.hooks.dispose();
+
     const privateTurn = { question: '旧问题', answer: '私有历史正文', outcome: 'answered', request_id: 'history-1', sources: [{ id: 'K1', dataset_id: 'library-1', document_id: 'doc-1', title: '私有文档', content: '私有引用' }], assistant: true };
     for (const code of ['disabled', 'unconfigured', 'knowledge_not_authorized']) {
       view = await setup(true, { knowledge: { available: false, code, help: '知识库未开通，仍可直接对话。' }, turns: [privateTurn] });

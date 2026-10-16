@@ -237,6 +237,13 @@ class ProductDocumentTests(SimpleTestCase):
             self.assertEqual(heading["text"], "可行性研究报告：项目必要性与市场分析")
             self.assertEqual(self.chapter.payload["title"], "第八章 可行性研究报告：项目必要性与市场分析")
 
+    def test_draft_omits_automatic_pending_chapter_without_rewriting_body(self):
+        for family in ("technical-solution", "feasibility"):
+            document = content_document(self.task, self.input_revision, self.blueprint, [self.chapter], family, draft=True)
+            self.assertFalse(any("一致性待复核" in item["text"] for item in document["pending"]))
+            self.assertFalse(any(block["id"].startswith("PENDING_") for block in document["blocks"]))
+            self.assertTrue(any(self.chapter.payload["paragraphs"][0] == block.get("text") for block in document["blocks"]))
+
     def test_frozen_assets_have_exact_hashes(self):
         manifest = frozen_pack()
         self.assertFalse(manifest["company_samples_copied"])

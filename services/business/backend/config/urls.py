@@ -34,6 +34,7 @@ urlpatterns = [
     path("api/product/", include("portal.product_outputs")),
     path("api/product/", include("portal.product_history")),
     path("api/product/", include("portal.tender_api")),
+    path("api/product/baichuan/", include("portal.baichuan_urls")),
     path("api/product/", include("portal.product_api")),
     path("api/hr/recruitment/", include("portal.hr_recruitment_api")),
     path("api/hr/recruitment/", include("portal.hr_jd_api")),

@@ -1,0 +1,598 @@
+{
+  "scope": "isolated React + actual JWT/enterprise proxy + Django WSGI/CSRF/SQLite; no real account grants",
+  "overall": "PASS",
+  "executed_at": "2026-10-16T07:48:48.794068+00:00",
+  "runtime": "C:\\Users\\BJRunner\\Desktop\\MultiUserClaw\\.runtime\\baichuan-browser-g1_lnswk",
+  "results": [
+    {
+      "check": "AC-01/02 isolated identities and actual JWT/CSRF proxy",
+      "result": "PASS",
+      "company_ids": [
+        "07f9e8ed-6e1d-490b-8284-566802e9c380",
+        "a9aa7936-7026-4699-a67a-7dc9a84ed515",
+        "5e1a8acc-7d92-45e0-935b-0db96f85fa8a",
+        "3ad2c16e-2c04-43e2-a1a5-32eef0eb0886",
+        "1104567b-3f25-4965-9bbd-e7f2a9c02a3a",
+        "49c3b0a5-4cc9-4cc8-8949-29d8a2f84101",
+        "aa66bff9-9707-41f2-aa08-f7e760ed559e"
+      ]
+    },
+    {
+      "check": "AC-19 manager layout and fixed shell",
+      "result": "PASS",
+      "viewport": [
+        1440,
+        900
+      ],
+      "shell": [
+        {
+          "x": 0,
+          "y": 0,
+          "width": 224,
+          "height": 900
+        },
+        {
+          "x": 224,
+          "y": 0,
+          "width": 1216,
+          "height": 60
+        }
+      ]
+    },
+    {
+      "check": "AC-19 manager layout and fixed shell",
+      "result": "PASS",
+      "viewport": [
+        1920,
+        1080
+      ],
+      "shell": [
+        {
+          "x": 0,
+          "y": 0,
+          "width": 224,
+          "height": 1080
+        },
+        {
+          "x": 224,
+          "y": 0,
+          "width": 1696,
+          "height": 60
+        }
+      ]
+    },
+    {
+      "check": "AC-04/05/06 exact multi-grade OR and cross-category AND",
+      "result": "PASS"
+    },
+    {
+      "check": "AC-07 unrestricted, any/grades mutual exclusion and labor no grades",
+      "result": "PASS"
+    },
+    {
+      "check": "AC-11/12 full detail, match marker, both returns and refresh restoration, new-tab website",
+      "result": "PASS",
+      "scroll": 267
+    },
+    {
+      "check": "AC-15/16/18 real validation400 and version409, injected503, close/back cancel preserve all draft",
+      "result": "PASS"
+    },
+    {
+      "check": "AC-17 successful edit removes nonmatching company and explains why",
+      "result": "PASS"
+    },
+    {
+      "check": "AC-10 older query finishing last cannot replace latest results",
+      "result": "PASS"
+    },
+    {
+      "check": "AC-18 loading, query failure/retry and no matches remain distinct",
+      "result": "PASS"
+    },
+    {
+      "check": "AC-01/19 product original shell and shared resource",
+      "result": "PASS",
+      "viewport": [
+        1440,
+        900
+      ]
+    },
+    {
+      "check": "AC-01/19 product original shell and shared resource",
+      "result": "PASS",
+      "viewport": [
+        1920,
+        1080
+      ]
+    },
+    {
+      "check": "AC-14/15/19 actual minimal create, multi-certificate/person edit, nullable date, keyboard choice",
+      "result": "PASS"
+    },
+    {
+      "check": "AC-09/18 beyond last page, actual detail404, network interruption/recovery, empty isolated library",
+      "result": "PASS"
+    }
+  ],
+  "calls": [
+    {
+      "method": "GET",
+      "path": "/api/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/tasks/",
+      "status": 503
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/status",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?page=1&page_size=20",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?electronic=2&page=1&page_size=20",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?electronic=1%2C2&page=1&page_size=20",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?electronic=1%2C2&page=1&cmmi=3&page_size=20",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?electronic=1%2C2&page=1&cmmi=3&itss=2&page_size=20",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?page=1&page_size=20",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?electronic=1&page=1&page_size=20",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?electronic=any&page=1&page_size=20",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?electronic=2&page=1&page_size=20",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?page=1&page_size=20",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?page=1&labor=any&page_size=20",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/tasks/",
+      "status": 503
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/status",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?electronic=1&page_size=2&page=2",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/1104567b-3f25-4965-9bbd-e7f2a9c02a3a/",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/1104567b-3f25-4965-9bbd-e7f2a9c02a3a/",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/tasks/",
+      "status": 503
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/status",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?electronic=1&page_size=2&page=2",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/1104567b-3f25-4965-9bbd-e7f2a9c02a3a/",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?q=%E6%A0%B7%E4%BE%8BE%20%E6%9C%AC%E5%9C%B0%E6%9C%AA%E4%BF%9D%E5%AD%98&page=1&page_size=100",
+      "status": 200
+    },
+    {
+      "method": "PUT",
+      "path": "/api/enterprise/business/product/baichuan/companies/1104567b-3f25-4965-9bbd-e7f2a9c02a3a/",
+      "status": 400
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?q=%E6%A0%B7%E4%BE%8BE%20%E6%9C%AC%E5%9C%B0%E6%9C%AA%E4%BF%9D%E5%AD%98&page=1&page_size=100",
+      "status": 200
+    },
+    {
+      "method": "PUT",
+      "path": "/api/enterprise/business/product/baichuan/companies/1104567b-3f25-4965-9bbd-e7f2a9c02a3a/",
+      "status": 503,
+      "injected": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?q=%E6%A0%B7%E4%BE%8BE%20%E6%9C%AC%E5%9C%B0%E6%9C%AA%E4%BF%9D%E5%AD%98&page=1&page_size=100",
+      "status": 200
+    },
+    {
+      "method": "PUT",
+      "path": "/api/enterprise/business/product/baichuan/companies/1104567b-3f25-4965-9bbd-e7f2a9c02a3a/",
+      "status": 409
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/tasks/",
+      "status": 503
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/status",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?electronic=1&page=1&page_size=20",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/07f9e8ed-6e1d-490b-8284-566802e9c380/",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?q=%E6%A0%B7%E4%BE%8BA&page=1&page_size=100",
+      "status": 200
+    },
+    {
+      "method": "PUT",
+      "path": "/api/enterprise/business/product/baichuan/companies/07f9e8ed-6e1d-490b-8284-566802e9c380/",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?electronic=1&page=1&page_size=20",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/07f9e8ed-6e1d-490b-8284-566802e9c380/",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?page=1&page_size=20",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?q=%E6%A0%B7%E4%BE%8BB&page=1&page_size=20",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?q=%E6%A0%B7%E4%BE%8BF&page=1&page_size=20",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?page=1&page_size=20",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?q=%E4%B8%8D%E5%AD%98%E5%9C%A8%E7%9A%84%E5%85%AC%E5%8F%B8&page=1&page_size=20",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/business/ledgers/permissions/",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/status",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?page=1&page_size=20",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/business/ledgers/permissions/",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/tasks/",
+      "status": 503
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/business/ledgers/permissions/",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/status",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?page=1&page_size=20",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/business/ledgers/permissions/",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/tasks/",
+      "status": 503
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/business/ledgers/permissions/",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/status",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?page=1&page_size=20",
+      "status": 403
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/business/ledgers/permissions/",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/tasks/",
+      "status": 503
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/tasks/",
+      "status": 503
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/status",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?page=1&page_size=20",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?electronic=any&page=1&page_size=20",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?page=1&page_size=20",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?q=%E6%B5%8F%E8%A7%88%E5%99%A8%E6%96%B0%E5%A2%9E%E9%9A%94%E7%A6%BB%E5%85%AC%E5%8F%B8&page=1&page_size=100",
+      "status": 200
+    },
+    {
+      "method": "POST",
+      "path": "/api/enterprise/business/product/baichuan/companies/",
+      "status": 201
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?page=1&page_size=20",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/5bfa4831-fb0d-4dc4-b7e1-b1f227d5503d/",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?q=%E6%B5%8F%E8%A7%88%E5%99%A8%E6%96%B0%E5%A2%9E%E9%9A%94%E7%A6%BB%E5%85%AC%E5%8F%B8&page=1&page_size=100",
+      "status": 200
+    },
+    {
+      "method": "PUT",
+      "path": "/api/enterprise/business/product/baichuan/companies/5bfa4831-fb0d-4dc4-b7e1-b1f227d5503d/",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?page=1&page_size=20",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/5bfa4831-fb0d-4dc4-b7e1-b1f227d5503d/",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/tasks/",
+      "status": 503
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/status",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?page=999&page_size=2",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/tasks/",
+      "status": 503
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/status",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?page=1&page_size=20",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/00000000-0000-0000-0000-000000000001/",
+      "status": 404
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/tasks/",
+      "status": 503
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/status",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?page=1&page_size=20",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?page=1&page_size=20",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/auth/me",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/tasks/",
+      "status": 503
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/status",
+      "status": 200
+    },
+    {
+      "method": "GET",
+      "path": "/api/enterprise/business/product/baichuan/companies/?page=1&page_size=20",
+      "status": 200
+    }
+  ],
+  "unexpected": [],
+  "page_errors": []
+}

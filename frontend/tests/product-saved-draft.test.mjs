@@ -8,7 +8,7 @@ import { MemoryRouter } from 'react-router-dom';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 const server = await createServer({ root, configFile: false, appType: 'custom',
-  server: { middlewareMode: true }, optimizeDeps: { noDiscovery: true, include: [] }, esbuild: { jsx: 'automatic' } });
+  server: { middlewareMode: true, hmr: false }, optimizeDeps: { noDiscovery: true, include: [] }, esbuild: { jsx: 'automatic' } });
 after(() => server.close());
 const { default: ProjectStages } = await server.ssrLoadModule('/src/business/product/ProjectStages.tsx');
 const { savedDraftDownload } = await server.ssrLoadModule('/src/business/product/product-api.ts');
@@ -47,18 +47,25 @@ test('department return path is allowlisted and visual milestones retain real ge
     const html = render(fixture({ output_families: ['technical-solution', 'feasibility'],
       analysis_progress: { writing_technical: { status: 'completed' }, writing_feasibility: { status: 'running' } } }));
     const steps = html.match(/<ol class="pd-visual-steps"[\s\S]*?<\/ol>/)[0];
-    assert.match(steps, /data-status="running"[^>]*>[\s\S]*?报告生成/);
+    assert.match(steps, /data-status="running"[^>]*>[\s\S]*?文档生成/);
+    assert.equal((steps.match(/<li /g) || []).length, 4);
     assert.doesNotMatch(steps, /PPT 生成/);
-    assert.match(steps, /data-status="pending"[^>]*>[\s\S]*?成果齐备/);
+    assert.match(steps, /data-status="pending"[^>]*>[\s\S]*?成果交付/);
     const savedFiles = ['technical-solution', 'feasibility', 'presentation'].map(family => ({
       id: family, family, version: 1, current: true, stale: false, draft: true, approved: false,
     }));
+    const deliveryStep = outputs => render(fixture(), { outputs }).match(/<ol class="pd-visual-steps"[\s\S]*?<\/ol>/)[0];
+    assert.match(deliveryStep(savedFiles), /<li[^>]*data-status="waiting"[^>]*>(?:(?!<li)[\s\S])*?成果交付/);
+    assert.match(deliveryStep(savedFiles.map(file => ({ ...file, delivered: true }))), /<li[^>]*data-status="completed"[^>]*>(?:(?!<li)[\s\S])*?成果交付/);
+    assert.match(deliveryStep(savedFiles.map((file, index) => ({ ...file, delivered: index > 0 }))), /<li[^>]*data-status="waiting"[^>]*>(?:(?!<li)[\s\S])*?成果交付/);
     const failed = render(fixture({ analysis_progress: {
       diagrams_technical: { status: 'failed' }, presentation: { status: 'blocked' },
     } }), { outputs: savedFiles });
     const failedSteps = failed.match(/<ol class="pd-visual-steps"[\s\S]*?<\/ol>/)[0];
-    assert.match(failedSteps, /<li[^>]*data-status="failed"[^>]*>(?:(?!<li)[\s\S])*?报告生成/);
-    assert.match(failedSteps, /<li[^>]*data-status="blocked"[^>]*>(?:(?!<li)[\s\S])*?PPT 生成/);
+    assert.match(failedSteps, /<li[^>]*data-status="failed"[^>]*>(?:(?!<li)[\s\S])*?文档生成/);
+    const pptBlocked = render(fixture({ analysis_progress: { presentation: { status: 'blocked' } } }));
+    const pptSteps = pptBlocked.match(/<ol class="pd-visual-steps"[\s\S]*?<\/ol>/)[0];
+    assert.match(pptSteps, /<li[^>]*data-status="blocked"[^>]*>(?:(?!<li)[\s\S])*?文档生成/);
     assert.match(failed, />下载文件</);
   } finally { window.location.search = original; }
 });
@@ -143,6 +150,62 @@ test('running and failed projects expose saved TXT draft alongside copied text',
     assert.match(html, /待配图、待排版等未完成提示/);
     assert.doesNotMatch(html, />下载文件</);
   }
+});
+
+test('one processing dialog owns the single node list and output errors have one recovery entry', () => {
+  const html = render(fixture({ state: 'FAILED', error_code: 'diagram_render_failed',
+    analysis_progress: { diagrams_technical: { status: 'failed', detail: '图表渲染暂时中断' } } }),
+    { outputsError: '成果版本已变化，请刷新后重新读取。' });
+  assert.equal((html.match(/<dialog /g) || []).length, 1);
+  assert.equal((html.match(/aria-label="完整处理链路"/g) || []).length, 1);
+  assert.equal((html.match(/成果版本已变化，请刷新后重新读取。/g) || []).length, 1);
+  assert.equal((html.match(/>重新读取成果</g) || []).length, 1);
+  assert.equal((html.match(/>查看处理详情</g) || []).length, 1);
+  assert.doesNotMatch(html, /pd-task-details|pd-progress-milestones|>查看完整处理节点</);
+  assert.match(html, /aria-controls="progress-panel-recovery"/);
+  assert.match(html, /打开技术方案/);
+});
+
+test('persisted review failures identify the paused stage and explain the error on the main card', () => {
+  const titles = { writing_editor: '总编复核', review_technical: '技术方案独立复核', review_feasibility: '可研报告独立复核' };
+  const writing = { writing_technical: { status: 'completed' }, writing_feasibility: { status: 'completed' } };
+  for (const [phase, title] of Object.entries(titles)) {
+    const html = render(fixture({ state: 'WAITING_INPUT', error_code: 'invalid_model_output',
+      analysis_progress: { ...writing, diagrams_technical: { status: 'running' },
+        [phase]: { status: 'failed', detail: '处理已暂停：invalid_model_output。' },
+        presentation: { status: 'waiting', detail: '等待两份报告文件完成后制作PPT' } } }), { disabled: () => false });
+    const main = html.match(/<section class="pd-compact-progress"[\s\S]*?<\/section>/)[0];
+    assert.match(main, new RegExp(`当前任务：${title}已暂停`));
+    assert.match(main, /role="alert">模型返回结果未通过格式或正文内容校验，自动纠正后仍未通过。已保存现有章节，可从已保存进度重试。/);
+    assert.match(main, />从已保存进度重试</);
+    assert.doesNotMatch(main, /图表渲染已暂停|invalid_model_output/);
+    const nodes = html.match(/<ol class="pd-progress-node-list"[\s\S]*?<\/ol>/)[0];
+    assert.doesNotMatch(nodes, /invalid_model_output/);
+    assert.match(nodes, new RegExp(`<li[^>]*data-status="failed"[^>]*>(?:(?!<li[ >])[\\s\\S])*?<h3>${title}</h3>`));
+    for (const [other, otherTitle] of Object.entries(titles)) {
+      if (other !== phase) assert.ok(!nodes.includes(otherTitle), 'unrecorded reviews must not be invented');
+    }
+    assert.match(html.match(/<ol class="pd-visual-steps"[\s\S]*?<\/ol>/)[0], /data-status="failed"[^>]*>(?:(?!<li)[\s\S])*?文档生成/);
+  }
+  const html = render(fixture({ analysis_progress: { ...writing, writing_editor: { status: 'pending' },
+    review_technical: { status: 'completed' }, review_feasibility: { status: 'running' } } }));
+  const nodes = html.match(/<ol class="pd-progress-node-list"[\s\S]*?<\/ol>/)[0];
+  const ordered = ['技术方案正文', '可研报告正文', '总编复核', '技术方案独立复核', '技术方案图表渲染', '技术方案文档排版', '可研报告独立复核'];
+  assert.deepEqual([...ordered].sort((a, b) => nodes.indexOf(a) - nodes.indexOf(b)), ordered);
+  assert.match(nodes, /data-status="pending"[^>]*>(?:(?!<li)[\s\S])*?<h3>总编复核<\/h3><span>等待开始<\/span>/);
+  assert.match(html, /当前任务：可研报告独立复核 · 处理中/);
+  const recorded = { ...writing,
+    review_feasibility: { status: 'failed', updated_at: '2026-10-16T04:08:00Z' },
+    writing_editor: { status: 'failed', updated_at: '2026-10-16T06:20:00Z' } };
+  assert.match(render(fixture({ state: 'WAITING_INPUT', error_code: 'invalid_model_output', analysis_progress: recorded })),
+    /当前任务：总编复核已暂停/);
+  const tied = { ...recorded, review_technical: { ...recorded.writing_editor } };
+  assert.match(render(fixture({ state: 'WAITING_INPUT', analysis_progress: tied })), /当前任务：总编复核已暂停/);
+  assert.match(render(fixture({ state: 'RUNNING', analysis_progress: { ...recorded,
+    review_technical: { status: 'running', detail: '正在复核技术方案' } } })), /当前任务：技术方案独立复核 · 处理中/);
+  const legacy = render(fixture({ state: 'WAITING_INPUT', error_code: 'invalid_model_output', analysis_progress: writing }));
+  assert.match(legacy, /当前任务：任务已暂停/);
+  assert.doesNotMatch(legacy, /总编复核|技术方案独立复核|可研报告独立复核|图表渲染已暂停/);
 });
 
 test('draft API URL carries family and input/blueprint versions', () => {

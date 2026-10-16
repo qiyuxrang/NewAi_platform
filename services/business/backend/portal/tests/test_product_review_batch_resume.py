@@ -44,6 +44,33 @@ class ProductReviewBatchResumeTests(PortalTestCase):
     def passed_reply(self, *args):
         return {"content": '{"passed":true,"issues":[]}'}
 
+    @patch("portal.product_worker.generate_for_use")
+    def test_json_failure_requeues_only_unfinished_review_batches(self, model):
+        from portal.product_models import DocumentStep, DocumentTask
+        from portal.product_steps import StepRetryPending
+
+        def reply(*args):
+            request = json.loads(args[2][1]["content"])
+            return {"content": '{"passed":' if request["review_contract"]["batch_index"] == 4
+                    else '{"passed":true,"issues":[]}'}
+        model.side_effect = reply
+        with self.assertRaises(StepRetryPending) as caught:
+            self.review()
+        self.assertEqual(self.cache()["completed_count"], 3)
+        self.assertEqual(model.call_count, 5)
+        _finish(*self.claim, "QUEUED", "WRITING", caught.exception.code, recovery=caught.exception)
+        past = timezone.now() - timedelta(seconds=1)
+        DocumentTask.objects.filter(pk=self.task.pk).update(retry_after=past)
+        DocumentStep.objects.filter(task_id=self.task.pk, status="retry_wait").update(retry_after=past)
+        self.claim = claim_task()
+        model.reset_mock()
+        model.side_effect = self.passed_reply
+        result = self.review()
+        self.assertEqual(model.call_count, result["coverage"]["batch_count"] - 3)
+        self.assertEqual(self.cache()["completed_count"], result["coverage"]["batch_count"])
+        self.task.refresh_from_db()
+        self.assertEqual(self.task.attempt_count, 1)
+
     def interrupted(self, model):
         def reply(*args):
             request = json.loads(args[2][1]["content"])

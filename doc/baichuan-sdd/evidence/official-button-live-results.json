@@ -1,0 +1,152 @@
+{
+  "overall": "PASS",
+  "executed_at": "2026-10-16T07:29:44.268657+00:00",
+  "scope": "Existing local 3080 -> gateway8080 -> portal8100, existing users via normal HTTP login; no API replacement or company mutations",
+  "checks": [
+    {
+      "identity": "manager_user",
+      "company": "陕西凯笙信息技术有限公司",
+      "width": 1440,
+      "result": "PASS",
+      "header_title_px": 32,
+      "body_px": 16,
+      "section_title_px": 24,
+      "row_alignment": true,
+      "loaded_local_assets": true,
+      "fixed_shell": true,
+      "no_horizontal_overflow": true
+    },
+    {
+      "identity": "manager_user",
+      "company": "陕西凯笙信息技术有限公司",
+      "width": 1920,
+      "result": "PASS",
+      "header_title_px": 38,
+      "body_px": 16,
+      "section_title_px": 24,
+      "row_alignment": true,
+      "loaded_local_assets": true,
+      "fixed_shell": true,
+      "no_horizontal_overflow": true
+    },
+    {
+      "identity": "manager_user",
+      "company": "陕西凯笙信息技术有限公司",
+      "result": "PASS",
+      "source_fold": true,
+      "data_rows_match_api": true,
+      "safe_official_popup_and_clipboard": true,
+      "missing_website_disabled_and_existing_editor": false,
+      "back_query_restore": true
+    },
+    {
+      "identity": "manager_user",
+      "company": "万邦建工集团有限公司",
+      "width": 1440,
+      "result": "PASS",
+      "header_title_px": 32,
+      "body_px": 16,
+      "section_title_px": 24,
+      "row_alignment": true,
+      "loaded_local_assets": true,
+      "fixed_shell": true,
+      "no_horizontal_overflow": true
+    },
+    {
+      "identity": "manager_user",
+      "company": "万邦建工集团有限公司",
+      "width": 1920,
+      "result": "PASS",
+      "header_title_px": 38,
+      "body_px": 16,
+      "section_title_px": 24,
+      "row_alignment": true,
+      "loaded_local_assets": true,
+      "fixed_shell": true,
+      "no_horizontal_overflow": true
+    },
+    {
+      "identity": "manager_user",
+      "company": "万邦建工集团有限公司",
+      "result": "PASS",
+      "source_fold": true,
+      "data_rows_match_api": true,
+      "safe_official_popup_and_clipboard": false,
+      "missing_website_disabled_and_existing_editor": true,
+      "back_query_restore": true
+    },
+    {
+      "identity": "product_user",
+      "company": "陕西凯笙信息技术有限公司",
+      "width": 1440,
+      "result": "PASS",
+      "header_title_px": 32,
+      "body_px": 16,
+      "section_title_px": 24,
+      "row_alignment": true,
+      "loaded_local_assets": true,
+      "fixed_shell": true,
+      "no_horizontal_overflow": true
+    },
+    {
+      "identity": "product_user",
+      "company": "陕西凯笙信息技术有限公司",
+      "width": 1920,
+      "result": "PASS",
+      "header_title_px": 38,
+      "body_px": 16,
+      "section_title_px": 24,
+      "row_alignment": true,
+      "loaded_local_assets": true,
+      "fixed_shell": true,
+      "no_horizontal_overflow": true
+    },
+    {
+      "identity": "product_user",
+      "company": "陕西凯笙信息技术有限公司",
+      "result": "PASS",
+      "source_fold": true,
+      "data_rows_match_api": true,
+      "safe_official_popup_and_clipboard": true,
+      "missing_website_disabled_and_existing_editor": false,
+      "back_query_restore": true
+    },
+    {
+      "identity": "product_user",
+      "company": "万邦建工集团有限公司",
+      "width": 1440,
+      "result": "PASS",
+      "header_title_px": 32,
+      "body_px": 16,
+      "section_title_px": 24,
+      "row_alignment": true,
+      "loaded_local_assets": true,
+      "fixed_shell": true,
+      "no_horizontal_overflow": true
+    },
+    {
+      "identity": "product_user",
+      "company": "万邦建工集团有限公司",
+      "width": 1920,
+      "result": "PASS",
+      "header_title_px": 38,
+      "body_px": 16,
+      "section_title_px": 24,
+      "row_alignment": true,
+      "loaded_local_assets": true,
+      "fixed_shell": true,
+      "no_horizontal_overflow": true
+    },
+    {
+      "identity": "product_user",
+      "company": "万邦建工集团有限公司",
+      "result": "PASS",
+      "source_fold": true,
+      "data_rows_match_api": true,
+      "safe_official_popup_and_clipboard": false,
+      "missing_website_disabled_and_existing_editor": true,
+      "back_query_restore": true
+    }
+  ],
+  "page_errors": []
+}

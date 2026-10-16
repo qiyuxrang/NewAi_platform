@@ -1,0 +1,98 @@
+COMMAND: node --test (all frontend/tests/*.test.mjs)
+UTC_START: 2026-10-16T02:35:18.6571241Z
+NODE: v24.14.0
+NPM: 11.16.0
+✔ API preserves validated field errors while retaining three-argument ApiError compatibility (23.4171ms)
+✔ fixed qualification dictionary, any/grade exclusivity and URL retain server validation (0.9613ms)
+✔ websites reject unsafe protocols and credentials; snapshots retain child IDs and expected version (0.5081ms)
+✔ post-save membership uses exact grades, OR within and AND across categories, without personnel inference (1.0014ms)
+✔ both entrypoints share the product feature while preserving capability restrictions (0.3385ms)
+✔ checkbox selection updates immediately while the router still exposes the previous URL (153.5551ms)
+✔ stale success and stale failure cannot replace the latest query, and loading never reports zero (83.632ms)
+✔ a filtered page beyond the last page preserves the total and explains the empty page (54.2995ms)
+✔ editor submits a complete atomic snapshot, keeps inputs on conflict, and serializes cleared dates to null (76.5456ms)
+✔ server field errors appear at the affected company input and retain its draft value (117.8162ms)
+✔ answer requests accept SSE and JSON errors, preserve retry identity, and never retry automatically (864.4781ms)
+✔ every department owns one assistant path while existing employee and manager permissions stay scoped (1.4323ms)
+✔ department assistant renders the shared component once without invoking HR or engineering workspaces (146.7714ms)
+✔ one authenticated GET carries encoded search and preserves server filtered metrics, distribution and full records (19.79ms)
+✔ unknown amounts stay unknown; missing, blank, negative and unavailable values never create a donut (26.9858ms)
+✔ source mode keeps five genuine metrics, forbids money charts despite yuan label and never infers year from cutoff (9.2462ms)
+✔ 401 and 403 remain real errors and never load board content or write grants (1.6914ms)
+✔ filter changes discard stale responses and permission revocation unmounts previously visible data (622.4475ms)
+✔ permission first, ledger then latest published revision snapshot; no GM board or writes (7.4762ms)
+✔ 401/403 and missing finance grant stop with real errors; no subsequent finance request (1.8692ms)
+✔ unknown values do not become zero, standard received amount stays required and source recognition is per record (10.0254ms)
+✔ pure books prevent actively mixing new modes; existing mixed records retain their individual contracts (0.5737ms)
+✔ source form keeps seven main fields, monthly actual/plan and unknown year/unit without cutoff inference (8.2485ms)
+✔ editing retains baseline record mode and refuses either direction of conversion without writing (5.4978ms)
+✔ verified own authors only: unknown, other, duplicate metadata and changed draft actor block selection (11.3637ms)
+✔ single record update preserves full fields and exact expected_revision; metadata PATCH does not import or overwrite all records (1.7355ms)
+✔ own publication uses can_edit despite can_publish false; exact selection and concurrent checksum failures never auto retry (1.1096ms)
+✔ 409 retains draft; manual reconcile keeps local changes and latest untouched fields, refuses lost authors or deleted records (0.6696ms)
+✔ truncated history does not fake a zero published baseline; racing version read produces 409 (1.4571ms)
+✔ page saves dirty cutoff with exact PATCH revision and does not expose submit or return actions (630.4299ms)
+✔ page preserves unsaved fields through 409 and refresh, manually reconciles, and unmounts ledger on real 403 (447.6791ms)
+✔ records keep their own source mode, real zero and every original field (19.1124ms)
+✔ state and returned permissions independently govern every operation (0.3291ms)
+✔ forms expose real required fields, source precision and unknown engineering progress (23.054ms)
+✔ API reads permissions first and uses single-record revisions without bulk replacement or retry (13.4141ms)
+✔ dirty guards preserve router state when browser back or forward is cancelled and clean up (0.7317ms)
+WebSocket server error: Port 24678 is already in use
+✔ enterprise login keeps native validation, accessible password control and original company branding (16.1053ms)
+✔ assistant code blocks retain explicit foreground and theme-aware background (9.0656ms)
+✔ manager entries keep order/defaults and finance/entry guards do not expand access (2.1152ms)
+✔ business root is additive; request, upload, auth, preview and download semantics are retained (33.6395ms)
+✔ manager keeps fixed shared shell on every route; employee product workbench remains intact (137.7234ms)
+✔ manager BI uses API statistics, preserves unknown values and stays absent for employees (45.7785ms)
+✔ assistant capabilities stay independent and cancellation preserves live streams and completion races (6755.3902ms)
+✔ blueprint progress is visible without expanding details and elapsed time uses only a valid stage start (223.0245ms)
+WebSocket server error: Port 24678 is already in use
+✔ dual report groups have separate budget denominators and one joint approval (76.321ms)
+✔ legacy blueprint remains a shared directory without adding a family field (24.1412ms)
+✔ manual blueprint starts with distinct report directories, unique IDs and original conditions (0.3998ms)
+✔ saved body with the wrong report family is excluded even when title and sources match (51.5961ms)
+WebSocket server error: Port 24678 is already in use
+✔ assistant Markdown shows public links without enabling OpenClaw file access or remote images (16.9695ms)
+✔ document search sends authenticated, encoded dataset and server pagination without retrieving chunks (2.9153ms)
+✔ preview decodes full HTML and plain text directly, preserves first and last paragraphs and never creates blob URLs (1.285ms)
+✔ closing during slow text decoding cancels the preview without returning stale content (0.7447ms)
+✔ 430 and 445 page manifests retain every consecutive page and render only sized placeholders before observation (86.1236ms)
+✔ PDF batches enforce exact order, manifest sizes, page count, end marker and data JPEG without rejecting base64 padding (0.8622ms)
+✔ first and final PDF batches use authenticated three-page requests; cancellation and real API failures survive (4.0448ms)
+✔ srcDoc keeps safe server HTML and escapes all plain text, with CSP and no script or same-origin permissions (0.8428ms)
+✔ access revocation, oversized and unsupported previews retain server errors instead of returning partial text (0.7371ms)
+✔ list and reader expose separate pending states, document title, return, close and original download controls (2.5634ms)
+✔ left and right separators follow physical drag direction, enforce limits and support keyboard extremes (0.4833ms)
+✔ knowledge-only hide controls keep both left panes mounted and restore controls outside the hidden panes (92.5292ms)
+✔ all routes keep the workbench stable without page fades (8.8007ms)
+✔ persisted plan is readable before export, with exact backend counts and no approval gate (28.8018ms)
+✔ new attempt style is separated from saved file style and failures retain all downloads (64.898ms)
+✔ legacy or invalid progress never invents page counts or an automatic style (174ms)
+✔ server permission locks style regeneration while saved exports stay available (69.8879ms)
+✔ finished retrieval is blocked when backend evidence is insufficient, while legacy snapshots remain readable (60.0848ms)
+✔ delivered outputs do not require legacy approval or expose a second review tail (124.9727ms)
+✔ incomplete delivery offers recovery and real blocking reasons while keeping all saved downloads (25.6328ms)
+WebSocket server error: Port 24678 is already in use
+✔ department return path is allowlisted and visual milestones retain real generation states (69.6606ms)
+✔ current files remain downloadable during running or failed tasks with honest quality warnings (268.7832ms)
+✔ quality warning survives before file generation and exhausted recovery remains disabled (29.6414ms)
+✔ pending diagram repair uses the authorized original retry action without hiding existing files (167.0919ms)
+✔ running and failed projects expose saved TXT draft alongside copied text (47.5369ms)
+✔ draft API URL carries family and input/blueprint versions (0.3063ms)
+✔ automatic recovery and cached steps have readable labels without internal hashes (28.7371ms)
+✔ legacy payload without step fields renders normally; stale and unapproved text is hidden (93.7842ms)
+WebSocket server error: Port 24678 is already in use
+✔ project refresh preserves safe snapshots, rejects obsolete responses and highlights only changed files (1232.9408ms)
+✔ feature changes preserve the boundary and recover errors only when the reset key changes (1.3481ms)
+ℹ tests 78
+ℹ suites 0
+ℹ pass 78
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 7918.2528
+
+UTC_END: 2026-10-16T02:35:26.9285395Z
+EXIT_CODE: 0

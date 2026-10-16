@@ -6,7 +6,7 @@ from functools import wraps
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.db import transaction
-from django.db.models import F, Prefetch, Q
+from django.db.models import Case, F, Prefetch, Q, When
 from django.http import FileResponse
 from django.urls import path
 from django.utils import timezone
@@ -157,6 +157,7 @@ def _task_summary(task):
         "id": str(task.pk), "title": task.title, "state": task.state, "stage": task.stage,
         "version": task.version, "owner_id": task.owner_id, "reviewer_id": task.reviewer_id,
         "updated_at": task.updated_at.isoformat(),
+        "is_pinned": task.pinned_at is not None,
     }
 
 
@@ -603,6 +604,7 @@ def conversations(request):
             owner = User.objects.select_for_update().get(pk=request.user.pk)
             task = DocumentTask.objects.filter(owner=owner, idempotency_key=key).first()
             if task:
+                task = task_for(owner, task.pk, write=True)
                 if task.payload_hash != payload_hash:
                     raise ProductError("idempotency_conflict", "同一幂等键已用于不同请求。", 409)
             else:
@@ -716,9 +718,9 @@ def tasks(request):
             scope |= Q(reviewer=request.user)
         current_inputs = DocumentRevision.objects.filter(
             kind="input", version=F("task__input_version"))
-        queryset = (DocumentTask.objects.filter(scope)
+        queryset = (DocumentTask.objects.filter(scope, deleted_at__isnull=True)
                     .prefetch_related(Prefetch("revisions", queryset=current_inputs, to_attr="task_list_inputs"))
-                    .order_by("-updated_at"))
+                    .order_by(Case(When(pinned_at__isnull=False, then=0), default=1), "-updated_at", "id"))
         audit(request.user, "product_task_list", f"list:r{request.product_request_id}")
         return Response([_task_summary(task) for task in queryset
                          if not task.task_list_inputs or input_authorized(task, task.task_list_inputs[0])])
@@ -750,6 +752,7 @@ def tasks(request):
         owner = User.objects.select_for_update().get(pk=request.user.pk)
         existing = DocumentTask.objects.filter(owner=owner, idempotency_key=key).first()
         if existing:
+            existing = task_for(owner, existing.pk, write=True)
             if existing.payload_hash != payload_hash:
                 raise ProductError("idempotency_conflict", "同一幂等键已用于不同请求。", 409)
             task = existing
@@ -769,9 +772,11 @@ def tasks(request):
     return Response(_task_detail(task, request.user), status=201 if created else 200)
 
 
-@api_view(["GET", "PATCH"])
+@api_view(["GET", "PATCH", "DELETE"])
 @product_endpoint
 def task_detail(request, task_id):
+    if request.method == "DELETE":
+        return _cancel_task(request, task_id, delete=True)
     if request.method == "GET":
         task = task_for(request.user, task_id)
         _audit(request, "product_task_read", task)
@@ -1055,20 +1060,38 @@ def decisions(request, task_id):
 
 @api_view(["POST"])
 @product_endpoint
-def cancel(request, task_id):
+def pin(request, task_id):
+    body = _body(request, {"expected_version", "pinned"})
+    if type(body["pinned"]) is not bool:
+        raise ProductError("invalid_request", "pinned 必须是布尔值。")
+    with transaction.atomic():
+        task = task_for(request.user, task_id, write=True)
+        require_owner(task, request.user)
+        require_version(task, _expected(body["expected_version"]))
+        task.pinned_at = (task.pinned_at or timezone.now()) if body["pinned"] else None
+        # List metadata must not invalidate an in-flight generation's version or fence.
+        task.save(update_fields=["pinned_at", "updated_at"])
+    _audit(request, "product_task_pin" if body["pinned"] else "product_task_unpin", task, changes=["pinned_at"])
+    return Response(_task_summary(task))
+
+
+def _cancel_task(request, task_id, delete=False):
     body = _body(request, {"expected_version"})
     agent_action_keys = []
     with transaction.atomic():
         task = task_for(request.user, task_id, write=True)
         require_owner(task, request.user)
         require_version(task, _expected(body["expected_version"]))
-        if task.state == DocumentTask.State.COMPLETED:
+        if not delete and task.state == DocumentTask.State.COMPLETED:
             raise ProductError("invalid_state", "已完成任务不能取消。", 409)
         task.fence += 1
         task.lease_until = None
+        task.retry_after = None
         task.state = DocumentTask.State.CANCELLED
         task.pending_action = ""
         task.version += 1
+        if delete:
+            task.deleted_at = timezone.now()
         task.save()
         agent_action_keys = list(DocumentAttempt.objects.filter(
             task=task, status=DocumentAttempt.Status.RUNNING).exclude(agent_action_key="").values_list(
@@ -1081,8 +1104,17 @@ def cancel(request, task_id):
         guard = runtime_guard_for_task(task)
         for action_key in agent_action_keys:
             guard.finish(action_key, "cancelled")
-    _audit(request, "product_task_cancel", task, changes=["state", "fence", "lease_until"])
+    _audit(request, "product_task_delete" if delete else "product_task_cancel", task,
+           changes=["state", "fence", "lease_until", "retry_after", *(["deleted_at"] if delete else [])])
+    if delete:
+        return Response({**_task_summary(task), "deleted": True})
     return Response(_task_detail(task, request.user))
+
+
+@api_view(["POST"])
+@product_endpoint
+def cancel(request, task_id):
+    return _cancel_task(request, task_id)
 
 
 @api_view(["POST"])
@@ -1307,6 +1339,7 @@ urlpatterns = [
     path("tasks/", tasks),
     path("tasks/<uuid:task_id>/conversation/", task_conversation),
     path("tasks/<uuid:task_id>/", task_detail),
+    path("tasks/<uuid:task_id>/pin/", pin),
     path("tasks/<uuid:task_id>/blueprint/", blueprint),
     path("tasks/<uuid:task_id>/queue/", queue_task),
     path("tasks/<uuid:task_id>/decisions/", decisions),

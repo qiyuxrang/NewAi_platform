@@ -24,6 +24,7 @@ test('every department owns one assistant path while existing employee and manag
     ['商机看板', '/departments/product/opportunities'], ['文档生成', '/departments/product/documents?view=projects'],
     ['产品报价', '/departments/engineering/estimate'], ['智能助手', '/departments/product/knowledge'],
     ['财务看板', '/departments/business/finance'],
+    ['百川阁', '/departments/product/baichuan'],
   ])
 })
 

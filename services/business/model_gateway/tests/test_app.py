@@ -7,7 +7,7 @@ from unittest.mock import MagicMock, patch
 from fastapi.testclient import TestClient
 
 from backend.portal.model_messages import TEXT_REQUEST_LIMIT
-from backend.portal.model_response_format import chapter_response_format
+from backend.portal.model_response_format import chapter_response_format, review_response_format
 from model_gateway.app import app, slots
 from model_gateway.errors import GatewayError
 
@@ -33,6 +33,46 @@ class GatewayAppTests(unittest.TestCase):
         payload["model"].update(model_name="qwen3.8-flash", max_output_tokens=4096, timeout_seconds=120)
         payload["response_format"] = chapter_response_format({"id": "c", "title": "approved", "source_ids": ["s"]})
         return payload
+
+    @patch("model_gateway.app.chat_completion", return_value={"content": '{"passed":true,"issues":[]}',
+                                                             "prompt_tokens": 1, "completion_tokens": 2})
+    def test_review_contract_forwarded_and_existing_context_gates_hold(self, call):
+        payload = self.chapter_payload()
+        basic = {"passed": "boolean", "issues": ["string"]}
+        guide = {**basic, "guide_checks": [{
+            "id": "exact-guide-requirement-id", "status": "covered/partial/not_seen/not_applicable/pending",
+            "evidence": [{"chapter_id": "saved-chapter-id", "quote": "exact-sent-body-quote"}], "reason": "string"}]}
+        for specification in (basic, guide):
+            payload["response_format"] = review_response_format(specification)
+            self.assertEqual(self.post(payload).status_code, 200)
+            call.assert_called_once()
+            self.assertEqual(call.call_args.kwargs["response_format"], payload["response_format"])
+            call.reset_mock()
+        for change in (
+                lambda p: p["provider"].update(base_url="https://other.example/v1"),
+                lambda p: p["model"].update(model_name="unknown"),
+                lambda p: p.update(purpose="test"),
+                lambda p: p.update(generation_profile="bounded_chapter_v1"),
+                lambda p: p["response_format"]["json_schema"]["schema"]["properties"]["passed"].update(type="string"),
+                lambda p: p["response_format"]["json_schema"]["schema"].update(additionalProperties=0)):
+            invalid = copy.deepcopy(payload)
+            change(invalid)
+            self.assertEqual(self.post(invalid).status_code, 422)
+        for endpoint, status in (("/v1/generate-vision", 422), ("/v1/generate-stream", 400),
+                                 ("/v1/generate-agent", 422)):
+            self.assertEqual(self.client.post(endpoint, json=payload, headers=self.headers).status_code, status)
+        call.assert_not_called()
+
+    @patch("model_gateway.app.chat_completion")
+    def test_upstream_diagnostic_crosses_gateway_http_boundary(self, call):
+        call.side_effect = GatewayError("upstream_invalid_request", "模型服务拒绝调用参数。", status=400,
+                                        diagnostic={"upstream_status": 400, "upstream_code": "InvalidParameter"})
+        response = self.post()
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.json()["diagnostic"],
+                         {"upstream_status": 400, "upstream_code": "InvalidParameter"})
+        self.assertNotIn("synthetic-private-input", response.text)
+        call.assert_called_once()
 
     @patch("model_gateway.app.chat_completion", return_value={"content": "synthetic", "prompt_tokens": 1,
                                                              "completion_tokens": 1000, "reasoning_tokens": 512})

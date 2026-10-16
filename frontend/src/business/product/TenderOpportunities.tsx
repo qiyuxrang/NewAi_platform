@@ -579,7 +579,7 @@ export default function TenderOpportunities() {
   if (detailId) return <div className="pd-workspace tender-workspace">{stateMessage && <p className="notice error" role="alert">{stateMessage}</p>}{detail.kind === "ready" && <StateActions item={detail.data} pending={pendingStates.has(detailId)} onChange={patch => void saveUserState(detailId, patch)} includeRead />}<Detail state={detail} onBack={closeDetail} onRetry={() => setDetailReload(value => value + 1)} /></div>;
 
   const active = batch && ["QUEUED", "RUNNING"].includes(batchDisplayState(batch));
-  const interrupted = batch && batchDisplayState(batch) === "INTERRUPTED";
+  const interrupted = batch && batch.stored_state === "RUNNING" && batchDisplayState(batch) === "INTERRUPTED";
   const industries = industryOptions.map(item => options.industries.find(option => option.value === item.value) || item);
   const categories = noticeCategories.map(item => options.noticeCategories.find(option => option.value === item.value) || item);
   const regions = options.regions.some(item => item.value === filters.region) || !filters.region
@@ -591,8 +591,8 @@ export default function TenderOpportunities() {
     { label: "即将截止", value: stats?.closing_soon },
   ].map(item => ({ ...item, value: typeof item.value === "number" && Number.isFinite(item.value) && item.value >= 0 ? item.value : null }));
   const activityMax = Math.max(0, ...activityMetrics.map(item => item.value ?? 0));
-  const serviceReady = overview?.consumer_online === true && overview.available;
-  const serviceLabel = metadataMessage ? "采集服务状态待确认" : overview?.consumer_online === false ? "采集服务当前离线"
+  const serviceReady = overview?.consumer_online === true && overview.available && !interrupted;
+  const serviceLabel = metadataMessage ? "采集服务状态待确认" : interrupted ? "采集已中断，等待后台恢复" : overview?.consumer_online === false ? "采集服务当前离线"
     : serviceReady ? "采集服务运行正常" : overview?.available === false ? "采集服务暂不可用" : "采集服务状态待确认";
   return <div className={`pd-workspace tender-workspace${isGeneralManager ? " tender-manager" : ""}`}>
     <section className="tender-hero">

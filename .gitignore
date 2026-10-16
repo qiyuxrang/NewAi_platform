@@ -68,6 +68,7 @@ hermes-agent/deploy_copy
 .qoder
 .runtime/
 frontend/dist/
+.vite/
 services/engineering/data/
 services/business/frontend/dist/
 services/business/staticfiles/

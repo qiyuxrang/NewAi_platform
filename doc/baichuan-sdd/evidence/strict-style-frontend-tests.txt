@@ -1,0 +1,26 @@
+✔ API preserves validated field errors while retaining three-argument ApiError compatibility (18.1676ms)
+✔ fixed qualification dictionary, any/grade exclusivity and URL retain server validation (0.6904ms)
+✔ websites reject unsafe protocols and credentials; snapshots retain child IDs and expected version (0.5409ms)
+✔ post-save membership uses exact grades, OR within and AND across categories, without personnel inference (0.392ms)
+✔ both entrypoints share the product feature while preserving capability restrictions (0.1521ms)
+✔ detail preserves source statements and line breaks, linking only safe HTTP(S) evidence without surrounding punctuation (44.5037ms)
+✔ details hide empty fields and metadata, preserve all sources in one closed disclosure and expose safe official links (29.0672ms)
+✔ detail business tiles use only explicit areas, keep all labels and limit photos to decoration (28.4108ms)
+✔ the supplied company logo belongs only to its exact company, while sparse Wanbang retains actual structured fields (23.1636ms)
+✔ actual addresses and websites show contacts independently, and editing follows permission (24.0809ms)
+✔ clipboard success and rejection report their real outcome without leaking status to another website (44.2815ms)
+✔ qualification cards retain each declared status and certificate and use category icons (20.9964ms)
+✔ checkbox selection updates immediately while the router still exposes the previous URL (40.1449ms)
+✔ list exposes actual safe websites, extra contacts and server page controls without inventing fields (31.5175ms)
+✔ stale success and stale failure cannot replace the latest query, and loading never reports zero (28.7797ms)
+✔ a filtered page beyond the last page preserves the total and explains the empty page (26.1796ms)
+✔ editor submits a complete atomic snapshot, keeps inputs on conflict, and serializes cleared dates to null (39.5101ms)
+✔ server field errors appear at the affected company input and retain its draft value (34.171ms)
+ℹ tests 18
+ℹ suites 0
+ℹ pass 18
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 978.99

@@ -85,10 +85,10 @@ def add_structural_blocks(
         blocks.extend([
             {"id": prefix + "_HEADING", "type": "heading", "level": 2, "text": heading_display_text(title),
              "source_ids": sources, "requirement_ids": requirements},
+            {"id": prefix + "_NOTE", "type": "paragraph", "text": description,
+             "source_ids": sources, "requirement_ids": requirements},
             {"id": prefix + "_FIGURE", "type": "figure", "path": f"assets/diagram-{index:02d}.png",
              "caption": title, "width_mm": 145, "alt": description,
-             "source_ids": sources, "requirement_ids": requirements},
-            {"id": prefix + "_NOTE", "type": "paragraph", "text": description,
              "source_ids": sources, "requirement_ids": requirements},
         ])
 
@@ -502,8 +502,9 @@ def apply_diagram_layout(document: dict, evidence: dict, directory: Path) -> lis
             raise ValueError("invalid diagram reading units")
         figure = figures.get(item["figure_id"])
         panels = layout.get("panels")
-        if (figure is None or layout.get("version") != "word-readable-v1"
-                or not isinstance(panels, list) or not panels or len(panels) > 100
+        if (figure is None or layout.get("version") not in ("word-readable-v1", "word-readable-v2", "word-readable-v3")
+                or not isinstance(panels, list) or not panels
+                or len(panels) > (100 if layout["version"] == "word-readable-v1" else 2)
                 or any(not isinstance(panel, dict) for panel in panels)):
             raise ValueError("invalid diagram reading units")
         units = []

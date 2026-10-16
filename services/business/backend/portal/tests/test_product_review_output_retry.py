@@ -86,6 +86,42 @@ class ProductReviewOutputRetryTests(PortalTestCase):
         self.assertIsNotNone(claimed)
         return claimed
 
+    def test_review_dispatch_uses_strict_schema_and_keeps_bounded_parse_diagnostics(self):
+        from portal.models import GatewayModel, ModelRoute, Module, Provider
+        from portal.model_response_format import review_response_format
+
+        provider = Provider.objects.create(code="structured-review", name="测试服务",
+            base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+            api_key_env="PORTAL_MODEL_KEY_TEST", enabled=True)
+        configured = GatewayModel.objects.create(provider=provider, name="测试模型", model_name="qwen3.8-flash",
+            timeout_seconds=120, max_output_tokens=4096, enabled=True)
+        ModelRoute.objects.update_or_create(code="product_review", defaults={"name": "复核",
+            "module": Module.objects.get(code="product"), "model": configured, "enabled": True})
+        schema = {"passed": "boolean", "issues": ["string"]}
+        payload = {"action": "independent_review", "schema": schema}
+        rejected = '{"passed":false,"issues":["private-rejected-sentinel]}'
+        actual = {"passed": False, "issues": ["项目工期缺少依据。"]}
+        task_id, fence, attempt_id = self.claimed()
+        with patch("portal.product_worker.generate_for_use", side_effect=[
+                {"content": rejected}, {"content": json.dumps(actual, ensure_ascii=False)}]) as model:
+            result = _model(task_id, fence, attempt_id, "product_review", payload)
+        self.assertEqual(result, actual)
+        self.assertEqual(model.call_count, 2)
+        output_format = review_response_format(schema)
+        for call in model.call_args_list:
+            self.assertEqual(call.kwargs, {"response_format": output_format})
+        self.task.refresh_from_db()
+        first, second = self.task.checkpoint["calls"]
+        self.assertEqual(first["input_hash"], digest({"payload": payload,
+            "response_format_sha256": digest(output_format)}))
+        diagnostic = first["structure_failure"]
+        self.assertEqual(diagnostic["reason"], "invalid_json")
+        self.assertIs(type(diagnostic["position"]), int)
+        self.assertEqual(diagnostic["response_sha256"], digest(rejected))
+        self.assertEqual(diagnostic["response_characters"], len(rejected))
+        self.assertNotIn("private-rejected-sentinel", json.dumps(self.task.checkpoint))
+        self.assertTrue(second["response_validated"])
+
     def test_invalid_reviewer_type_gets_one_correction_and_returns_actual_review(self):
         task_id, fence, attempt_id = self.claimed()
         actual_issue = "实施时间尚未确认，不能声称已经确定实施窗口。"

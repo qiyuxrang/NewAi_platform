@@ -88,6 +88,9 @@ class ProductDiagramRecoveryTests(PortalTestCase):
                 "figure_id": figure["id"],
                 "imageSha256": hashlib.sha256(image_path.read_bytes()).hexdigest(),
                 "sourceSha256": hashlib.sha256(source["source"].encode()).hexdigest(),
+                "layout": {"version": "word-readable-v2", "panels": [{
+                    "index": 1, "total": 1, "path": figure["path"], "width_mm": 145, "min_font_pt": 13.5,
+                    "imageSha256": hashlib.sha256(image_path.read_bytes()).hexdigest()}]},
             }]}
             self.rendered.append((figure["id"], copy.deepcopy(source), evidence))
             return evidence

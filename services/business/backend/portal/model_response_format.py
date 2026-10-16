@@ -1,4 +1,4 @@
-"""Bounded, server-owned chapter output contract; no provider I/O."""
+"""Bounded, server-owned chapter and review contracts; no provider I/O."""
 
 import json
 
@@ -7,6 +7,38 @@ _NAME = "chapter_contract_v1"
 _FIELDS = ("chapter_id", "title", "paragraphs", "source_ids")
 _FORMAT_LIMIT = 32768
 _SOURCE_LIMIT = 256
+_REVIEW_SPEC = {"passed": "boolean", "issues": ["string"]}
+_GUIDE_SPEC = {**_REVIEW_SPEC, "guide_checks": [{
+    "id": "exact-guide-requirement-id", "status": "covered/partial/not_seen/not_applicable/pending",
+    "evidence": [{"chapter_id": "saved-chapter-id", "quote": "exact-sent-body-quote"}], "reason": "string"}]}
+
+
+def _review_format(guide):
+    properties = {"passed": {"type": "boolean"},
+                  "issues": {"type": "array", "maxItems": 100,
+                             "items": {"type": "string", "maxLength": 2000}}}
+    if guide:
+        evidence = {"type": "object", "properties": {
+            "chapter_id": {"type": "string"}, "quote": {"type": "string", "minLength": 1, "maxLength": 2000}},
+            "required": ["chapter_id", "quote"], "additionalProperties": False}
+        properties["guide_checks"] = {"type": "array", "items": {
+            "type": "object", "properties": {
+                "id": {"type": "string"},
+                "status": {"type": "string", "enum": ["covered", "partial", "not_seen", "not_applicable", "pending"]},
+                "evidence": {"type": "array", "maxItems": 5, "items": evidence},
+                "reason": {"type": "string", "minLength": 1, "maxLength": 2000}},
+            "required": ["id", "status", "evidence", "reason"], "additionalProperties": False}}
+    return {"type": "json_schema", "json_schema": {
+        "name": "guide_review_contract_v1" if guide else "review_contract_v1", "strict": True,
+        "schema": {"type": "object", "properties": properties,
+                   "required": list(properties), "additionalProperties": False}}}
+
+
+def review_response_format(schema):
+    """Build a strict contract only for the two existing review specifications."""
+    if type(schema) is not dict or (schema != _REVIEW_SPEC and schema != _GUIDE_SPEC):
+        raise ValueError("invalid response format")
+    return _review_format("guide_checks" in schema)
 
 
 def _text(value, maximum):
@@ -63,7 +95,15 @@ def validate_response_format(value):
             raise ValueError
         contract = value["json_schema"]
         if (type(contract) is not dict or set(contract) != {"name", "strict", "schema"}
-                or contract["name"] != _NAME or contract["strict"] is not True):
+                or contract["strict"] is not True):
+            raise ValueError
+        if contract["name"] in ("review_contract_v1", "guide_review_contract_v1"):
+            expected = _review_format(contract["name"] == "guide_review_contract_v1")
+            # JSON comparison also distinguishes bools from Python's equal 0/1.
+            if (value != expected or json.dumps(value, sort_keys=True) != json.dumps(expected, sort_keys=True)):
+                raise ValueError
+            return expected
+        if contract["name"] != _NAME:
             raise ValueError
         schema = contract["schema"]
         if (type(schema) is not dict or set(schema) != {"type", "properties", "required", "additionalProperties"}
@@ -94,7 +134,7 @@ def validate_response_format(value):
 
 
 def supports_chapter_response_format(provider, model):
-    """Opt in only to the exact public provider/model combination verified."""
+    """Allow fixed contracts only on the exact verified provider/model pair."""
     def field(value, name):
         return value.get(name) if isinstance(value, dict) else getattr(value, name, None)
     return (field(provider, "protocol") == "openai_chat"
@@ -128,6 +168,7 @@ def validate_generation_profile(profile, *, provider, model, response_format, me
     tokens = maximum if requested is None else requested
     if (not supports_chapter_response_format(provider, model)
             or validate_response_format(response_format) is None
+            or response_format["json_schema"]["name"] != _NAME
             or purpose != "business" or stream is not False
             or agent_tools is not None or tool_choice is not None
             or type(maximum) is not int or type(tokens) is not int or not 522 < tokens <= maximum

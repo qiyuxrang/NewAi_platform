@@ -72,7 +72,7 @@ def _product_task(reference):
 
 
 def _product_task_for_child(reference, task):
-    if (task.owner_id != reference.work.owner_id
+    if (task.deleted_at is not None or task.owner_id != reference.work.owner_id
             or task.agent_root_id != str(reference.root_id)
             or task.agent_work_id != str(reference.work_id)
             or task.agent_requirement_version != reference.requirement.version):

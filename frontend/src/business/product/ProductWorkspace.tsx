@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { Link, useLocation } from 'react-router-dom'
-import { ArrowLeft, BookOpen, ChevronDown, Files, Folder, PanelLeftClose, PanelLeftOpen, Plus, Search, Settings } from 'lucide-react'
+import { ArrowLeft, BookOpen, Building2, ChevronDown, Files, Folder, PanelLeftClose, PanelLeftOpen, Plus, Search, Settings } from 'lucide-react'
 import { listTasks } from './product-api'
 import type { TaskSummary } from './product-api'
 import { useEnterprise } from '../../components/enterprise-context'
@@ -14,6 +14,7 @@ import ProductProjects from './ProductProjects'
 import ProductOverview from './ProductOverview'
 import ProductOutputs from './ProductOutputs'
 import ProductKnowledge from './ProductKnowledge'
+import Baichuan from './Baichuan'
 import TenderOpportunities from './TenderOpportunities'
 import WorkbenchSeparator from './WorkbenchSeparator'
 import { clampPanelWidth, useElementWidth } from './workbench-resize'
@@ -65,16 +66,18 @@ export default function ProductWorkspace({ feature }: { feature: string }) {
     }
     read()
     const timer = setInterval(read, 30000)
-    return () => { controller.abort(); clearInterval(timer) }
+    window.addEventListener('product:tasks-changed', read)
+    return () => { controller.abort(); clearInterval(timer); window.removeEventListener('product:tasks-changed', read) }
   }, [revision, manager])
   const states: Record<string, string> = { DRAFT: '草稿', QUEUED: '排队中', RUNNING: '进行中', WAITING_INPUT: '待补充', WAITING_REVIEW: '待确认', FAILED: '需重试', COMPLETED: '已完成', CANCELLED: '已取消' }
   const view = feature === 'documents' ? task ? 'detail' : (params.get('view') === 'projects' || (manager && params.get('view') !== 'new')) ? 'projects' : 'new' : feature
-  const title = { overview: '产品事业部 / 部门总览', documents: view === 'projects' ? '项目工作台 / 历史项目' : '项目工作台 / 新建项目', knowledge: '产品事业部 / 智能助手', outputs: '项目成果 / 成果文件', opportunities: '项目机会', entry: '产品事业部 / 售前填报' }[feature] || '产品事业部'
+  const title = { overview: '产品事业部 / 部门总览', documents: view === 'projects' ? '项目工作台 / 历史项目' : '项目工作台 / 新建项目', knowledge: '产品事业部 / 智能助手', outputs: '项目成果 / 成果文件', opportunities: '项目机会', entry: '产品事业部 / 售前填报', baichuan: '产品事业部 / 百川阁' }[feature] || '产品事业部'
   const content = <>
     {feature === 'overview' && <ProductOverview />}
     {feature === 'documents' && (task ? <ProductProjectDetail key={task} id={task} artifact={params.get('artifact') || ''} /> : view === 'projects' ? <ProductProjects view="projects" /> : <NewProductProject />)}
     {feature === 'opportunities' && <TenderOpportunities />}
     {feature === 'knowledge' && <ProductKnowledge />}
+    {feature === 'baichuan' && <Baichuan />}
     {feature === 'outputs' && <ProductOutputs />}
     {feature === 'entry' && <LedgerEntry department="presales" />}
   </>
@@ -91,6 +94,7 @@ export default function ProductWorkspace({ feature }: { feature: string }) {
         <Link to="/departments/product/knowledge" aria-current={feature === 'knowledge' ? 'page' : undefined}><BookOpen size={16}/>智能助手</Link>
         <Link to="/departments/product/outputs" aria-current={feature === 'outputs' ? 'page' : undefined}><Files size={16}/>成果文件</Link>
         <Link to="/departments/product/opportunities" aria-current={feature === 'opportunities' ? 'page' : undefined}><Search size={16}/>项目机会</Link>
+        <Link to="/departments/product/baichuan" aria-current={feature === 'baichuan' ? 'page' : undefined}><Building2 size={16}/>百川阁</Link>
         {entryAllowed && <Link to="/departments/product/entry" aria-current={feature === 'entry' ? 'page' : undefined}><Files size={16}/>售前填报</Link>}
       </nav>
       <div className="wb-task-label">最近项目</div>

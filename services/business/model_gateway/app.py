@@ -180,7 +180,10 @@ async def invalid_request(request: Request, exception: RequestValidationError):
 
 @app.exception_handler(GatewayError)
 async def gateway_failure(request: Request, exception: GatewayError):
-    return JSONResponse({"code": exception.code, "detail": exception.message}, exception.status)
+    payload = {"code": exception.code, "detail": exception.message}
+    if exception.diagnostic:
+        payload["diagnostic"] = exception.diagnostic
+    return JSONResponse(payload, exception.status)
 
 
 @app.get("/health")

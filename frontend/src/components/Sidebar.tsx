@@ -7,7 +7,7 @@ import Brand from './Brand'
 import RecentProjects from './RecentProjects'
 import { useEntryAccess } from '../business/entry-access'
 import {
-  Search, FileText, Calculator, BookOpen, ChartNoAxesCombined,
+  Search, FileText, Calculator, BookOpen, ChartNoAxesCombined, Building2,
   LayoutDashboard,
   Settings,
   User,
@@ -93,7 +93,7 @@ export default function Sidebar() {
           {error && <p role="status" className="px-3 text-xs text-accent-red">权限加载失败</p>}
           {!loading && !error && !visibleDepartments.length && <p className="px-3 text-xs text-dark-text-secondary">部门未分配</p>}
           {manager && availableManagerEntries(user).map((entry) => {
-            const Icon = { '商机看板': Search, '文档生成': FileText, '产品报价': Calculator, '智能助手': BookOpen, '财务看板': ChartNoAxesCombined }[entry.label]
+            const Icon = { '商机看板': Search, '文档生成': FileText, '产品报价': Calculator, '智能助手': BookOpen, '财务看板': ChartNoAxesCombined, '百川阁': Building2 }[entry.label]
             const active = entry.label === '文档生成' ? /^\/departments\/product\/(documents|outputs)/.test(location.pathname) : location.pathname === entry.to.split('?')[0]
             return <Link key={entry.to} to={entry.to} aria-current={active ? 'page' : undefined} className={`gm-nav-link ${active ? 'active' : ''}`}><Icon size={19} />{entry.label}</Link>
           })}

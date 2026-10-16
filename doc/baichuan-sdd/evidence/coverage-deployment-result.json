@@ -1,0 +1,28 @@
+{
+  "overall": "PASS",
+  "target": "C:\\Users\\BJRunner\\Desktop\\MultiUserClaw\\services\\business\\.runtime\\portal.sqlite3",
+  "executed_at": "2026-10-16T03:37:25.027689+00:00",
+  "actor": "manager_user",
+  "source_workbook_sha256": "220ec53ebe6a87263978f297891107700070d07588a4532b62ba884d64f68f07",
+  "input_sha256": "ff2599061e780a72a93542347255601f989ce59591a9a7788fbfc4ad589b897b",
+  "mapping_sha256": "23da7715a85570096c834f31189b066dd9ac818caf5e3abc47dce17cba32c9d0",
+  "manifest_sha256": "20ab7b245ffbab719cb176f8c7910aab185c6b671475b60c49827928c83469fa",
+  "companies": 1283,
+  "original_claims_retained": 1462,
+  "filterable_qualifications": 1460,
+  "people": 112,
+  "evidence": 289,
+  "repeat_create": 0,
+  "repeat_skip": 1283,
+  "backup": "C:\\Users\\BJRunner\\.agent-reach\\baichuan-20261016\\local-deployment-20261016-113713\\portal-before.sqlite3",
+  "env_backup": "C:\\Users\\BJRunner\\.agent-reach\\baichuan-20261016\\local-deployment-20261016-113713\\local-before.env",
+  "new_scope_config": {
+    "PORTAL_BAICHUAN_SCOPE_CONFIRMED": "1",
+    "PORTAL_BAICHUAN_READ_ROLE_CODES": "general_manager,product",
+    "PORTAL_BAICHUAN_WRITE_ROLE_CODES": "general_manager,product"
+  },
+  "account_role_module_rows_unchanged": true,
+  "unrelated_table_counts_unchanged": true,
+  "migration": "0044_baichuan_cs_level_one",
+  "status": "initialized; portal restart and real HTTP/browser verification next"
+}

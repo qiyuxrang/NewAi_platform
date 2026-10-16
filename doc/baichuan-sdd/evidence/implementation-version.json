@@ -1,0 +1,143 @@
+{
+  "version": "V1.1 working tree, uncommitted",
+  "baseline_commit": "8df87c96a311c215f5368c6b7e9cc5b3765cf636",
+  "executed_at": "2026-10-16T02:37:04.665032+00:00",
+  "executor": "Codex root integration",
+  "node": "v24.14.0",
+  "npm": "11.16.0; verified in frontend-build.txt",
+  "backend_runtime": "Python 3.13.9 / Django 5.2.17; verified in backend-tests.txt",
+  "files": [
+    {
+      "path": "frontend/src/business/api.ts",
+      "sha256": "a8d03de023a81c238aeb9a3a5e0a83ace576810d2ad88a0738ca79e9d54240ac"
+    },
+    {
+      "path": "frontend/src/business/product/ProductWorkspace.tsx",
+      "sha256": "1d1b6eee3cf8c07deb4687c1d6b2c01a1403dad08f056b018b4ce92f5a23a992"
+    },
+    {
+      "path": "frontend/src/components/Sidebar.tsx",
+      "sha256": "0f01ebb8e13ebd62512ef964568203e7df33f764bfd6dd477f478be1854b2e29"
+    },
+    {
+      "path": "frontend/src/enterprise-navigation.ts",
+      "sha256": "11bcada384c56008c6a9c2f1b933912786cef01d7c6bd083fc0b17be469d88df"
+    },
+    {
+      "path": "frontend/src/business/product/Baichuan.tsx",
+      "sha256": "7b3d8a8033acd709d1572c39231862f1378b92aa86f2f325a22272c962ca35e4"
+    },
+    {
+      "path": "frontend/src/business/product/Baichuan-data.ts",
+      "sha256": "9a06f237924d319f5068eb84b664b4f73ea4ef01498973e863851255122b1408"
+    },
+    {
+      "path": "frontend/src/business/product/Baichuan.css",
+      "sha256": "ebe623769bbf830b09e7d10d651af59e89f238caddff5c7dcaa23297818c14c6"
+    },
+    {
+      "path": "frontend/src/business/product/CompanyDetail.tsx",
+      "sha256": "a4e67b9791a1ca36154787bfa397af4da729ec431150e2d8395bdfcdb2ed136c"
+    },
+    {
+      "path": "frontend/src/business/product/CompanyEditor.tsx",
+      "sha256": "69f572f596bbdc9ea18df2015c8a56306ae0319f729cdb3853bf3fbf622ac983"
+    },
+    {
+      "path": "frontend/tests/baichuan.test.mjs",
+      "sha256": "cbeb80f0e47595ed9c72b07579bc30f4afa41989a1d685e7605cfd41628e60b8"
+    },
+    {
+      "path": "frontend/tests/baichuan-browser.py",
+      "sha256": "752f7636a6f431d3ec2a629c90c1230f2338f535a6afd53b655e28c482cbced6"
+    },
+    {
+      "path": "frontend/tests/manager-workspace.test.mjs",
+      "sha256": "4b0a30a423c227d9ba86df9a87269b912aafd2fc21fe62e82b26c0eda0c0e45f"
+    },
+    {
+      "path": "frontend/tests/department-assistant.test.mjs",
+      "sha256": "97a16eca9f43948b65c0c4af8444ceecd368d3a7c0d9c0816fc884f5b432f982"
+    },
+    {
+      "path": "services/business/backend/config/urls.py",
+      "sha256": "d19fb433079ac4dd646e040598a1aaba0825237ac3873ded4e6395fa6beed6dd"
+    },
+    {
+      "path": "services/business/backend/portal/models.py",
+      "sha256": "6cbba23772815420b895daedaae294983ce49e5419ea050af9deba36e82781b9"
+    },
+    {
+      "path": "services/business/backend/portal/migrations/0042_baichuan.py",
+      "sha256": "5c4fc37e3fe35817e618902f93190a680f570f24845faad0151956b1185ae0e3"
+    },
+    {
+      "path": "services/business/backend/portal/baichuan_models.py",
+      "sha256": "66a38a5fa0d6260a3a674e8afaaf3acb71373a3f304c0b5c99db216365057f49"
+    },
+    {
+      "path": "services/business/backend/portal/baichuan_service.py",
+      "sha256": "0940c4dbcaa45174c14eebd79cf7e636344848fc707de14d5ecb250ef649382a"
+    },
+    {
+      "path": "services/business/backend/portal/baichuan_api.py",
+      "sha256": "5f2db74b762e750b3bc8958c83f3d5d7338b01f10ccdaddd9a26395720da37db"
+    },
+    {
+      "path": "services/business/backend/portal/baichuan_urls.py",
+      "sha256": "d1648741dd851c7b37941fdafef0594e78b6138fdb2f36300311dd1c394dbdf4"
+    },
+    {
+      "path": "services/business/backend/portal/baichuan_import.py",
+      "sha256": "73c42cd3091778c9ccc787fd5ac9a11ca421c1ec9240abce9e1a3430691b6e81"
+    },
+    {
+      "path": "services/business/backend/portal/management/commands/import_baichuan.py",
+      "sha256": "8cfb0c1abd6f6b9c19702e66e28021577cb1cc28390489e77140dcd848698c3e"
+    },
+    {
+      "path": "services/business/backend/portal/tests/test_baichuan.py",
+      "sha256": "1c1a0c0edc956691fc51cf5d01add7439cbad0c9fe8c37d6721daede527b21f6"
+    },
+    {
+      "path": "services/business/backend/portal/tests/test_baichuan_import.py",
+      "sha256": "f8f1534a4dac93413e77038ab98ff1e95c42513de289df8e55f321f7cfbe8b79"
+    },
+    {
+      "path": "doc/baichuan-sdd/acceptance.md",
+      "sha256": "05a4da4924ee80689f16a05930e1cb5010cb8dd795cf45ce618df0d2d3ffd0a7"
+    },
+    {
+      "path": "doc/baichuan-sdd/delivery.md",
+      "sha256": "45e167064435d126fa8c6516188322212836595ba77de7674bed5f7c3c78d368"
+    },
+    {
+      "path": "doc/baichuan-sdd/plan.md",
+      "sha256": "2c4e5273bf6f26e2ab476ed44c8fb493a52f274c311c3e7bbca1bf2432f344ae"
+    },
+    {
+      "path": "doc/baichuan-sdd/README.md",
+      "sha256": "4238e31c5b0187ea75f27b77ba79edb0ea1318a9d3b826440e846e661b303ea3"
+    },
+    {
+      "path": "doc/baichuan-sdd/spec.md",
+      "sha256": "f8fd628b78ee3302814eb2ea7618ed00c447e09c42cc354d0e0fdad020672b01"
+    },
+    {
+      "path": "doc/baichuan-sdd/tasks.md",
+      "sha256": "2f898c82ea02bf46fb96872e145f344ad057632b031097569cbb89fee10e2f46"
+    },
+    {
+      "path": "doc/baichuan-sdd/assets/list-reference.png",
+      "sha256": "4fa9de353f6957a9cb0930e041a58b3f1f775def51cd9a7c3f685d408b904dc3"
+    },
+    {
+      "path": "doc/baichuan-sdd/assets/initial-template.xlsx",
+      "sha256": "68bc45a0063886d99d3964ffea0a47aa45f8a88a3d5b8fe687173826722bddad"
+    },
+    {
+      "path": "doc/baichuan-sdd/evidence/backend-command.ps1",
+      "sha256": "c2b07fd76e1308d023427ab1a7ae97f996cd7417b8042fed24dc7c9c1ab5fa06"
+    }
+  ]
+}

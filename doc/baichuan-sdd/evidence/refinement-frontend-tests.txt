@@ -1,0 +1,21 @@
+✔ API preserves validated field errors while retaining three-argument ApiError compatibility (20.0452ms)
+✔ fixed qualification dictionary, any/grade exclusivity and URL retain server validation (0.6888ms)
+✔ websites reject unsafe protocols and credentials; snapshots retain child IDs and expected version (0.3101ms)
+✔ post-save membership uses exact grades, OR within and AND across categories, without personnel inference (0.3792ms)
+✔ both entrypoints share the product feature while preserving capability restrictions (0.2886ms)
+✔ detail preserves source statements and line breaks, linking only safe HTTP(S) evidence without surrounding punctuation (42.7398ms)
+✔ details hide empty fields and metadata, preserve all sources in one closed disclosure and expose safe official links (25.7378ms)
+✔ checkbox selection updates immediately while the router still exposes the previous URL (40.6356ms)
+✔ list exposes actual safe websites, extra contacts and server page controls without inventing fields (40.323ms)
+✔ stale success and stale failure cannot replace the latest query, and loading never reports zero (34.7349ms)
+✔ a filtered page beyond the last page preserves the total and explains the empty page (29.9458ms)
+✔ editor submits a complete atomic snapshot, keeps inputs on conflict, and serializes cleared dates to null (29.724ms)
+✔ server field errors appear at the affected company input and retain its draft value (28.2216ms)
+ℹ tests 13
+ℹ suites 0
+ℹ pass 13
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 724.176

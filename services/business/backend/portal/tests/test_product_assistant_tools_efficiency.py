@@ -97,6 +97,41 @@ class AssistantToolEfficiencyTests(SimpleTestCase):
         self.assertEqual([call.args[0] for call in search.call_args_list],
                          ["煤炭 2026 招标公告", "水电 2026-10 官网 建设进展", "交通 2026-10-15 中标"])
 
+    def test_joined_current_question_chinese_phrases_share_spaced_query_cache(self):
+        toolbox = self.toolbox("检索榆林市有关网络安全的项目，并联网检索，")
+        with patch.object(tools.web, "search_public_query", return_value=[]) as search:
+            for query, expected in (("榆林市网络安全项目", "榆林市 网络安全 项目"),
+                                    ("榆林市网络安全 项目 招标公告", "榆林市 网络安全 项目 招标公告")):
+                with self.subTest(query=query):
+                    first = toolbox.execute("web_search", {"query": query})
+                    self.assertTrue(first["summary_only"])
+                    search.assert_called_with(expected)
+                    again = toolbox.execute("web_search", {"query": expected})
+                    self.assertTrue(again["tool_status"]["cached"])
+            self.assertEqual(search.call_count, 2)
+
+    def test_chinese_projection_rejects_added_private_words_abbreviations_and_single_char_assembly(self):
+        toolbox = self.toolbox("检索榆林市有关网络安全的项目，并联网检索，甲方签署，乙类标识，Python Security")
+        toolbox.add_source({"dataset_id": "dataset-1", "document_id": "document-1",
+                            "title": "历史企业资料", "content": "秘密客户预算八百万 历史企业秘密"})
+        with patch.object(tools.web, "search_public_query") as search:
+            for query in ("榆林市网络安全秘密客户项目", "榆林市网络安全预算八百万项目",
+                          "榆林市网络安全历史企业秘密", "榆市网络安全项目", "榆林市网安项目", "甲乙",
+                          "PythonSecurity", "python Security"):
+                with self.subTest(query=query):
+                    result = toolbox.execute("web_search", {"query": query})
+                    self.assertEqual(result["error"], "public_query_only")
+                    self.assertEqual(result["detail"], "搜索词包含本轮未提供的词，已停止本次搜索。")
+                    self.assertIn(tools.PUBLIC_QUERY_GUIDANCE, result["guidance"])
+                    self.assertIn("本轮可公开检索的关键词", result["guidance"])
+            search.assert_not_called()
+
+    def test_chinese_projection_is_bounded_but_long_literal_phrases_still_work(self):
+        toolbox = self.toolbox("甲乙，丙丁，" + "戊己" * 40)
+        self.assertEqual(toolbox._public_query("甲乙" * 16 + "丙丁" * 16), "甲乙 丙丁")
+        self.assertIsNone(toolbox._public_query("甲乙" * 17 + "丙丁" * 16))
+        self.assertEqual(toolbox._public_query("戊己" * 40), "戊己" * 40)
+
     def test_public_additions_never_allow_private_terms_or_remove_the_topic(self):
         toolbox = self.toolbox("检索煤炭、水电、交通工程项目官网，内部预算八百万仅供理解")
         toolbox.add_source({"dataset_id": "dataset-1", "document_id": "document-1",

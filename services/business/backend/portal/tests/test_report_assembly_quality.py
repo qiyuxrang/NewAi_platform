@@ -48,14 +48,14 @@ class ReportAssemblyQualityTests(SimpleTestCase):
         self.assertNotIn("内部诊断", "\n".join(block.get("text", "") for block in document["blocks"]))
         self.assertEqual(issues, original)
 
-    def test_business_missing_conditions_are_summarized_once(self):
+    def test_business_missing_conditions_stay_in_metadata_without_appended_chapter(self):
         self.blueprint.payload.update(missing=["负荷参数待确认。", "负荷参数待确认。"],
                                       conflicts=[" 负荷参数待确认 ", "建设单位需提供接线资料。"])
         document = self.assemble(draft=True)
         self.assertEqual(len(document["pending"]), 2)
         summaries = [block for block in document["blocks"] if block["id"].startswith("PENDING_TEXT")]
-        self.assertEqual([block["text"] for block in summaries], [item["text"] for item in document["pending"]])
-        self.assertEqual(sum(block["id"] == "PENDING_HEADING" for block in document["blocks"]), 1)
+        self.assertEqual(summaries, [])
+        self.assertFalse(any(block["id"] == "PENDING_HEADING" for block in document["blocks"]))
 
     def test_no_rotating_subheading_for_each_authored_paragraph(self):
         self.chapter.payload["paragraphs"] *= 12

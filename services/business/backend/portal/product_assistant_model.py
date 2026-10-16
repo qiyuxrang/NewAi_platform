@@ -1,21 +1,53 @@
 """Product assistant's authorized native tool-call streaming boundary."""
 
+import asyncio
 import json
+import queue
 import socket
 import threading
 from contextlib import closing
-from http.client import HTTPException
 from time import monotonic
-from urllib.error import HTTPError, URLError
-from urllib.request import ProxyHandler, build_opener
+
+import httpx
 
 from django.conf import settings
 
 from model_gateway.agent_protocol import (RESPONSE_LIMIT, _invalid_constant, _unique_object,
                                           validate_request, validate_result)
 from . import model_gateway as gateway
-from .integration import NoRedirect
 from .security import audit
+
+
+_DNS_SLOTS = threading.BoundedSemaphore(2)
+
+
+async def _resolve_gateway(host, port, *, family=0, type=0, proto=0, flags=0):
+    if not _DNS_SLOTS.acquire(blocking=False):
+        raise gateway.GatewayError("busy", status=503)
+    result = queue.Queue(maxsize=1)
+    def lookup():
+        try:
+            result.put((True, socket.getaddrinfo(host, port, family, type, proto, flags)))
+        except Exception as error:
+            result.put((False, error))
+        finally:
+            _DNS_SLOTS.release()
+    # ponytail: OS DNS cannot be killed; cap late resolvers at 2 and return busy
+    # when full. Use an async resolver if stalled DNS becomes an operational issue.
+    worker = threading.Thread(target=lookup, daemon=True, name="assistant-gateway-dns")
+    try:
+        worker.start()
+    except Exception:
+        _DNS_SLOTS.release()
+        raise gateway.GatewayError("gateway_unavailable", status=503) from None
+    while True:
+        try:
+            success, value = result.get_nowait()
+            if success:
+                return value
+            raise value
+        except queue.Empty:
+            await asyncio.sleep(.05)
 
 
 class ModelStreamCancelled(Exception):
@@ -27,13 +59,52 @@ def _check_cancelled(cancelled):
         raise ModelStreamCancelled("模型流已取消。")
 
 
-def _abort_response(response):
+async def _cancellable(awaitable, cancelled, deadline):
+    task = asyncio.ensure_future(awaitable)
     try:
-        # Closing a buffered reader alone can wait behind its blocked readline.
-        response.fp.raw._sock.shutdown(socket.SHUT_RDWR)
-    except (AttributeError, OSError):
-        pass
-    response.close()
+        while not task.done():
+            _check_cancelled(cancelled)
+            remaining = deadline - monotonic()
+            if remaining <= 0:
+                raise gateway.GatewayError("timeout", status=504)
+            await asyncio.wait((task,), timeout=min(0.05, remaining))
+        return task.result()
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+class _StreamReader:
+    def __init__(self, response, run):
+        self.run = run
+        self.chunks = response.aiter_raw().__aiter__()
+        self.buffer = bytearray()
+        self.eof = False
+
+    async def _read(self, limit, line):
+        while not self.eof and len(self.buffer) < limit and (not line or b"\n" not in self.buffer):
+            chunk = await anext(self.chunks, None)
+            if chunk is None:
+                self.eof = True
+            else:
+                if len(chunk) > 65536:
+                    raise gateway.GatewayError("response_too_large")
+                self.buffer.extend(chunk)
+        end = min(limit, len(self.buffer))
+        if line:
+            newline = self.buffer.find(b"\n", 0, end)
+            if newline >= 0:
+                end = newline + 1
+        result = bytes(self.buffer[:end])
+        del self.buffer[:end]
+        return result
+
+    def readline(self, limit):
+        return self.run(self._read(limit, True))
+
+    def read(self, limit):
+        return self.run(self._read(limit, False))
 
 
 def _agent_events(response, deadline, names, cancelled=None):
@@ -90,47 +161,41 @@ def _agent_events(response, deadline, names, cancelled=None):
 def _request_agent_stream(payload, *, cancelled=None):
     names = validate_request(payload["messages"], payload["tools"], payload.get("tool_choice"))
     request, timeout = gateway._gateway_request(payload, "/v1/generate-agent-stream")
-    response = None
-    stopped = threading.Event()
-    watcher = None
-    try:
-        _check_cancelled(cancelled)
-        response = build_opener(ProxyHandler({}), NoRedirect()).open(request, timeout=timeout)
-        if (response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "text/event-stream"
-                or response.headers.get("Content-Encoding", "identity").lower() != "identity"):
-            raise gateway.GatewayError("invalid_response")
-        if cancelled is not None:
-            def cancel_response():
-                while not stopped.is_set():
-                    if cancelled.wait(0.1):
-                        try:
-                            _abort_response(response)
-                        except (OSError, ValueError):
-                            pass
-                        return
-            watcher = threading.Thread(target=cancel_response, daemon=True)
-            watcher.start()
-        yield from _agent_events(response, monotonic() + timeout, names, cancelled)
-    except HTTPError as error:
+    _check_cancelled(cancelled)
+    deadline = monotonic() + timeout
+    with asyncio.Runner() as runner:
+        runner.get_loop().getaddrinfo = _resolve_gateway
+        client = httpx.AsyncClient(trust_env=False, follow_redirects=False, timeout=timeout)
+        response = None
+        def run(awaitable):
+            return runner.run(_cancellable(awaitable, cancelled, deadline))
         try:
-            code = json.loads(error.read(8192)).get("code", "upstream_error")
-        except (ValueError, AttributeError):
-            code = "upstream_error"
+            native = client.build_request(request.get_method(), request.full_url,
+                                          content=request.data, headers=dict(request.header_items()))
+            response = run(client.send(native, stream=True))
+            reader = _StreamReader(response, run)
+            if response.status_code >= 300:
+                try:
+                    code = json.loads(reader.read(8192)).get("code", "upstream_error")
+                except (ValueError, AttributeError):
+                    code = "upstream_error"
+                raise gateway.GatewayError(code)
+            if (response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower() != "text/event-stream"
+                    or response.headers.get("Content-Encoding", "identity").lower() != "identity"):
+                raise gateway.GatewayError("invalid_response")
+            yield from _agent_events(reader, deadline, names, cancelled)
+        except (httpx.HTTPError, TimeoutError, OSError):
+            _check_cancelled(cancelled)
+            raise gateway.GatewayError("gateway_unavailable", status=503) from None
+        except Exception:
+            _check_cancelled(cancelled)
+            raise
         finally:
-            error.close()
-        raise gateway.GatewayError(code) from None
-    except (URLError, TimeoutError, OSError, HTTPException):
-        _check_cancelled(cancelled)
-        raise gateway.GatewayError("gateway_unavailable", status=503) from None
-    except Exception:
-        _check_cancelled(cancelled)
-        raise
-    finally:
-        stopped.set()
-        if response is not None:
-            response.close()
-        if watcher is not None:
-            watcher.join(0.2)
+            try:
+                if response is not None:
+                    runner.run(response.aclose())
+            finally:
+                runner.run(client.aclose())
 
 
 def stream_agent_for_use(user, purpose_code, messages, tools, *, recheck, tool_choice=None, cancelled=None):

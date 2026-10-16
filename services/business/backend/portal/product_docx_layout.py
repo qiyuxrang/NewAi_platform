@@ -165,6 +165,29 @@ def normalize_docx_layout(source, heading_bookmarks):
             pp = _ensure(heading, "pPr")
             _value(pp, "keepNext", "1")
             _value(pp, "keepLines", "1")
+        figure_count = 0
+        body_nodes = _children(body)
+        for index, paragraph in enumerate(paragraphs[first_heading:], first_heading):
+            if not paragraph.getElementsByTagNameNS(W, "drawing") or index + 1 >= len(paragraphs):
+                continue
+            caption = paragraphs[index + 1]
+            title = "".join(_text(node) for node in caption.getElementsByTagNameNS(W, "t"))
+            position = body_nodes.index(paragraph)
+            if body_nodes[position + 1] is not caption:
+                continue
+            if not re.match(r"^图\s*\d+[.\-]\d+\s", title):
+                continue
+            for node, keep_next in ((paragraph, "1"), (caption, "0")):
+                pp = _ensure(node, "pPr")
+                _value(pp, "keepNext", keep_next)
+                _value(pp, "keepLines", "1")
+            # A leading explanation may fill the preceding page; only the
+            # image and its caption form the indivisible pagination unit.
+            previous = paragraphs[index - 1]
+            if (body_nodes[position - 1] is previous and previous not in headings
+                    and not previous.getElementsByTagNameNS(W, "drawing")):
+                _value(_ensure(previous, "pPr"), "keepNext", "0")
+            figure_count += 1
         compact_sections = set()
         for end in ends:
             run, paragraph = end.parentNode, end.parentNode.parentNode
@@ -207,8 +230,9 @@ def normalize_docx_layout(source, heading_bookmarks):
                 for entry in entries:
                     archive.writestr(entry, parts[entry.filename])
             normalized = output.getvalue()
-        return normalized, {"version": "generated-ooxml-layout-v1", "heading_count": len(headings),
+        return normalized, {"version": "generated-ooxml-layout-v2", "heading_count": len(headings),
                             "toc_end_count": len(ends), "compact_section_count": len(compact_sections),
+                            "atomic_figure_count": figure_count,
                             "semantic_sha256": before, "generated_sha256": hashlib.sha256(source).hexdigest(),
                             "normalized_sha256": hashlib.sha256(normalized).hexdigest(), "visual_review": "not_run"}
     except (BadZipFile, KeyError, IndexError, TypeError, UnicodeError, ExpatError) as error:

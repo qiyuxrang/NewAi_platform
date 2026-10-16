@@ -10,7 +10,7 @@ from django.test import SimpleTestCase, override_settings
 
 from portal import model_gateway
 from portal.model_messages import TEXT_REQUEST_LIMIT, validate_messages
-from portal.model_response_format import (chapter_response_format, supports_chapter_response_format,
+from portal.model_response_format import (chapter_response_format, review_response_format, supports_chapter_response_format,
                                          validate_response_format, generation_profile_metadata,
                                          validate_generation_profile, validate_profile_usage)
 from portal.models import AuditEvent, GatewayModel, ModelCallLog, ModelRoute, Module, Provider, Role
@@ -36,6 +36,47 @@ class ChapterResponseFormatTests(SimpleTestCase):
         self.model = SimpleNamespace(provider=SimpleNamespace(updated_at=1), updated_at=1,
                                      supports_vision=False, public_id="model", pk=1)
         self.route = SimpleNamespace(updated_at=1, code="solution")
+
+    def test_review_contracts_have_strict_types_and_reject_arbitrary_schemas(self):
+        basic = {"passed": "boolean", "issues": ["string"]}
+        guide = {**basic, "guide_checks": [{
+            "id": "exact-guide-requirement-id", "status": "covered/partial/not_seen/not_applicable/pending",
+            "evidence": [{"chapter_id": "saved-chapter-id", "quote": "exact-sent-body-quote"}], "reason": "string"}]}
+        for specification in (basic, guide):
+            output_format = review_response_format(specification)
+            self.assertEqual(validate_response_format(output_format), output_format)
+            properties = output_format["json_schema"]["schema"]["properties"]
+            self.assertEqual(properties["passed"], {"type": "boolean"})
+            self.assertEqual(properties["issues"], {"type": "array", "maxItems": 100,
+                                                  "items": {"type": "string", "maxLength": 2000}})
+            self.assertEqual(output_format["json_schema"]["schema"]["required"], list(specification))
+            if "guide_checks" in specification:
+                check = properties["guide_checks"]["items"]
+                self.assertEqual(check["required"], ["id", "status", "evidence", "reason"])
+                self.assertIs(check["additionalProperties"], False)
+                self.assertEqual(check["properties"]["status"]["enum"],
+                                 ["covered", "partial", "not_seen", "not_applicable", "pending"])
+                evidence = check["properties"]["evidence"]["items"]
+                self.assertEqual(evidence["required"], ["chapter_id", "quote"])
+                self.assertIs(evidence["additionalProperties"], False)
+            for change in (
+                    lambda value: value["json_schema"].update(strict=1),
+                    lambda value: value["json_schema"]["schema"].update(additionalProperties=0),
+                    lambda value: value["json_schema"]["schema"]["properties"]["passed"].update(type="string"),
+                    lambda value: value["json_schema"]["schema"]["properties"]["issues"]["items"].update(type="object"),
+                    lambda value: value["json_schema"]["schema"]["properties"]["issues"].update(maxItems=100.0)):
+                changed = copy.deepcopy(output_format)
+                change(changed)
+                with self.assertRaises(ValueError):
+                    validate_response_format(changed)
+            detached = validate_response_format(output_format)
+            detached["json_schema"]["schema"]["properties"]["passed"]["type"] = "string"
+            self.assertEqual(properties["passed"], {"type": "boolean"})
+        for specification in (None, {}, {**basic, "passed": True}, {**basic, "issues": [1]},
+                              {**basic, "extra": "string"}, {**basic, "guide_checks": []},
+                              {**guide, "guide_checks": [{"id": "arbitrary"}]}):
+            with self.assertRaises(ValueError):
+                review_response_format(specification)
 
     def test_fixed_schema_is_detached_and_binds_approved_values(self):
         schema = self.format["json_schema"]["schema"]
@@ -94,11 +135,15 @@ class ChapterResponseFormatTests(SimpleTestCase):
             self.assertFalse(supports_chapter_response_format(provider, model))
 
     def test_invalid_opt_in_precedes_reservation_and_outbound(self):
+        review = review_response_format({"passed": "boolean", "issues": ["string"]})
         for config, messages, purpose, value in (
                 (self.config, self.messages, "business", {"type": "json_object"}),
                 ({**self.config, "model": {**self.config["model"], "model_name": "unknown"}}, self.messages, "business", self.format),
                 (self.config, [{"role": "user", "content": [{"type": "text", "text": "image path"}]}], "business", self.format),
-                (self.config, self.messages, "test", self.format)):
+                (self.config, self.messages, "test", self.format),
+                ({**self.config, "provider": {**self.config["provider"], "base_url": "https://unknown.example/v1"}},
+                 self.messages, "business", review),
+                (self.config, self.messages, "test", review)):
             with patch.object(model_gateway, "_model_config", return_value=config), \
                     patch.object(model_gateway, "_reserve") as reserve, \
                     patch.object(model_gateway, "_request_gateway") as outbound:
@@ -128,7 +173,8 @@ class ChapterResponseFormatTests(SimpleTestCase):
 
     def test_opt_in_one_call_retains_refresh_audit_and_failures(self):
         reply = {"content": "synthetic", "prompt_tokens": 1, "completion_tokens": 2}
-        for output_format, revoked in ((None, False), (self.format, False), (self.format, True)):
+        review = review_response_format({"passed": "boolean", "issues": ["string"]})
+        for output_format, revoked in ((None, False), (self.format, False), (self.format, True), (review, False)):
             record = MagicMock()
             fresh = SimpleNamespace(grant_version=2) if revoked else self.user
             with patch.object(model_gateway, "_model_config", return_value=self.config), \
@@ -154,7 +200,7 @@ class ChapterResponseFormatTests(SimpleTestCase):
                 if output_format is None:
                     self.assertEqual(payload, {**self.config, "messages": self.messages, "purpose": "business"})
                 else:
-                    self.assertEqual(payload["response_format"], self.format)
+                    self.assertEqual(payload["response_format"], output_format)
 
     def test_bounded_profile_metadata_is_fixed_and_detached(self):
         metadata = generation_profile_metadata("bounded_chapter_v1")
@@ -178,6 +224,7 @@ class ChapterResponseFormatTests(SimpleTestCase):
             changed = {**options, "model": {**self.config["model"], "max_output_tokens": tokens}}
             self.assertEqual(validate_generation_profile("bounded_chapter_v1", **changed), "bounded_chapter_v1")
         changes = [{"response_format": None}, {"response_format": {"type": "json_object"}},
+                   {"response_format": review_response_format({"passed": "boolean", "issues": ["string"]})},
                    {"purpose": "test"}, {"stream": True}, {"agent_tools": []}, {"tool_choice": "none"},
                    {"messages": [{"role": "user", "content": []}]},
                    {"model": {**self.config["model"], "timeout_seconds": 121}},
@@ -301,6 +348,36 @@ class MessageSizeTests(SimpleTestCase):
 
 
 class ProviderUrlValidationTests(SimpleTestCase):
+    @override_settings(MODEL_GATEWAY_URL="http://127.0.0.1:18410", MODEL_GATEWAY_TOKEN="x" * 48,
+                       MODEL_GATEWAY_ALLOWED_URLS=("http://127.0.0.1:18410",))
+    @patch("portal.model_gateway.build_opener")
+    def test_upstream_diagnostics_preserve_classification_without_raw_detail(self, opener):
+        payload = {"model": {"timeout_seconds": 2}, "messages": [{"role": "user", "content": "test"}]}
+        for streaming in (False, True):
+            for diagnostic, expected in (
+                    ({"upstream_status": 400, "upstream_code": "InvalidParameter", "body": "private"},
+                     {"upstream_status": 400, "upstream_code": "InvalidParameter"}),
+                    ({"upstream_status": True, "upstream_code": "sk-private"}, {}),
+                    ({"upstream_status": 600, "upstream_code": "bad code"}, {}),
+                    ({"upstream_stage": "tls", "upstream_exception": "SSLCertVerificationError", "message": "private"},
+                     {"upstream_stage": "tls", "upstream_exception": "SSLCertVerificationError"}),
+                    ({"upstream_stage": [], "upstream_exception": {}}, {}),
+                    ("private", {})):
+                with self.subTest(streaming=streaming, diagnostic=diagnostic):
+                    body = BytesIO(json.dumps({"code": "upstream_invalid_request", "detail": "private upstream body",
+                                              "diagnostic": diagnostic}).encode())
+                    opener.return_value.open.side_effect = HTTPError("http://127.0.0.1:18410", 400, "error", {}, body)
+                    with self.assertRaises(model_gateway.GatewayError) as caught:
+                        if streaming:
+                            list(model_gateway._request_gateway_stream(payload))
+                        else:
+                            model_gateway._request_gateway(payload)
+                    self.assertEqual(caught.exception.code, "upstream_invalid_request")
+                    self.assertEqual(caught.exception.status, 400)
+                    self.assertEqual(caught.exception.diagnostic, expected)
+                    self.assertNotIn("private", str(caught.exception))
+                    self.assertTrue(body.closed)
+
     @override_settings(MODEL_GATEWAY_URL="http://127.0.0.1:18410", MODEL_GATEWAY_TOKEN="x" * 48,
         MODEL_GATEWAY_ALLOWED_URLS=("http://127.0.0.1:18410",))
     def test_long_document_requests_keep_gateway_response_margin(self):

@@ -177,7 +177,8 @@ def parse_response(body, names):
             or message.get("reasoning_content") is not None and not isinstance(message["reasoning_content"], str)):
         raise ValueError("invalid message")
     calls = message.get("tool_calls", [])
-    if bool(calls) != (choice["finish_reason"] == "tool_calls"):
+    # Some OpenAI-compatible providers finish complete native tool calls with stop.
+    if choice["finish_reason"] == "tool_calls" and not calls:
         raise ValueError("finish mismatch")
     usage = data.get("usage") or {}
     if not isinstance(usage, dict):
@@ -254,7 +255,7 @@ class StreamAssembler:
                         raise ValueError("invalid function fragment")
                     call["function"][key] += value
             if reason is not None:
-                if bool(self.calls) != (reason == "tool_calls"):
+                if reason == "tool_calls" and not self.calls:
                     raise ValueError("finish mismatch")
                 self.finished = True
         elif not self.finished:

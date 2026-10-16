@@ -1,0 +1,124 @@
+UTC start 2026-10-16T06:20:28.198270+00:00
+Python 3.13.9 (main, Nov 19 2025, 22:41:40) [MSC v.1944 64 bit (AMD64)] Django 5.2.17
+Database: synthetic isolated file SQLite; no deployment .env; real DB vars removed
+Test path C:\Users\BJRunner\AppData\Local\Temp\baichuan-cs1-6da5f2456ea8446cadcd1198562cf326\test.sqlite3
+COMMAND test ['portal.tests.test_baichuan', 'portal.tests.test_baichuan_import'] {'interactive': False, 'verbosity': 2}
+Found 27 test(s).
+Creating test database for alias 'default' ('C:\Users\BJRunner\AppData\Local\Temp\baichuan-cs1-6da5f2456ea8446cadcd1198562cf326\test.sqlite3')...
+
+Destroying old test database for alias 'default' ('C:\Users\BJRunner\AppData\Local\Temp\baichuan-cs1-6da5f2456ea8446cadcd1198562cf326\test.sqlite3')...
+
+Operations to perform:
+  Synchronize unmigrated apps: messages, rest_framework, staticfiles
+  Apply all migrations: admin, auth, contenttypes, portal, sessions
+Synchronizing apps without migrations:
+  Creating tables...
+    Running deferred SQL...
+Running migrations:
+  Applying contenttypes.0001_initial... OK
+  Applying contenttypes.0002_remove_content_type_name... OK
+  Applying auth.0001_initial... OK
+  Applying auth.0002_alter_permission_name_max_length... OK
+  Applying auth.0003_alter_user_email_max_length... OK
+  Applying auth.0004_alter_user_username_opts... OK
+  Applying auth.0005_alter_user_last_login_null... OK
+  Applying auth.0006_require_contenttypes_0002... OK
+  Applying auth.0007_alter_validators_add_error_messages... OK
+  Applying auth.0008_alter_user_username_max_length... OK
+  Applying auth.0009_alter_user_last_name_max_length... OK
+  Applying auth.0010_alter_group_name_max_length... OK
+  Applying auth.0011_update_proxy_permissions... OK
+  Applying auth.0012_alter_user_first_name_max_length... OK
+  Applying portal.0001_initial... OK
+  Applying admin.0001_initial... OK
+  Applying admin.0002_logentry_remove_auto_add... OK
+  Applying admin.0003_logentry_add_action_flag_choices... OK
+  Applying portal.0002_integrationticket_grant_version_user_grant_version... OK
+  Applying portal.0003_modulecheck_operationalissue_audit_indexes... OK
+  Applying portal.0004_model_gateway... OK
+  Applying portal.0005_product_p1... OK
+  Applying portal.0006_documentapproval_authorization... OK
+  Applying portal.0007_product_generation_policy... OK
+  Applying portal.0008_hr_workflows... OK
+  Applying portal.0009_probation_revision_and_assistant... OK
+  Applying portal.0010_product_draft_families... OK
+  Applying portal.0011_product_version_lineage... OK
+  Applying portal.0012_hr_recruitment_request... OK
+  Applying portal.0013_hr_jd_versions... OK
+  Applying portal.0014_model_vision_capability... OK
+  Applying portal.0015_hr_screening_batches... OK
+  Applying portal.0012_documentrevision_extraction... OK
+  Applying portal.0016_merge_product_intake_hr_recruitment... OK
+  Applying portal.0017_hr_prd... OK
+  Applying portal.0018_product_knowledge... OK
+  Applying portal.0019_business_ledger_snapshots... OK
+  Applying portal.0020_product_source_purpose... OK
+  Applying portal.0021_business_ledger_workflow... OK
+  Applying portal.0022_unified_model_selection... OK
+  Applying portal.0023_hr_model_selection... OK
+  Applying portal.0024_tender_product... OK
+  Applying portal.0024_engineering_job... OK
+  Applying portal.0025_merge_engineering_tender... OK
+  Applying portal.0026_tender_opportunity_classification... OK
+  Applying portal.0027_tender_hourly_schedule... OK
+  Applying portal.0028_tender_project_groups_and_user_state... OK
+  Applying portal.0029_tender_extraction_evidence... OK
+  Applying portal.0030_agent_platform... OK
+  Applying portal.0031_hr_long_term_retention... OK
+  Applying portal.0032_business_record_identity... OK
+  Applying portal.0033_agent_product_guards... OK
+  Applying portal.0034_agent_hr_guards... OK
+  Applying portal.0035_gatewaymodel_timeout_600... OK
+  Applying portal.0036_product_steps... OK
+  Applying portal.0037_product_knowledge_archive... OK
+  Applying portal.0038_assistant_pending_request... OK
+  Applying portal.0039_department_workflow_stages... OK
+  Applying portal.0040_preparation_confirmation_audit... OK
+  Applying portal.0041_preparation_upload_idempotency... OK
+  Applying portal.0042_baichuan... OK
+  Applying portal.0043_documenttask_list_management... OK
+  Applying portal.0044_baichuan_cs_level_one... OK
+  Applying sessions.0001_initial... OK
+System check identified no issues (0 silenced).
+test_authentication_csrf_and_no_delete_endpoint (portal.tests.test_baichuan.BaichuanTests.test_authentication_csrf_and_no_delete_endpoint) ... ok
+test_company_duplicates_and_name_warning (portal.tests.test_baichuan.BaichuanTests.test_company_duplicates_and_name_warning) ... ok
+test_create_minimal_preserves_text_and_rename_identity_and_audit (portal.tests.test_baichuan.BaichuanTests.test_create_minimal_preserves_text_and_rename_identity_and_audit) ... ok
+test_cs_level_one_persists_and_filters_exactly_with_other_categories (portal.tests.test_baichuan.BaichuanTests.test_cs_level_one_persists_and_filters_exactly_with_other_categories) ... ok
+test_database_grade_state_and_credit_constraints (portal.tests.test_baichuan.BaichuanTests.test_database_grade_state_and_credit_constraints) ... ok
+test_default_deny_and_same_permission_boundary_for_every_endpoint (portal.tests.test_baichuan.BaichuanTests.test_default_deny_and_same_permission_boundary_for_every_endpoint) ... ok
+test_exact_or_and_any_seven_categories_and_no_cross_record_matching (portal.tests.test_baichuan.BaichuanTests.test_exact_or_and_any_seven_categories_and_no_cross_record_matching) ... ok
+test_explicit_write_roles_require_read_grant_and_existing_product_access (portal.tests.test_baichuan.BaichuanTests.test_explicit_write_roles_require_read_grant_and_existing_product_access) ... ok
+test_query_validation_pagination_deduplication_and_matching_ids (portal.tests.test_baichuan.BaichuanTests.test_query_validation_pagination_deduplication_and_matching_ids) ... ok
+test_role_read_grants_never_implicitly_enable_writes (portal.tests.test_baichuan.BaichuanTests.test_role_read_grants_never_implicitly_enable_writes) ... ok
+test_snapshot_required_fields_owned_children_and_explicit_clear (portal.tests.test_baichuan.BaichuanTests.test_snapshot_required_fields_owned_children_and_explicit_clear) ... ok
+test_strict_inputs_urls_dates_children_and_states_are_atomic (portal.tests.test_baichuan.BaichuanTests.test_strict_inputs_urls_dates_children_and_states_are_atomic) ... ok
+test_validation_has_no_writes_and_mid_save_failure_rolls_back_everything (portal.tests.test_baichuan.BaichuanTests.test_validation_has_no_writes_and_mid_save_failure_rolls_back_everything) ... ok
+test_version_cas_conflict_preserves_first_snapshot_and_child_ids (portal.tests.test_baichuan.BaichuanTests.test_version_cas_conflict_preserves_first_snapshot_and_child_ids) ... ok
+test_alias_mapping_and_manual_multi_certificate_normalization (portal.tests.test_baichuan_import.BaichuanImportTests.test_alias_mapping_and_manual_multi_certificate_normalization) ... ok
+test_complete_override_cannot_drop_any_nonempty_original_category (portal.tests.test_baichuan_import.BaichuanImportTests.test_complete_override_cannot_drop_any_nonempty_original_category) ... ok
+test_delivered_blank_template_and_preview_have_no_writes (portal.tests.test_baichuan_import.BaichuanImportTests.test_delivered_blank_template_and_preview_have_no_writes) ... ok
+test_existing_company_requires_explicit_link_and_frozen_snapshot (portal.tests.test_baichuan_import.BaichuanImportTests.test_existing_company_requires_explicit_link_and_frozen_snapshot) ... ok
+test_file_mapping_or_manifest_changes_are_rejected (portal.tests.test_baichuan_import.BaichuanImportTests.test_file_mapping_or_manifest_changes_are_rejected) ... ok
+test_midway_database_error_rolls_back_company_children_and_audit (portal.tests.test_baichuan_import.BaichuanImportTests.test_midway_database_error_rolls_back_company_children_and_audit) ... ok
+test_page_edit_and_child_change_are_conflicts_not_overwrites (portal.tests.test_baichuan_import.BaichuanImportTests.test_page_edit_and_child_change_are_conflicts_not_overwrites) ... ok
+test_permission_and_review_gates_default_deny (portal.tests.test_baichuan_import.BaichuanImportTests.test_permission_and_review_gates_default_deny) ... ok
+test_preflight_collects_all_errors_and_preserves_unknowns_and_notes (portal.tests.test_baichuan_import.BaichuanImportTests.test_preflight_collects_all_errors_and_preserves_unknowns_and_notes) ... ok
+test_report_failure_after_commit_then_manifest_recovery (portal.tests.test_baichuan_import.BaichuanImportTests.test_report_failure_after_commit_then_manifest_recovery) ... ok
+test_same_name_distinct_codes_and_person_links_do_not_merge (portal.tests.test_baichuan_import.BaichuanImportTests.test_same_name_distinct_codes_and_person_links_do_not_merge) ... ok
+test_stable_ids_atomic_creation_and_idempotency_without_receipt (portal.tests.test_baichuan_import.BaichuanImportTests.test_stable_ids_atomic_creation_and_idempotency_without_receipt) ... ok
+test_parallel_updates_commit_exactly_one_snapshot (portal.tests.test_baichuan.BaichuanConcurrencyTests.test_parallel_updates_commit_exactly_one_snapshot) ... ok
+
+----------------------------------------------------------------------
+Ran 27 tests in 25.515s
+
+OK
+Destroying test database for alias 'default' ('C:\Users\BJRunner\AppData\Local\Temp\baichuan-cs1-6da5f2456ea8446cadcd1198562cf326\test.sqlite3')...
+
+COMMAND EXIT 0 test
+COMMAND makemigrations ['portal'] {'check': True, 'dry_run': True}
+No changes detected in app 'portal'
+COMMAND EXIT 0 makemigrations
+COMMAND check [] {}
+System check identified no issues (0 silenced).
+COMMAND EXIT 0 check
+UTC end 2026-10-16T06:21:00.954230+00:00

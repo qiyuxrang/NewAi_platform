@@ -82,7 +82,7 @@ def _product_task(reference, root, owner_id, deny):
     from .product_models import DocumentTask
 
     task = DocumentTask.objects.filter(pk=reference.object_id, owner_id=owner_id).first()
-    if (task is None or task.agent_root_id != str(root.pk)
+    if (task is None or task.deleted_at is not None or task.agent_root_id != str(root.pk)
             or task.agent_work_id != str(reference.work_id)):
         deny()
     return task
@@ -97,7 +97,7 @@ def _check_root_product_sources(root, owner_id, conversation_id, verified_artifa
     for task in tasks:
         work = AgentWorkTask.objects.filter(pk=task.agent_work_id, owner_id=owner_id,
             conversation_id=conversation_id, department_code="product").first()
-        if task.owner_id != owner_id or work is None:
+        if task.deleted_at is not None or task.owner_id != owner_id or work is None:
             deny()
         _agent_department(task.owner, deny, expected="product", conversation=root.conversation)
         revisions = list(task.revisions.filter(kind="input").order_by("version", "created_at", "pk"))
@@ -152,7 +152,7 @@ def _check_product_reference(reference, root, owner_id, verified_artifact, deny)
 
     artifact = DocumentArtifact.objects.select_related("task").filter(
         pk=reference.object_id).first()
-    if (artifact is None or artifact.task.owner_id != owner_id
+    if (artifact is None or artifact.task.deleted_at is not None or artifact.task.owner_id != owner_id
             or artifact.task.agent_root_id != str(root.pk)
             or artifact.task.agent_work_id != str(reference.work_id)
             or reference.revision != str(artifact.version)
@@ -169,7 +169,7 @@ def _check_product_source(source, task, root, work_id, owner_id, verified_artifa
     from .product_models import DocumentRevision
     from .product_service import input_authorized
 
-    if (task.owner_id != owner_id or task.agent_root_id != str(root.pk)
+    if (task.deleted_at is not None or task.owner_id != owner_id or task.agent_root_id != str(root.pk)
             or task.agent_work_id != str(work_id)):
         deny()
     registered = []

@@ -1,0 +1,43 @@
+{
+  "overall": "PASS",
+  "untouched_companies_identical": 1169,
+  "updated_companies": 114,
+  "all_existing_children_and_old_source_preserved": true,
+  "tables": {
+    "portal_company": {
+      "before": 1283,
+      "after": 1283
+    },
+    "portal_companyqualification": {
+      "before": 1460,
+      "after": 1460
+    },
+    "portal_companyperson": {
+      "before": 112,
+      "after": 125
+    },
+    "portal_user": {
+      "before": 12,
+      "after": 12
+    },
+    "portal_role": {
+      "before": 6,
+      "after": 6
+    },
+    "portal_module": {
+      "before": 4,
+      "after": 4
+    }
+  },
+  "current_data_coverage": {
+    "website": 87,
+    "phone": 1026,
+    "email": 46,
+    "address": 58,
+    "companies_with_people": 91
+  },
+  "research_covered": 1283,
+  "website_gap": 1196,
+  "phone_gap": 257,
+  "people_gap": 1192
+}

@@ -1,0 +1,17 @@
+{
+  "overall": "PASS",
+  "checks": [
+    {
+      "port": 3080,
+      "status": 200
+    },
+    {
+      "port": 8080,
+      "status": 200
+    },
+    {
+      "port": 8100,
+      "status": 200
+    }
+  ]
+}

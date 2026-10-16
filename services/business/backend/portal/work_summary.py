@@ -57,7 +57,7 @@ def _product_items(user):
     if can_review:
         visible |= Q(reviewer=user)
     current_inputs = DocumentRevision.objects.filter(kind="input", version=F("task__input_version"))
-    scoped = (DocumentTask.objects.filter(visible).select_related("owner", "reviewer")
+    scoped = (DocumentTask.objects.filter(visible, deleted_at__isnull=True).select_related("owner", "reviewer")
               .prefetch_related(Prefetch("revisions", queryset=current_inputs, to_attr="summary_inputs")))
     # Match task detail/workspace authorization before disclosing even a title or count.
     tasks = [task for task in scoped if not task.summary_inputs or input_authorized(task, task.summary_inputs[0])]

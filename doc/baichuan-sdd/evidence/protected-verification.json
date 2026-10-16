@@ -1,0 +1,135 @@
+{
+  "executed_at": "2026-10-16T02:37:04.623329+00:00",
+  "all_unchanged": false,
+  "unchanged": 19,
+  "total": 21,
+  "note": "Two product_assistant_model files changed outside this task after initial snapshot; this task did not write or revert them.",
+  "files": [
+    {
+      "path": "frontend/src/business/product/ProductKnowledge.tsx",
+      "before": "2AB0F2265BD5C527C879C80BDFECAB618585A2EF58C49A6B4BC533A6A99324D1",
+      "after": "2AB0F2265BD5C527C879C80BDFECAB618585A2EF58C49A6B4BC533A6A99324D1",
+      "unchanged": true
+    },
+    {
+      "path": "frontend/src/business/product/TenderOpportunities.tsx",
+      "before": "1E5D19571CD4E74A1379FB799EE981AB4EA75F184C415A0A7133CE79A02B6900",
+      "after": "1E5D19571CD4E74A1379FB799EE981AB4EA75F184C415A0A7133CE79A02B6900",
+      "unchanged": true
+    },
+    {
+      "path": "frontend/tests/product-assistant.test.mjs",
+      "before": "856406322A95922C377F164622AA64B1896100BF07508DD10C7962F407C1587E",
+      "after": "856406322A95922C377F164622AA64B1896100BF07508DD10C7962F407C1587E",
+      "unchanged": true
+    },
+    {
+      "path": "services/business/backend/config/settings.py",
+      "before": "A7DAB16593BE14E44FCE892B712742870777A6BED551782F5D1299AA84829194",
+      "after": "A7DAB16593BE14E44FCE892B712742870777A6BED551782F5D1299AA84829194",
+      "unchanged": true
+    },
+    {
+      "path": "services/business/backend/portal/product_assistant_model.py",
+      "before": "DFE99762AF7B3EFE2ACC591E6F2BDC8A5122E04754748CCE7A87028778759370",
+      "after": "5D1FEDB71BE3D1D330DB9E1F90E5A028627FF0716CD5FA25A78AD6A47477CBB8",
+      "unchanged": false
+    },
+    {
+      "path": "services/business/backend/portal/product_assistant_runtime.py",
+      "before": "37BD287B58A3D20A6B8B2923E35496838F7FD5E23A14ADC68B1316C40C79DC4B",
+      "after": "37BD287B58A3D20A6B8B2923E35496838F7FD5E23A14ADC68B1316C40C79DC4B",
+      "unchanged": true
+    },
+    {
+      "path": "services/business/backend/portal/product_assistant_tools.py",
+      "before": "3DFBC63B41B233A251033BF20A1914693310C239E1E983A77D6E35DE0F2363B7",
+      "after": "3DFBC63B41B233A251033BF20A1914693310C239E1E983A77D6E35DE0F2363B7",
+      "unchanged": true
+    },
+    {
+      "path": "services/business/backend/portal/product_knowledge_api.py",
+      "before": "6DDCE910930A214AA0084ED49FE9608435E672A0A406CC5F7A3E540D4B06E56E",
+      "after": "6DDCE910930A214AA0084ED49FE9608435E672A0A406CC5F7A3E540D4B06E56E",
+      "unchanged": true
+    },
+    {
+      "path": "services/business/backend/portal/product_knowledge_service.py",
+      "before": "1B3F9BB69A34BAA25E172D8741ABEA33BD676251BECC6C04F3614B1F0B3964AC",
+      "after": "1B3F9BB69A34BAA25E172D8741ABEA33BD676251BECC6C04F3614B1F0B3964AC",
+      "unchanged": true
+    },
+    {
+      "path": "services/business/backend/portal/tender_api.py",
+      "before": "669DE1DB97F87352B9E5208403DF69CF3B0C413D125EBA79DAD4C36828A8B18A",
+      "after": "669DE1DB97F87352B9E5208403DF69CF3B0C413D125EBA79DAD4C36828A8B18A",
+      "unchanged": true
+    },
+    {
+      "path": "services/business/backend/portal/tender_manual_refresh.py",
+      "before": "03CDD6CE5CA68A671DF4D283B21F3A707AC2F864FBBCC3666E3EE935A0E63106",
+      "after": "03CDD6CE5CA68A671DF4D283B21F3A707AC2F864FBBCC3666E3EE935A0E63106",
+      "unchanged": true
+    },
+    {
+      "path": "services/business/backend/portal/tests/test_product_assistant_model.py",
+      "before": "02BE61C36FBB3769D86AB2C12CF7FF21A0B389650283DBBF8EF0EC5533FBE215",
+      "after": "E821C8DDDE7ADCDCA8BD7A20A26528BDD1B14888E6840433F29097B81BCBCFA9",
+      "unchanged": false
+    },
+    {
+      "path": "services/business/backend/portal/tests/test_product_assistant_runtime.py",
+      "before": "5F0CCA420355E982B4A1299D2809276DDB77B3BB01DD3EDF7AC7344A36229FE0",
+      "after": "5F0CCA420355E982B4A1299D2809276DDB77B3BB01DD3EDF7AC7344A36229FE0",
+      "unchanged": true
+    },
+    {
+      "path": "services/business/backend/portal/tests/test_product_assistant_tools_efficiency.py",
+      "before": "29BA66641977E6FFB2CBE9752A186D94FE5AFD2B4230E3281C927FEF21E57DB4",
+      "after": "29BA66641977E6FFB2CBE9752A186D94FE5AFD2B4230E3281C927FEF21E57DB4",
+      "unchanged": true
+    },
+    {
+      "path": "services/business/backend/portal/tests/test_product_knowledge_api.py",
+      "before": "F6FF6F869A7FCD5BD068796B7BD9A529450A25992DFB2F6248DA0F86C181CB83",
+      "after": "F6FF6F869A7FCD5BD068796B7BD9A529450A25992DFB2F6248DA0F86C181CB83",
+      "unchanged": true
+    },
+    {
+      "path": "services/business/backend/portal/tests/test_tender_runtime_api.py",
+      "before": "EB31F3D92BE3C14085DC8AFB274A59B90B22AC92010BE62C6332AACF1301A546",
+      "after": "EB31F3D92BE3C14085DC8AFB274A59B90B22AC92010BE62C6332AACF1301A546",
+      "unchanged": true
+    },
+    {
+      "path": "services/business/harness/runner.mjs",
+      "before": "8E70472F61519EA82F6B8CCD61C39465E51598FCAF230869E1AB50EE5FDC74BC",
+      "after": "8E70472F61519EA82F6B8CCD61C39465E51598FCAF230869E1AB50EE5FDC74BC",
+      "unchanged": true
+    },
+    {
+      "path": "services/business/harness/runner.test.mjs",
+      "before": "9F59B043526CBAB256CB4D88166C63149BA51B4D7C2D31039AD009743FF0EF47",
+      "after": "9F59B043526CBAB256CB4D88166C63149BA51B4D7C2D31039AD009743FF0EF47",
+      "unchanged": true
+    },
+    {
+      "path": "services/business/model_gateway/agent_protocol.py",
+      "before": "95DAA0D4189C0996EBDE520C48771CBAD221E55087AA91A5C86FA47BE262C2D8",
+      "after": "95DAA0D4189C0996EBDE520C48771CBAD221E55087AA91A5C86FA47BE262C2D8",
+      "unchanged": true
+    },
+    {
+      "path": "services/business/model_gateway/tests/test_agent_stream.py",
+      "before": "4B624B09AB213E996481D24DA414FF0034A69E990BE6758B80D957E2CC2613B0",
+      "after": "4B624B09AB213E996481D24DA414FF0034A69E990BE6758B80D957E2CC2613B0",
+      "unchanged": true
+    },
+    {
+      "path": "services/business/pyproject.toml",
+      "before": "782286F8ECB65B460F9D037EB4E66656D7682234FA5C82C79375F4EE04DD0F13",
+      "after": "782286F8ECB65B460F9D037EB4E66656D7682234FA5C82C79375F4EE04DD0F13",
+      "unchanged": true
+    }
+  ]
+}

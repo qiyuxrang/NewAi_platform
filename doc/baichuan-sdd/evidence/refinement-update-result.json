@@ -1,0 +1,69 @@
+{
+  "overall": "PASS",
+  "executed_at": "2026-10-16T06:14:34.975179+00:00",
+  "actor": "existing manager_user via authenticated gateway API",
+  "companies_updated": 5,
+  "company_count": 1283,
+  "qualification_person_account_role_module_rows_unchanged": true,
+  "preflight_and_backup": "C:\\Users\\BJRunner\\.agent-reach\\baichuan-20261016\\ui-refinement-update",
+  "updates": [
+    {
+      "id": "be2193e8-8841-58ad-8c9e-62e73b245591",
+      "name": "中交第一公路勘察设计研究院有限公司",
+      "fields": [
+        "website",
+        "description",
+        "address"
+      ],
+      "version": 2,
+      "result": "PASS"
+    },
+    {
+      "id": "4245df0f-0d54-5dc6-b894-e16d8c91be5d",
+      "name": "东升耘智科技有限公司",
+      "fields": [
+        "website",
+        "description",
+        "address",
+        "phone",
+        "email"
+      ],
+      "version": 2,
+      "result": "PASS"
+    },
+    {
+      "id": "9b7a3ff6-d679-5d8f-8307-c965f6a6543f",
+      "name": "陕西凯笙信息技术有限公司",
+      "fields": [
+        "website",
+        "description",
+        "address",
+        "phone",
+        "email"
+      ],
+      "version": 2,
+      "result": "PASS"
+    },
+    {
+      "id": "5b17812d-fcd4-51d5-89bf-c5a18b65cce1",
+      "name": "中化学朗正环保科技有限公司",
+      "fields": [
+        "website",
+        "description",
+        "address",
+        "phone"
+      ],
+      "version": 2,
+      "result": "PASS"
+    },
+    {
+      "id": "09e1df6e-81b4-5d8c-ad25-f885fcfd0a39",
+      "name": "中交（西安）数字产业有限公司",
+      "fields": [
+        "description"
+      ],
+      "version": 2,
+      "result": "PASS"
+    }
+  ]
+}

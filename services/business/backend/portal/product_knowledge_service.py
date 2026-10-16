@@ -23,6 +23,14 @@ from .product_service import ProductError
 from .security import can_use_assistant
 
 
+def incomplete_response(text):
+    return isinstance(text, str) and text.strip().lower() in {
+        "[tool call omitted]",
+        "[system: the ai model's output was truncated or didn't complete successfully. "
+        "please continue generating the remaining content from where it was interrupted.]",
+    }
+
+
 MESSAGES = {
     "disabled": "产品知识问答尚未启用，请联系管理员。",
     "unconfigured": "知识问答服务或专用模型路由尚未配置，请联系管理员。",

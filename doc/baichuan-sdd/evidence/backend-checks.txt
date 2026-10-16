@@ -1,0 +1,28 @@
+﻿Reproduce: powershell -NoProfile -File doc/baichuan-sdd/evidence/backend-command.ps1
+PowerShell 5.1.19041.6456
+Native command: C:\Users\BJRunner\Desktop\MultiUserClaw\services\business\.runtime\main-acceptance-venv\Scripts\python.exe C:\Users\BJRunner\Desktop\MultiUserClaw\.runtime\baichuan-evidence-4a6fee3c382d4c389f076e3ee3705ecd.py migration
+Python 3.13.9 (main, Nov 19 2025, 22:41:40) [MSC v.1944 64 bit (AMD64)]
+Django 5.2.17
+UTC start 2026-10-16T02:22:35.540979+00:00
+Database: isolated file SQLite; synthetic users only; deployment .env is not loaded
+PORTAL_DEBUG=1; PORTAL_HTTPS=0; synthetic PORTAL_SECRET_KEY; real database variables removed
+PORTAL_SQLITE_PATH C:\Users\BJRunner\Desktop\MultiUserClaw\.runtime\baichuan-base-4a6fee3c382d4c389f076e3ee3705ecd.sqlite3
+TEST database C:\Users\BJRunner\Desktop\MultiUserClaw\.runtime\baichuan-test-4a6fee3c382d4c389f076e3ee3705ecd.sqlite3
+Django command: manage.py makemigrations portal --check --dry-run
+No changes detected in app 'portal'
+UTC end 2026-10-16T02:22:37.053496+00:00
+Native exit code: 0
+Reproduce: powershell -NoProfile -File doc/baichuan-sdd/evidence/backend-command.ps1
+PowerShell 5.1.19041.6456
+Native command: C:\Users\BJRunner\Desktop\MultiUserClaw\services\business\.runtime\main-acceptance-venv\Scripts\python.exe C:\Users\BJRunner\Desktop\MultiUserClaw\.runtime\baichuan-evidence-4a6fee3c382d4c389f076e3ee3705ecd.py check
+Python 3.13.9 (main, Nov 19 2025, 22:41:40) [MSC v.1944 64 bit (AMD64)]
+Django 5.2.17
+UTC start 2026-10-16T02:22:37.340866+00:00
+Database: isolated file SQLite; synthetic users only; deployment .env is not loaded
+PORTAL_DEBUG=1; PORTAL_HTTPS=0; synthetic PORTAL_SECRET_KEY; real database variables removed
+PORTAL_SQLITE_PATH C:\Users\BJRunner\Desktop\MultiUserClaw\.runtime\baichuan-base-4a6fee3c382d4c389f076e3ee3705ecd.sqlite3
+TEST database C:\Users\BJRunner\Desktop\MultiUserClaw\.runtime\baichuan-test-4a6fee3c382d4c389f076e3ee3705ecd.sqlite3
+Django command: manage.py check
+System check identified no issues (0 silenced).
+UTC end 2026-10-16T02:22:38.745800+00:00
+Native exit code: 0

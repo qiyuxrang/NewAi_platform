@@ -2,7 +2,7 @@
 from math import ceil
 
 from django.conf import settings
-from django.db.models import F, Prefetch, Q
+from django.db.models import Case, F, Prefetch, Q, When
 from django.http import FileResponse
 from django.urls import path
 from django.utils import timezone
@@ -51,11 +51,12 @@ def _number(request, key, default, maximum):
     return int(raw)
 
 
-def _project(task):
+def _project(task, user):
     return {**_task_summary(task), "created_at": task.created_at.isoformat(),
             "owner_name": task.owner.display_name or task.owner.get_username(),
             "reviewer_name": (task.reviewer.display_name or task.reviewer.get_username()) if task.reviewer else None,
-            "error_code": task.error_code, "pending_action": task.pending_action}
+            "error_code": task.error_code, "pending_action": task.pending_action,
+            "can_manage": task.owner_id == user.pk}
 
 
 def _authorized_tasks(user):
@@ -65,9 +66,9 @@ def _authorized_tasks(user):
     if reviewer_allowed(user):
         scope |= Q(reviewer=user)
     current_inputs = DocumentRevision.objects.filter(kind="input", version=F("task__input_version"))
-    queryset = (DocumentTask.objects.filter(scope).select_related("owner", "reviewer")
+    queryset = (DocumentTask.objects.filter(scope, deleted_at__isnull=True).select_related("owner", "reviewer")
                 .prefetch_related(Prefetch("revisions", queryset=current_inputs, to_attr="workspace_inputs"))
-                .order_by("-updated_at", "id"))
+                .order_by(Case(When(pinned_at__isnull=False, then=0), default=1), "-updated_at", "id"))
     # Counts must use the same source-authorization scope as detail/downloads.
     return [task for task in queryset if not task.workspace_inputs or input_authorized(task, task.workspace_inputs[0])]
 
@@ -193,10 +194,10 @@ def workspace(request):
                  if product_user_allowed(user)]
     response = Response({
         "as_of": now.isoformat(), "scope": "authorized_projects", "metrics": metrics,
-        "projects": [_project(task) for task in filtered[start:start + page_size]],
+        "projects": [_project(task, request.user) for task in filtered[start:start + page_size]],
         "pagination": {"page": page, "page_size": page_size, "total": len(filtered), "pages": ceil(len(filtered) / page_size)},
-        "recent_projects": [_project(task) for task in tasks[:5]],
-        "todos": [_project(task) for task in tasks if task.state in {"WAITING_REVIEW", "WAITING_INPUT", "FAILED"}][:5],
+        "recent_projects": [_project(task, request.user) for task in tasks[:5]],
+        "todos": [_project(task, request.user) for task in tasks if task.state in {"WAITING_REVIEW", "WAITING_INPUT", "FAILED"}][:5],
         "recent_outputs": _recent_outputs(tasks), "reviewers": reviewers,
         "capabilities": {"model_generation": bool(settings.PRODUCT_MODEL_CALLS_ALLOWED),
                          "retrieval": bool(settings.PRODUCT_RETRIEVAL_ENABLED and settings.PRODUCT_RETRIEVAL_AUTHORIZATIONS),

@@ -93,3 +93,11 @@
 @media (max-width: 640px) { .pd-progress-milestones { grid-template-columns: 1fr; gap: 6px; }.pd-progress-milestones strong { font-size: 12px; }.pd-progress-milestones small { font-size: 11px; }.pd-blueprint-entry{align-items:stretch;flex-direction:column}.pd-chapter-plan li{padding:14px} }
 @media (prefers-reduced-motion: reduce) { .pd-compact-progress[data-running=true] li[data-status=running] .pd-milestone-dot { animation: none; } }
 
+.pd-retrieval-summary { margin-top: 8px; font-size: 13px; }
+.pd-retrieval-summary > summary { width: fit-content; cursor: pointer; color: var(--accent); }
+.pd-retrieval-summary > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.pd-retrieval-summary ul { list-style: none; margin: 8px 0; padding: 0; }
+.pd-compact-progress .pd-retrieval-summary li { padding: 8px 0; border: 0; border-top: 1px solid var(--line); overflow-wrap: anywhere; }
+.pd-compact-progress .pd-retrieval-summary li p { margin: 4px 0 0; line-height: 1.6; }
+.pd-retrieval-summary > small { display: block; margin-top: 5px; color: var(--muted); }
+

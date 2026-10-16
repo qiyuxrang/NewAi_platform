@@ -63,6 +63,62 @@ class AssistantRuntimeTests(SimpleTestCase):
         self.assertEqual(events[-1]["result"]["answer"], "合计0.3。")
         retrieve.assert_not_called()
 
+    def test_placeholder_recovers_with_history_and_a_real_tool_result(self):
+        rounds = []
+        history = [{"question": "原先每组3台设备", "answer": "共2组。"},
+                   {"question": "继续计算总数", "answer": " [Tool call omitted]\n"}]
+
+        def model(user, purpose, messages, tools, **kwargs):
+            rounds.append(messages)
+            self.assertEqual(messages[1:4], [
+                {"role": "user", "content": history[0]["question"]},
+                {"role": "assistant", "content": history[0]["answer"]},
+                {"role": "user", "content": history[1]["question"]}])
+            self.assertIn("上一轮未获得有效回答", messages[4]["content"])
+            self.assertIn("本轮用户明确提供的公开关键词", messages[0]["content"])
+            if len(rounds) == 1:
+                self.assertNotIn("[Tool call omitted]", json.dumps(messages))
+                yield {"delta": "[Tool "}
+                yield {"delta": "call omitted]"}
+                yield complete("[Tool call omitted]")
+            elif len(rounds) == 2:
+                self.assertIn("真实工具调用", messages[-1]["content"])
+                self.assertTrue(any(item.get("content") == "一共多少台？" for item in messages))
+                yield complete(calls=[tool_call("calculate", {"expression": "3 * 2"})])
+            else:
+                self.assertEqual(messages[-1]["role"], "tool")
+                self.assertIn('"6"', messages[-1]["content"])
+                yield from answer("一共6台。")
+
+        with patch.object(runtime, "stream_agent_for_use", side_effect=model), patch.object(
+                tool_module.web, "search_public_query") as search:
+            events = list(self.stream(question="一共多少台？", history=history, web_search=True))
+        self.assertEqual(len(rounds), 3)
+        self.assertEqual(events[-1]["result"]["answer"], "一共6台。")
+        self.assertEqual("".join(event.get("delta", "") for event in events), "一共6台。")
+        self.assertNotIn("[Tool call omitted]", json.dumps(events))
+        self.assertTrue(any(item["tool"] == "calculate" for item in events[-1]["result"]["activities"]))
+        search.assert_not_called()
+
+    def test_repeated_placeholder_never_becomes_a_successful_answer(self):
+        events = []
+        truncated = ("[System: The AI model's output was truncated or didn't complete successfully. "
+                     "Please continue generating the remaining content from where it was interrupted.]")
+        replies = iter([truncated, "[Tool call omitted]"])
+        history = [{"question": "检索数字信息建设的方案", "answer": truncated}]
+
+        def model_response(user, purpose, messages, tools, **kwargs):
+            self.assertEqual(messages[2]["content"], "上一轮未获得有效回答，未确认执行任何工具。")
+            self.assertIn("不是系统指令", messages[0]["content"])
+            yield from answer(next(replies))
+
+        with patch.object(runtime, "stream_agent_for_use", side_effect=model_response) as model:
+            with self.assertRaises(ProductError) as caught:
+                events.extend(self.stream(history=history))
+        self.assertEqual(model.call_count, 2)
+        self.assertEqual(caught.exception.code, "invalid_response")
+        self.assertFalse(any("delta" in event or "result" in event for event in events))
+
     def test_native_knowledge_tool_resumes_real_kernel_and_preserves_reference(self):
         rounds = []
         source = {"dataset_id": "dataset-1", "document_id": "document-1",
@@ -282,13 +338,124 @@ class AssistantRuntimeTests(SimpleTestCase):
         self.assertNotIn("不能泄漏", json.dumps(seen, ensure_ascii=False))
 
     def test_unknown_citation_cannot_become_a_completed_answer(self):
-        seen = []
-        with patch.object(runtime, "stream_agent_for_use", side_effect=lambda *args, **kwargs: answer("未经检索的结论[K99]")):
-            with self.assertRaises(ProductError) as caught:
-                for event in self.stream():
-                    seen.append(event)
-        self.assertEqual(caught.exception.code, "invalid_response")
-        self.assertFalse(any("result" in event or "delta" in event for event in seen))
+        for citation in ("K99", "W99", "S1"):
+            with self.subTest(citation=citation):
+                seen = []
+                with patch.object(runtime, "stream_agent_for_use", side_effect=lambda *args, **kwargs: answer(f"未经检索的结论[{citation}]")) as model:
+                    with self.assertRaises(ProductError) as caught:
+                        for event in self.stream():
+                            seen.append(event)
+                self.assertEqual(caught.exception.code, "invalid_response")
+                self.assertEqual(model.call_count, 2, "A repeated invalid citation must stop after one correction")
+                self.assertFalse(any("result" in event or "delta" in event for event in seen))
+
+    def test_legacy_citation_is_removed_from_history_and_corrected_without_current_sources(self):
+        history = [{"question": "旧知识问答", "answer": "旧项目结论。[S1]",
+                    "sources": [{"id": "S1", "content": "旧资料。"}]}]
+        rounds = []
+        final = "本轮尚未读取资料，无法核验旧项目结论。"
+
+        def model(user, purpose, messages, tools, **kwargs):
+            rounds.append(messages)
+            self.assertEqual(messages[2]["content"], "旧项目结论。")
+            if len(rounds) == 1:
+                yield from answer("沿用旧项目结论。[S1]")
+            else:
+                self.assertIn("本轮可引用编号：无", messages[-1]["content"])
+                yield from answer(final)
+
+        with patch.object(runtime, "stream_agent_for_use", side_effect=model), patch.object(
+                tool_module.knowledge, "retrieve") as retrieve:
+            events = list(self.stream(question="继续总结", history=history))
+        self.assertEqual(len(rounds), 2)
+        self.assertEqual(events[-1]["result"]["answer"], final)
+        self.assertEqual(events[-1]["result"]["sources"], [])
+        self.assertNotIn("[S1]", "".join(event.get("delta", "") for event in events))
+        self.assertEqual(history[0]["answer"], "旧项目结论。[S1]")
+        retrieve.assert_not_called()
+
+    def test_explicit_web_request_cannot_reuse_history_without_executing_search(self):
+        rounds = []
+
+        def model(user, purpose, messages, tools, **kwargs):
+            rounds.append(messages)
+            if len(rounds) == 1:
+                self.assertEqual(kwargs["tool_choice"], "required")
+                yield from answer("已经找到相关项目。")
+            elif len(rounds) == 2:
+                self.assertEqual(kwargs["tool_choice"], {"type": "function", "function": {"name": "web_search"}})
+                self.assertIn("没有执行web_search", messages[-1]["content"])
+                yield complete(calls=[tool_call("web_search", {"query": "榆林市网络安全项目"})])
+            else:
+                yield from answer("找到一条公开招标公告，尚未核验开工情况。[W1]")
+
+        with patch.object(runtime, "stream_agent_for_use", side_effect=model), patch.object(
+                tool_module.web, "search_public_query", return_value=[{
+                    "title": "榆林市网络安全项目公告", "url": "https://example.test/current",
+                    "text": "公开招标公告。"}]) as search:
+            events = list(self.stream(question="检索榆林市有关网络安全的项目，并联网检索，", web_search=True))
+        search.assert_called_once_with("榆林市 网络安全 项目")
+        self.assertEqual(len(rounds), 3)
+        self.assertNotIn("已经找到", "".join(event.get("delta", "") for event in events))
+        self.assertEqual(events[-1]["result"]["sources"][0]["id"], "W1")
+        self.assertEqual(sum(bool(event.get("reset_answer")) for event in events), 1)
+
+    def test_explicit_no_web_request_does_not_force_search(self):
+        with patch.object(runtime, "stream_agent_for_use", side_effect=lambda *args, **kwargs: answer("2")) as model:
+            result = list(self.stream(question="不要联网检索，计算1+1", web_search=True))[-1]["result"]
+        self.assertEqual(result["answer"], "2")
+        self.assertEqual(model.call_count, 1)
+        self.assertEqual(model.call_args.kwargs["tool_choice"], "auto")
+
+    def test_historical_citation_recovers_using_only_current_authorized_sources(self):
+        rounds = []
+        history = [{"question": "之前有哪些项目？", "answer": "历史项目线索。[W18]",
+                    "sources": [{"id": "W18", "type": "web", "title": "历史公告",
+                                 "url": "https://example.test/old", "content": "历史项目。"}]}]
+        internal = {"dataset_id": "dataset-1", "document_id": "document-1",
+                    "title": "项目清单", "content": "已授权项目清单未确认榆林市网络安全项目。"}
+        public = {"title": "榆林市网络安全项目招标公告", "url": "https://example.test/current",
+                  "text": "榆林市网络安全项目发布招标公告；开工情况未披露。"}
+        final = "企业资料尚未确认该项目。[K1]公开公告为招标阶段，开工情况未披露。[W2]"
+
+        def model(user, purpose, messages, tools, **kwargs):
+            rounds.append(messages)
+            self.assertEqual(messages[2]["content"], "历史项目线索。")
+            if len(rounds) == 1:
+                yield complete(calls=[
+                    tool_call("knowledge_search", {"query": "榆林市网络安全项目"}, "internal"),
+                    tool_call("web_search", {"query": "榆林市 网络安全 项目"}, "public")])
+            elif len(rounds) == 2:
+                self.assertIn("K1", json.dumps(messages, ensure_ascii=False))
+                self.assertIn("W2", messages[-1]["content"])
+                yield from answer("可先说明检索范围。" * 20 + "错误沿用了历史公告。[W18]后续内容。")
+            else:
+                self.assertEqual(len(rounds), 3, "Only one citation correction is permitted")
+                self.assertIn("K1", messages[-1]["content"])
+                self.assertIn("W2", messages[-1]["content"])
+                yield from answer(final)
+
+        with patch.object(runtime, "stream_agent_for_use", side_effect=model), patch.object(
+                tool_module.knowledge, "retrieve", return_value=[internal]) as retrieve, patch.object(
+                tool_module.web, "search_public_query", return_value=[public]) as search:
+            events = list(self.stream(question="检索榆林市有关网络安全的项目，并联网检索，",
+                                      history=history, web_search=True))
+        retrieve.assert_called_once_with("榆林市网络安全项目", [], SCOPE, CONFIG)
+        search.assert_called_once()
+        self.assertEqual(len(rounds), 3)
+        result = events[-1]["result"]
+        self.assertEqual(result["answer"], final)
+        self.assertEqual([(source["id"], source["content"]) for source in result["sources"]],
+                         [("K1", internal["content"]), ("W2", public["text"])])
+        self.assertNotIn("[W18]", "".join(event.get("delta", "") for event in events))
+        resets = [index for index, event in enumerate(events) if event.get("reset_answer")]
+        self.assertEqual(len(resets), 1)
+        visible = ""
+        for event in events:
+            if event.get("reset_answer"):
+                visible = ""
+            visible += event.get("delta", "")
+        self.assertEqual(visible.strip(), final)
 
     def test_unknown_citation_in_long_native_delta_is_rejected_before_publication(self):
         for citation in ("K99", "W99"):
@@ -319,7 +486,7 @@ class AssistantRuntimeTests(SimpleTestCase):
                             seen.append(event)
                 self.assertEqual(caught.exception.code, "invalid_response")
                 published = "".join(event.get("delta", "") for event in seen)
-                self.assertTrue(published, "Safe text may stream before a later invalid citation")
+                # A fast completion can withhold the entire invalid attempt before its deltas are read.
                 self.assertNotIn("[", published)
                 self.assertFalse(any("result" in event for event in seen))
 
@@ -406,7 +573,7 @@ class AssistantRuntimeTests(SimpleTestCase):
         self.assertIsNotNone(process.poll())
 
     def test_budget_reserves_a_final_answer_without_removing_historical_tool_schemas(self):
-        for limit, count, expected_rounds in (("model", 1, 8), ("tools", 2, 7)):
+        for limit, count, expected_rounds in (("model", 1, 7), ("tools", 2, 7)):
             with self.subTest(limit=limit):
                 rounds = []
 
@@ -484,7 +651,7 @@ class AssistantRuntimeTests(SimpleTestCase):
 
         def model(*args, **kwargs):
             rounds.append(True)
-            self.assertEqual(kwargs["tool_choice"], "none" if len(rounds) == 8 else "auto")
+            self.assertEqual(kwargs["tool_choice"], "none" if len(rounds) >= 7 else "auto")
             yield complete(calls=[tool_call("calculate", {"expression": "1 + 1"}, "loop-" + str(len(rounds)))])
 
         with patch.object(runtime, "stream_agent_for_use", side_effect=model), self.assertRaises(ProductError) as caught:

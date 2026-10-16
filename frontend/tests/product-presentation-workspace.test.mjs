@@ -110,7 +110,7 @@ test('finished retrieval is blocked when backend evidence is insufficient, while
     assert.match(html, /设备与验收领域参考证据不足/);
     assert.match(html, /知识库来源 0 项 · 联网公开参考 1 项/);
     assert.match(html, /联网公开资料只作参考，不作为当前项目事实/);
-    assert.match(html, /<li[^>]*data-status="blocked"[^>]*>(?:(?!<li)[\s\S])*?知识库检索/);
+    assert.match(html, /<li[^>]*data-status="blocked"[^>]*>(?:(?!<li(?:\s|>))[\s\S])*?知识库检索/);
     assert.doesNotMatch(html, /本版本未执行知识库检索/);
     assert.match(render({ ...task, knowledge: { mode: 'ragflow_required', required: true,
       status: 'ready', ragflow_used: true, source_count: 2, detail: '旧版知识来源记录' } }), /知识库检索已完成/);

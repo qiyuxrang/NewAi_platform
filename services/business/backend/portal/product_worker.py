@@ -6,17 +6,19 @@ import sqlite3
 import uuid
 from copy import deepcopy
 from contextlib import nullcontext
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
+from concurrent.futures import CancelledError
 from pathlib import Path
 from decimal import Decimal, InvalidOperation
 from datetime import timedelta
 from time import monotonic, sleep
 
 from django.conf import settings
-from django.db import connection, transaction
+from django.db import connection, close_old_connections, connections
 from django.db.models import F, Max, Q, Sum
 from django.utils import timezone
 
-from .model_gateway import GatewayError, generate_for_use
+from .model_gateway import generate_for_use
 from .models import ModelCallLog, ModelRoute, User
 from .product_models import DocumentApproval, DocumentArtifact, DocumentAttempt, DocumentRevision, DocumentTask
 from .product_service import (ProductError, append_revision, approved_blueprint, blueprint_chapters, current_revision,
@@ -25,6 +27,7 @@ from .security import audit
 from .product_rules import ProductRulesError, rules_hash, stage_rules
 from .product_formal import has_repeated_filler, unsupported_financial_conclusion
 from . import product_feasibility
+from .product_parallel import atomic, db_lock
 
 
 _DIAGRAM_VALIDATION_REASONS = frozenset({
@@ -93,6 +96,18 @@ def _failure_diagnostic(error):
         cause = cause.__cause__
     details = getattr(error, "diagnostic", {})
     if isinstance(details, dict):
+        if type(details.get("upstream_status")) is int and 100 <= details["upstream_status"] <= 599:
+            diagnostic["upstream_status"] = details["upstream_status"]
+        upstream_code = details.get("upstream_code")
+        if (isinstance(upstream_code, str) and re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,79}", upstream_code)
+                and not upstream_code.lower().startswith(("sk-", "sk_"))):
+            diagnostic["upstream_code"] = upstream_code
+        if isinstance(details.get("upstream_stage"), str) and details["upstream_stage"] in {"dns", "connect", "response_headers", "response_body", "tls"}:
+            diagnostic["upstream_stage"] = details["upstream_stage"]
+        if isinstance(details.get("upstream_exception"), str) and details["upstream_exception"] in {"OSError", "TimeoutError", "gaierror", "SSLError", "SSLCertVerificationError",
+                "ConnectionRefusedError", "ConnectionResetError", "ConnectionAbortedError", "BrokenPipeError",
+                "RemoteDisconnected", "IncompleteRead"}:
+            diagnostic["upstream_exception"] = details["upstream_exception"]
         if isinstance(details.get("stage"), str) and details["stage"] in {"presentation_source", "presentation_runtime", "presentation_render", "presentation_manifest", "presentation_quality",
             "presentation_office_render", "document_preflight", "document_render", "diagram_render", "content_assembly", "docx_assembly", "office_render", "artifact_publish"}:
             diagnostic["stage"] = details["stage"]
@@ -137,10 +152,19 @@ def _parse_model_output(raw):
             raw = fenced.group(1)
     try:
         result = json.loads(raw, object_pairs_hook=_unique_object, parse_constant=_invalid_constant)
-    except (ValueError, TypeError):
-        raise ExecutionError("invalid_model_output") from None
+    except (ValueError, TypeError) as cause:
+        error = ExecutionError("invalid_model_output")
+        # Retain syntax locations, never rejected model text or JSON property names.
+        error.json_output_diagnostic = {"reason": "invalid_json"}
+        if isinstance(cause, json.JSONDecodeError):
+            error.json_output_diagnostic.update(line=cause.lineno, column=cause.colno, position=cause.pos)
+        elif str(cause) in {"duplicate_key", "nonfinite_number"}:
+            error.json_output_diagnostic["reason"] = str(cause)
+        raise error from None
     if not isinstance(result, dict):
-        raise ExecutionError("invalid_model_output")
+        error = ExecutionError("invalid_model_output")
+        error.json_output_diagnostic = {"reason": "invalid_root"}
+        raise error
     return result
 
 
@@ -161,7 +185,7 @@ def _guard(task_id, fence):
         check_task_scope(task, scope)
     except ProductError as error:
         raise ExecutionError(error.code) from None
-    if task.state != "RUNNING" or task.fence != fence or not task.lease_until or task.lease_until <= timezone.now():
+    if task.deleted_at or task.state != "RUNNING" or task.fence != fence or not task.lease_until or task.lease_until <= timezone.now():
         raise ExecutionError("lease_lost")
     owner = User.objects.get(pk=task.owner_id)
     try:
@@ -185,10 +209,10 @@ def claim_task():
     now = timezone.now()
     candidates = DocumentTask.objects.filter(
         (Q(state="QUEUED") & (Q(retry_after__isnull=True) | Q(retry_after__lte=now)))
-        | Q(state="RUNNING", lease_until__lte=now)).order_by("created_at")
+        | Q(state="RUNNING", lease_until__lte=now)).filter(deleted_at__isnull=True).order_by("created_at")
     for task_id in candidates.values_list("pk", flat=True)[:32]:
         task = DocumentTask.objects.get(pk=task_id)
-        if not (task.state == "QUEUED" or task.state == "RUNNING" and task.lease_until <= timezone.now()):
+        if task.deleted_at or not (task.state == "QUEUED" or task.state == "RUNNING" and task.lease_until <= timezone.now()):
             continue
         guard = runtime_guard_for_task(task) if task.agent_root_id else None
         if guard:
@@ -218,10 +242,11 @@ def claim_task():
     return None
 
 
-@transaction.atomic
+@atomic()
 def _reject_agent_claim(task_id, code):
+    _reserve_sqlite_write(task_id)
     task = DocumentTask.objects.select_for_update().get(pk=task_id)
-    if task.agent_root_id and (task.state == "QUEUED" or task.state == "RUNNING" and task.lease_until <= timezone.now()):
+    if not task.deleted_at and task.agent_root_id and (task.state == "QUEUED" or task.state == "RUNNING" and task.lease_until <= timezone.now()):
         task.state, task.error_code = "WAITING_INPUT", code
         task.fence += 1
         task.version += 1
@@ -229,15 +254,16 @@ def _reject_agent_claim(task_id, code):
         task.save(update_fields=["state", "error_code", "fence", "version", "lease_until", "updated_at"])
 
 
-@transaction.atomic
+@atomic()
 def _claim_candidate(task_id, agent_action_key):
+    _reserve_sqlite_write(task_id)
     from .product_agent import check_task_scope, lock_task_scope
     try:
         scope = lock_task_scope(task_id)
     except ProductError:
         scope = False
     task = DocumentTask.objects.select_for_update().get(pk=task_id)
-    if not (task.state == "QUEUED" or task.state == "RUNNING" and task.lease_until <= timezone.now()):
+    if task.deleted_at or not (task.state == "QUEUED" or task.state == "RUNNING" and task.lease_until <= timezone.now()):
         return None
     try:
         if scope is False:
@@ -288,7 +314,7 @@ def _claim_candidate(task_id, agent_action_key):
     return task.pk, task.fence, attempt.pk
 
 
-@transaction.atomic
+@atomic()
 def _renew(task_id, fence):
     task = _guard(task_id, fence)
     task.lease_until = timezone.now() + timedelta(seconds=settings.PRODUCT_LEASE_SECONDS)
@@ -346,17 +372,19 @@ def _wait_for_model_slot(task_id, fence, route, rule_version):
     started = monotonic()
     deadline = started + 120
     while True:
-        with transaction.atomic():
+        with atomic():
             task = _model_dispatch_guard(task_id, fence, rule_version)
             task.lease_until = timezone.now() + timedelta(seconds=settings.PRODUCT_LEASE_SECONDS)
             task.save(update_fields=["lease_until", "updated_at"])
             actor_id = task.owner_id
-        configured = ModelRoute.objects.filter(code=route).values("pk", "max_calls_per_minute").first()
-        # Missing/disabled routes still fail through the gateway's normal checks.
-        if configured is None or ModelCallLog.objects.filter(
+        with db_lock:
+            configured = ModelRoute.objects.filter(code=route).values("pk", "max_calls_per_minute").first()
+            # Missing/disabled routes still fail through the gateway's normal checks.
+            available = configured is None or ModelCallLog.objects.filter(
                 actor_id=actor_id, route_id=configured["pk"],
                 created_at__gte=timezone.now() - timedelta(minutes=1),
-        ).count() < configured["max_calls_per_minute"]:
+            ).count() < configured["max_calls_per_minute"]
+        if available:
             return max(0, monotonic() - started)
         remaining = deadline - monotonic()
         if remaining <= 0:
@@ -396,6 +424,20 @@ def _chapter_correction_context(payload, candidate):
                      "characters": len(candidate_text), "request_characters": request_characters}
 
 
+def _call_evidence(task, attempt_id, call_number):
+    return next((entry for entry in task.checkpoint.get("calls", [])
+                 if entry.get("attempt_id") == str(attempt_id) and entry.get("call") == call_number), None)
+
+
+def _model_activity(task):
+    progress = task.checkpoint.get("parallel_writing")
+    if progress is not None:
+        active = sum(entry.get("attempt_id") == progress.get("attempt_id") and entry.get("status") == "started"
+                     for entry in task.checkpoint.get("calls", []))
+        progress["active_model_calls"] = active
+        progress["max_active_model_calls"] = max(active, progress.get("max_active_model_calls", 0))
+
+
 def _model(task_id, fence, attempt_id, route, payload, *, retry_invalid_output=True, output_validator=None,
            _chapter_candidate=None):
     if payload.get("action") == "chapter":
@@ -421,7 +463,7 @@ def _model(task_id, fence, attempt_id, route, payload, *, retry_invalid_output=T
     except (ProductRulesError, KeyError):
         raise ExecutionError("product_rules_unavailable") from None
     pacing_wait = _wait_for_model_slot(task_id, fence, route, rule_version)
-    with transaction.atomic():
+    with atomic():
         task = _model_dispatch_guard(task_id, fence, rule_version)
         attempt = DocumentAttempt.objects.select_for_update().get(pk=attempt_id, fence=fence, status="running")
         attempt.model_calls += 1
@@ -450,7 +492,16 @@ def _model(task_id, fence, attempt_id, route, payload, *, retry_invalid_output=T
                 if candidate_context:
                     binding["chapter_correction_candidate_sha256"] = candidate_context[1]["sha256"]
                 dispatch_input_hash = digest(binding)
-        evidence = {"attempt_id": str(attempt_id), "call": attempt.model_calls, "route": route,
+        if payload.get("action") == "independent_review" and configured and "schema" in payload:
+            from .model_response_format import review_response_format, supports_chapter_response_format
+            if supports_chapter_response_format(configured.model.provider, configured.model):
+                try:
+                    response_format = review_response_format(payload["schema"])
+                except (KeyError, ValueError, TypeError):
+                    raise ExecutionError("invalid_model_output") from None
+                dispatch_input_hash = digest({"payload": payload, "response_format_sha256": digest(response_format)})
+        call_number = attempt.model_calls
+        evidence = {"attempt_id": str(attempt_id), "call": call_number, "route": route,
                     "action": payload["action"], "route_configuration_sha256": _review_route_hash(route, configured),
                     "input_hash": dispatch_input_hash, "rules_hash": rule_version, "started_at": timezone.now().isoformat(), "status": "started"}
         if candidate_context:
@@ -470,6 +521,7 @@ def _model(task_id, fence, attempt_id, route, payload, *, retry_invalid_output=T
                 "model_updated_at": configured.model.updated_at.isoformat(),
                 "provider_updated_at": configured.model.provider.updated_at.isoformat()}
         task.checkpoint = {**task.checkpoint, "calls": [*task.checkpoint.get("calls", []), evidence]}
+        _model_activity(task)
         task.save(update_fields=["checkpoint", "updated_at"])
     _renew(task_id, fence)
     from langchain_core.runnables import RunnableLambda
@@ -487,8 +539,14 @@ def _model(task_id, fence, attempt_id, route, payload, *, retry_invalid_output=T
         from .product_agent import runtime_guard_for_task
         model_guard = runtime_guard_for_task(task)
         try:
-            model_action_key = model_guard.admit("model", f"product-model:{uuid.uuid4()}")
+            with db_lock:
+                model_action_key = model_guard.admit("model", f"product-model:{uuid.uuid4()}")
         except AgentDenied:
+            with atomic():
+                fresh = _guard(task_id, fence)
+                _call_evidence(fresh, attempt_id, call_number).update(status="gateway_rejected", error_code="agent_root_limit")
+                _model_activity(fresh)
+                fresh.save(update_fields=["checkpoint", "updated_at"])
             raise ExecutionError("agent_root_limit") from None
     output_contract = ("\n输出根对象的键集合必须与以下schema完全相同；不得返回输入元信息、校验说明或纠正指令。"
                        "必须包含全部字段，空数组也必须返回，示例占位字符串不能作为内容：\n"
@@ -578,29 +636,37 @@ def _model(task_id, fence, attempt_id, route, payload, *, retry_invalid_output=T
         # bodies out of ambient tracing as well as checkpoints and revisions.
         with tracing_context(enabled=False) if payload["action"] == "chapter" else nullcontext():
             reply = gateway.invoke(messages)
-    except GatewayError as error:
+    except Exception as error:
         # A concurrent gateway caller can consume the observed slot. Preserve
         # the real rejection and charged dispatch; do not reset correction or
         # call budgets by retrying transport errors.
-        with transaction.atomic():
+        with atomic():
+            _reserve_sqlite_write(task_id)
             fresh = DocumentTask.objects.select_for_update().filter(pk=task_id, fence=fence).first()
             if fresh:
-                evidence = fresh.checkpoint.get("calls", [])[-1:]
-                if evidence and evidence[0]["attempt_id"] == str(attempt_id) and evidence[0]["call"] == attempt.model_calls:
-                    evidence[0].update(status="gateway_rejected", error_code=error.code,
+                evidence = _call_evidence(fresh, attempt_id, call_number)
+                if evidence:
+                    evidence.update(status="gateway_rejected", error_code=getattr(error, "code", "execution_failed"),
                                        finished_at=timezone.now().isoformat())
+                    evidence.update({key: value for key, value in _failure_diagnostic(error).items()
+                                        if key in {"upstream_status", "upstream_code", "upstream_stage", "upstream_exception"}})
+                    _model_activity(fresh)
                     fresh.save(update_fields=["checkpoint", "updated_at"])
         raise
     finally:
         if model_action_key:
-            model_guard.finish(model_action_key, "finished" if "reply" in locals() else "error")
-    with transaction.atomic():
+            with db_lock:
+                model_guard.finish(model_action_key, "finished" if "reply" in locals() else "error")
+    with atomic():
         task = _guard(task_id, fence)
         if rules_hash() != rule_version:
             raise ExecutionError("product_rules_unavailable")
-        evidence = task.checkpoint["calls"][-1]
+        evidence = _call_evidence(task, attempt_id, call_number)
+        if evidence is None:
+            raise ExecutionError("lease_lost")
         evidence.update(status="response_received", finished_at=timezone.now().isoformat(),
                         prompt_tokens=reply.get("prompt_tokens"), completion_tokens=reply.get("completion_tokens"))
+        _model_activity(task)
         reasoning_tokens = reply.get("reasoning_tokens")
         completion_tokens = reply.get("completion_tokens")
         if (generation_profile is not None and type(reasoning_tokens) is int
@@ -667,18 +733,26 @@ def _model(task_id, fence, attempt_id, route, payload, *, retry_invalid_output=T
                         else "invalid_blueprint") if payload["action"] == "blueprint" else "invalid_model_output"
                 raise ExecutionError(code) from error
     except ExecutionError as error:
-        with transaction.atomic():
+        with atomic():
             task = _guard(task_id, fence)
             evidence_key = "parse_error" if error.code == "invalid_model_output" else "validation_error"
-            task.checkpoint["calls"][-1][evidence_key] = error.code
-            task.checkpoint["calls"][-1]["validation_stage"] = (
+            evidence = _call_evidence(task, attempt_id, call_number)
+            if evidence is None:
+                raise ExecutionError("lease_lost")
+            evidence[evidence_key] = error.code
+            evidence["validation_stage"] = (
                 "content_quality" if error.quality_issues else validation_stage)
             if structure_failure is not None:
-                task.checkpoint["calls"][-1]["structure_failure"] = structure_failure
+                evidence["structure_failure"] = structure_failure
+            if validation_stage == "json_parse" and hasattr(error, "json_output_diagnostic"):
+                evidence["structure_failure"] = dict(error.json_output_diagnostic)
+                if isinstance(reply["content"], str):
+                    evidence["structure_failure"].update(response_characters=len(reply["content"]),
+                                                         response_sha256=digest(reply["content"]))
             if error.quality_issues:
-                task.checkpoint["calls"][-1]["quality_issues"] = _bounded_quality_issues(error.quality_issues)
+                evidence["quality_issues"] = _bounded_quality_issues(error.quality_issues)
             if error.diagram_validation_reason:
-                task.checkpoint["calls"][-1]["diagram_validation_reason"] = error.diagram_validation_reason
+                evidence["diagram_validation_reason"] = error.diagram_validation_reason
             task.save(update_fields=["checkpoint", "updated_at"])
         if retry_invalid_output:
             correction = _output_correction(payload["action"])
@@ -729,10 +803,10 @@ def _model(task_id, fence, attempt_id, route, payload, *, retry_invalid_output=T
         raise
     except (TypeError, KeyError):
         raise ExecutionError("invalid_model_output") from None
-    with transaction.atomic():
+    with atomic():
         task = _guard(task_id, fence)
-        evidence = task.checkpoint["calls"][-1]
-        if evidence["attempt_id"] != str(attempt_id) or evidence["input_hash"] != dispatch_input_hash:
+        evidence = _call_evidence(task, attempt_id, call_number)
+        if evidence is None or evidence["input_hash"] != dispatch_input_hash:
             raise ExecutionError("lease_lost")
         evidence.update(response_validated=True, response_sha256=digest(result))
         if (payload["action"] == "chapter" and candidate_before_validation is not None
@@ -748,7 +822,7 @@ def _model(task_id, fence, attempt_id, route, payload, *, retry_invalid_output=T
     return result
 
 
-@transaction.atomic
+@atomic()
 def _store(task_id, fence, kind, payload, input_hash, blueprint_hash="", family="technical-solution", reason=""):
     task = _guard(task_id, fence)
     record = append_revision(task, kind, payload, input_hash=input_hash, blueprint_hash=blueprint_hash,
@@ -761,7 +835,7 @@ def _store(task_id, fence, kind, payload, input_hash, blueprint_hash="", family=
     return record
 
 
-@transaction.atomic
+@atomic()
 def _finish(task_id, fence, attempt_id, state, stage, error_code="", failure=None, recovery=None):
     _reserve_sqlite_write(task_id)
     from .product_agent import check_task_scope, lock_task_scope
@@ -770,7 +844,7 @@ def _finish(task_id, fence, attempt_id, state, stage, error_code="", failure=Non
     except ProductError:
         scope = False
     task = DocumentTask.objects.select_for_update().get(pk=task_id)
-    if task.fence != fence or task.state != "RUNNING":
+    if task.deleted_at or task.fence != fence or task.state != "RUNNING":
         DocumentAttempt.objects.filter(pk=attempt_id, status="running").update(status="cancelled", error_code="lease_lost", finished_at=timezone.now())
         return False
     if task.lease_until is None or task.lease_until <= timezone.now():
@@ -808,7 +882,7 @@ def _finish(task_id, fence, attempt_id, state, stage, error_code="", failure=Non
         for phase, record in progress.items():
             if record.get('status') == 'running':
                 progress[phase] = {**record, 'status': 'waiting' if recovery else 'failed',
-                                   'detail': '临时故障，稍后自动从已保存步骤恢复' if recovery else record.get('detail', ''),
+                                   'detail': '临时故障，稍后自动从已保存步骤恢复' if recovery else f'处理已暂停：{error_code}。已保存进度可在重试时复用。',
                                    'updated_at': timezone.now().isoformat()}
         event = {'phase': task.pending_action, 'status': 'waiting' if recovery else 'failed',
                  'detail': f'临时故障：{recovery.cause_code}，正在等待自动恢复。' if recovery else f'执行中断：{error_code}。已保存的资料和成果仍保留。',
@@ -978,7 +1052,7 @@ def _formal_paragraph_guard(paragraphs, family, *, draft=False):
         raise ExecutionError("investment_evidence_required")
 
 
-@transaction.atomic
+@atomic()
 def _record_output_generation(task_id, fence, family, target, actual):
     task = _guard(task_id, fence)
     output_generation = dict(task.checkpoint.get("output_generation", {}))
@@ -1033,17 +1107,19 @@ def _writing_model(task_id, fence, attempt_id, route, payload, *, output_validat
     binding_payload = deepcopy(payload)
     # A loop counter restarts after process recovery; saved content identifies the batch.
     binding_payload.get("continuation", {}).pop("part", None)
-    task = DocumentTask.objects.get(pk=task_id)
-    current_input = current_revision(task, "input")
-    current_blueprint = current_revision(task, "blueprint")
-    binding = {"payload": binding_payload, "route": _review_route_hash(route), "rules": rules_hash(),
-               "input_hash": current_input.sha256 if current_input else None,
-               "blueprint_hash": current_blueprint.sha256 if current_blueprint else None,
-               "draft": task.pending_action in {"generate_outputs", "three_drafts"}}
+    with db_lock:
+        task = DocumentTask.objects.get(pk=task_id)
+        current_input = current_revision(task, "input")
+        current_blueprint = current_revision(task, "blueprint")
+        binding = {"payload": binding_payload, "route": _review_route_hash(route), "rules": rules_hash(),
+                   "input_hash": current_input.sha256 if current_input else None,
+                   "blueprint_hash": current_blueprint.sha256 if current_blueprint else None,
+                   "draft": task.pending_action in {"generate_outputs", "three_drafts"}}
     key = "writing:" + payload["family"] + ":" + digest(payload["chapter"])[:16]
     def operation():
         request = deepcopy(payload)
-        step = DocumentStep.objects.get(task_id=task_id, key=key, input_hash=digest(binding))
+        with db_lock:
+            step = DocumentStep.objects.get(task_id=task_id, key=key, input_hash=digest(binding))
         target = request.get("length_target", {}).get("this_response_characters")
         if step.error_code == "output_truncated" and type(target) is int:
             # Keep the final chapter/report minimum; only shrink this request's payload.
@@ -1054,13 +1130,12 @@ def _writing_model(task_id, fence, attempt_id, route, payload, *, output_validat
                     validate=lambda result: bool(output_validator(result)))
 
 
-def _generate_family(task_id, fence, attempt_id, task, input_revision, blueprint, family):
+def _generate_chapter(task_id, fence, attempt_id, task, input_revision, blueprint, family, chapter, chapters,
+                      *, writing_brief=None, dependency_chapters=(), parallel=False):
     from .product_service import validate_chapter
     from .product_content_quality import (inspect_chapter_contract, inspect_content_quality,
                                           inspect_repeated_content, unsupported_numeric_claims)
 
-    chapters = current_chapters(task, input_revision.sha256, blueprint.sha256, family)
-    chapters = _reuse_source_expansion_chapters(task, fence, input_revision, blueprint, family, chapters)
     draft = task.pending_action in {"generate_outputs", "three_drafts"}
     family_chapters = blueprint_chapters(blueprint.payload, family)
     family_target = _family_target(family)
@@ -1068,121 +1143,148 @@ def _generate_family(task_id, fence, attempt_id, task, input_revision, blueprint
     chapter_target = (family_target + chapter_total - 1) // chapter_total
     enforce_length = settings.PRODUCT_ENFORCE_OUTPUT_LENGTH
     chapter_minimum = _minimum_characters(chapter_target)
-    source_items = _source_items(task, input_revision.payload)
+    with db_lock:
+        source_items = _source_items(task, input_revision.payload)
     phase = 'writing_technical' if family == 'technical-solution' else 'writing_feasibility'
     label = '技术方案' if family == 'technical-solution' else '可行性研究报告'
-    for chapter_index, chapter in enumerate(family_chapters, 1):
+    chapter_index = next(index for index, item in enumerate(family_chapters, 1) if item["id"] == chapter["id"])
+    with db_lock:
         existing = chapters.get(chapter["id"])
-        guide_requirements = (product_feasibility.chapter_requirements(blueprint.payload, chapter["id"])
-                              if family == "feasibility" else [])
-        actual = _chapter_character_count([existing]) if existing else 0
-        previous = []
-        def validate_output(result):
-            checked = validate_chapter(result)
-            if (checked["chapter_id"] != chapter["id"] or checked["title"] != chapter["title"]
-                    or not checked["source_ids"] or not set(checked["source_ids"]) <= set(chapter["source_ids"])):
-                raise ExecutionError("invalid_model_output")
-            existing_body = [paragraph for saved_chapter in chapters.values()
+    guide_requirements = (product_feasibility.chapter_requirements(blueprint.payload, chapter["id"])
+                          if family == "feasibility" else [])
+    actual = _chapter_character_count([existing]) if existing else 0
+    previous = []
+    def validate_output(result):
+        checked = validate_chapter(result)
+        if (checked["chapter_id"] != chapter["id"] or checked["title"] != chapter["title"]
+                or not checked["source_ids"] or not set(checked["source_ids"]) <= set(chapter["source_ids"])):
+            raise ExecutionError("invalid_model_output")
+        with db_lock:
+            existing_body = [paragraph for saved_chapter in list(chapters.values())
                              for paragraph in saved_chapter.payload.get("paragraphs", [])]
-            repeated = inspect_repeated_content(checked["paragraphs"], previous=existing_body)
-            removed = {issue["paragraph_index"] for issue in repeated
-                       if issue["code"] in {"near_duplicate_content", "partial_duplicate_content"}}
-            retained = [index for index in range(len(checked["paragraphs"])) if index not in removed]
-            checked["paragraphs"] = [checked["paragraphs"][index] for index in retained]
-            if not checked["paragraphs"]:
-                raise ExecutionError("invalid_model_output", quality_issues=[
-                    {**issue, "chapter_id": chapter["id"]} for issue in repeated])
-            saved = {re.sub(r"\s+", "", paragraph) for paragraph in previous}
-            if not any((normalized := re.sub(r"\s+", "", paragraph)) and normalized not in saved
-                       for paragraph in checked["paragraphs"]):
-                raise ExecutionError("invalid_model_output")
-            quality_issues = inspect_content_quality(checked["paragraphs"], project_facts=_project_facts(input_revision.payload),
-                                                    source_context=_source_context(input_revision.payload),
-                                                    chapter_ids=[item["id"] for item in family_chapters])
-            quality_issues.extend(unsupported_numeric_claims(checked["paragraphs"],
-                project_facts=_project_facts(input_revision.payload), source_context=_source_context(input_revision.payload)))
-            quality_issues.extend(inspect_chapter_contract(checked["paragraphs"],
-                approved_chapters=family_chapters, current_chapter_id=chapter["id"]))
-            quality_issues.extend(inspect_repeated_content(checked["paragraphs"], previous=existing_body))
-            quality_issues.extend(_chapter_source_issues(input_revision.payload, blueprint.payload, checked,
-                                                        items=source_items))
-            quality_issues = _blocking_content_issues(quality_issues, draft=draft)
-            if quality_issues:
-                raise ExecutionError("invalid_model_output", quality_issues=[
-                    {**issue, "chapter_id": chapter["id"], "paragraph_index": retained[issue["paragraph_index"]]}
-                    for issue in quality_issues])
-            if not any(_countable_body(paragraph) for paragraph in checked["paragraphs"]):
+        repeated = inspect_repeated_content(checked["paragraphs"], previous=existing_body)
+        removed = {issue["paragraph_index"] for issue in repeated
+                   if issue["code"] in {"near_duplicate_content", "partial_duplicate_content"}}
+        retained = [index for index in range(len(checked["paragraphs"])) if index not in removed]
+        checked["paragraphs"] = [checked["paragraphs"][index] for index in retained]
+        if not checked["paragraphs"]:
+            raise ExecutionError("invalid_model_output", quality_issues=[
+                {**issue, "chapter_id": chapter["id"]} for issue in repeated])
+        saved = {re.sub(r"\s+", "", paragraph) for paragraph in previous}
+        if not any((normalized := re.sub(r"\s+", "", paragraph)) and normalized not in saved
+                   for paragraph in checked["paragraphs"]):
+            raise ExecutionError("invalid_model_output")
+        quality_issues = inspect_content_quality(checked["paragraphs"], project_facts=_project_facts(input_revision.payload),
+                                                source_context=_source_context(input_revision.payload),
+                                                chapter_ids=[item["id"] for item in family_chapters])
+        quality_issues.extend(unsupported_numeric_claims(checked["paragraphs"],
+            project_facts=_project_facts(input_revision.payload), source_context=_source_context(input_revision.payload)))
+        quality_issues.extend(inspect_chapter_contract(checked["paragraphs"],
+            approved_chapters=family_chapters, current_chapter_id=chapter["id"]))
+        quality_issues.extend(inspect_repeated_content(checked["paragraphs"], previous=existing_body))
+        quality_issues.extend(_chapter_source_issues(input_revision.payload, blueprint.payload, checked,
+                                                    items=source_items))
+        quality_issues = _blocking_content_issues(quality_issues, draft=draft)
+        if quality_issues:
+            raise ExecutionError("invalid_model_output", quality_issues=[
+                {**issue, "chapter_id": chapter["id"], "paragraph_index": retained[issue["paragraph_index"]]}
+                for issue in quality_issues])
+        if not any(_countable_body(paragraph) for paragraph in checked["paragraphs"]):
+            raise ExecutionError("invalid_model_output", quality_issues=[{
+                "code": "chapter_body_missing", "chapter_id": chapter["id"], "paragraph_index": 0,
+                "claim": checked["paragraphs"][0], "correction": "仅补充本批实质分析，不能输出内部字段、占位文字或重复句。"}])
+        if guide_requirements and not previous:
+            from .product_feasibility_blocks import authored_blocks
+            if not any(block["type"] == "heading" and block["level"] == 2 for block in
+                       authored_blocks(checked["paragraphs"], "CHECK", [], [])):
                 raise ExecutionError("invalid_model_output", quality_issues=[{
-                    "code": "chapter_body_missing", "chapter_id": chapter["id"], "paragraph_index": 0,
-                    "claim": checked["paragraphs"][0], "correction": "仅补充本批实质分析，不能输出内部字段、占位文字或重复句。"}])
-            if guide_requirements and not previous:
-                from .product_feasibility_blocks import authored_blocks
-                if not any(block["type"] == "heading" and block["level"] == 2 for block in
-                           authored_blocks(checked["paragraphs"], "CHECK", [], [])):
-                    raise ExecutionError("invalid_model_output", quality_issues=[{
-                        "code": "chapter_structure_missing", "chapter_id": chapter["id"], "paragraph_index": 0,
-                        "claim": checked["paragraphs"][0],
-                        "correction": "首批正文须用独立一行的##标题列出实际论证小节并紧接实质正文，后续可用###细分，不能只返回标题。"}])
-            return checked
+                    "code": "chapter_structure_missing", "chapter_id": chapter["id"], "paragraph_index": 0,
+                    "claim": checked["paragraphs"][0],
+                    "correction": "首批正文须用独立一行的##标题列出实际论证小节并紧接实质正文，后续可用###细分，不能只返回标题。"}])
+        return checked
 
-        if existing and (not enforce_length or actual >= chapter_minimum):
-            continue
-        for part_index in range((chapter_minimum + 599) // 600 + 4 if enforce_length else 1):
-            previous = existing.payload["paragraphs"] if existing else []
-            remaining = max(0, chapter_minimum - actual)
+    if existing and (not enforce_length or actual >= chapter_minimum):
+        return existing
+    for part_index in range((chapter_minimum + 599) // 600 + 4 if enforce_length else 1):
+        previous = existing.payload["paragraphs"] if existing else []
+        remaining = max(0, chapter_minimum - actual)
+        if not parallel:
             _analysis_progress(task_id, fence, phase, 'running',
                                detail=f'正在编写{label}第 {chapter_index}/{chapter_total} 章：{chapter["title"]}（已保存 {actual} / 至少 {chapter_minimum} 字）',
-                               completed_count=chapter_index - 1, total_count=chapter_total)
-            payload = _writing_model(task_id, fence, attempt_id, settings.PRODUCT_WRITING_ROUTE, {
-                "action": "chapter", "family": family,
-                "deliverable": label,
-                **({"feasibility_requirements": guide_requirements,
-                    "feasibility_instruction": "逐项落实本章已批准适用小节的内容要素、编制要求、表图和测算，分批续写时优先补尚未展开的要求。source_text仅是指南资料，样例参数不是项目事实。public_research和project_inputs用于补证与缺项处理，不照抄为内部核对清单。适用但证据不足时写清具体缺项、获取方法和论证限制；明确不适用的细项不得套造。小节使用独立一行的##或###标题。每张适用表格先写独立一行的表号和标题，再写完整Markdown管道表（各列分隔行至少三个连字符），整表放在同一个paragraphs元素内，至少一行数据，单元格中的竖线转义为\\|。未知单元格写待确认，保留对象、单位及依据；表格不计入正文字数。图形在正文说明节点、关系、边界和绘图依据，后续图形流程负责生成图片。"}
-                   if guide_requirements else {}),
-                "content_focus": ("说明项目需求与调研依据、技术路线比较、系统架构、接口和设备选型依据、实施部署、联调测试、运维及验收方法。逐项解释选择理由、约束和可验证结果。"
-                                  if family == "technical-solution" else
-                                  "按系统规则中《榆林市市级政务信息化项目实施方案编制指南（建设类）》（2024年3月）的适用内容，结合项目真实建设范围深入论证；严格服从已批准的本章和来源，不新增已裁剪目录。内容适用但资料不足时保留并标注待确认，不得据此判为不适用或删除；金额、收益和法规要求须有可靠来源或项目资料依据，不得杜撰。"),
-                "approved_blueprint": {"purpose": blueprint.payload["purpose"], "audience": blueprint.payload["audience"],
-                                       "conditions": blueprint.payload["conditions"], "chapter": chapter,
-                                       "chapters": [{"id": item["id"], "title": item["title"]}
-                                                    for item in family_chapters]},
-                "input": model_input(task, input_revision.payload, chapter["source_ids"], chapter=chapter), "chapter": chapter,
-                "continuation": {"append_only": bool(previous), "saved_characters": actual,
-                                  **_saved_writing_context(previous),
-                                 "part": part_index + 1},
-                "length_target": {
-                    "family_characters": family_target,
-                    "chapter_characters": chapter_target,
-                    "minimum_chapter_characters": chapter_minimum,
-                    "this_response_characters": min(2400, max(600, remaining)) if enforce_length else chapter_target,
-                    "remaining_characters": remaining,
-                    "paragraph_max_characters": 2400,
-                    "instruction": "本次只返回新增正文段落，不重写或重复已保存内容。按本次字数分段扩展本章尚未覆盖的设计、实施、校验与风险；不得重复堆字，不得补造事实、参数、设备或来源。引用数量、金额、工期或目标时，保留资料中的原对象、单位和计划或实测状态，优先沿用完整事实原句；不能把并发人数改成若干个目标，把第几周的工作节点改成持续几周。未实测表示需要实际验证和记录，不表示测试数据必然无效或禁止量化测试。资料不足时明确待确认项，不编造结论。设备清单仅用于归类统计、容量与选型分析，不逐行照抄为正文；不要输出内部字段或占位词，不堆叠待审核尾注。总字数按去重且排除占位残片的正文非空白字符统计，不含标题、目录、图表或附件。",
-                },
-                "schema": {"chapter_id": chapter["id"], "title": chapter["title"],
-                           "paragraphs": ["string"], "source_ids": []},
-            }, output_validator=validate_output)
-            seen = {re.sub(r"\s+", "", paragraph) for paragraph in previous}
-            additions = []
-            for paragraph in payload["paragraphs"]:
-                normalized = re.sub(r"\s+", "", paragraph)
-                if normalized and normalized not in seen:
-                    additions.append(paragraph)
-                    seen.add(normalized)
-            if not additions:
-                raise ExecutionError("output_length_below_target")
-            payload["paragraphs"] = [*previous, *additions]
-            payload["source_ids"] = list(dict.fromkeys([*(existing.payload["source_ids"] if existing else []), *payload["source_ids"]]))
-            validate_chapter(payload)
-            _formal_paragraph_guard(payload["paragraphs"], family, draft=draft)
+                               completed_count=sum(not enforce_length or _chapter_character_count([saved]) >= chapter_minimum
+                                                   for saved in list(chapters.values())), total_count=chapter_total)
+        with db_lock:
+            chapter_input = model_input(task, input_revision.payload, chapter["source_ids"], chapter=chapter)
+        payload = _writing_model(task_id, fence, attempt_id, settings.PRODUCT_WRITING_ROUTE, {
+            "action": "chapter", "family": family,
+            "deliverable": label,
+            **({"writing_brief": writing_brief} if writing_brief is not None else {}),
+            **({"dependency_chapters": [{"family": saved.family, "sha256": saved.sha256,
+                    "chapter": saved.payload} for saved in dependency_chapters],
+                "dependency_boundary": "前置章节是已保存的正文交接，不是新增项目事实或批准资料；仅用于衔接分析、避免矛盾和重复，不能覆盖当前授权来源、批准目录与待确认条件。"}
+               if dependency_chapters else {}),
+            **({"feasibility_requirements": guide_requirements,
+                "feasibility_instruction": "逐项落实本章已批准适用小节的内容要素、编制要求、表图和测算，分批续写时优先补尚未展开的要求。source_text仅是指南资料，样例参数不是项目事实。public_research和project_inputs用于补证与缺项处理，不照抄为内部核对清单。适用但证据不足时写清具体缺项、获取方法和论证限制；明确不适用的细项不得套造。小节使用独立一行的##或###标题。每张适用表格先写独立一行的表号和标题，再写完整Markdown管道表（各列分隔行至少三个连字符），整表放在同一个paragraphs元素内，至少一行数据，单元格中的竖线转义为\\|。未知单元格写待确认，保留对象、单位及依据；表格不计入正文字数。图形在正文说明节点、关系、边界和绘图依据，后续图形流程负责生成图片。"}
+               if guide_requirements else {}),
+            "content_focus": ("说明项目需求与调研依据、技术路线比较、系统架构、接口和设备选型依据、实施部署、联调测试、运维及验收方法。逐项解释选择理由、约束和可验证结果。"
+                              if family == "technical-solution" else
+                              "按系统规则中《榆林市市级政务信息化项目实施方案编制指南（建设类）》（2024年3月）的适用内容，结合项目真实建设范围深入论证；严格服从已批准的本章和来源，不新增已裁剪目录。内容适用但资料不足时保留并标注待确认，不得据此判为不适用或删除；金额、收益和法规要求须有可靠来源或项目资料依据，不得杜撰。"),
+            "approved_blueprint": {"purpose": blueprint.payload["purpose"], "audience": blueprint.payload["audience"],
+                                   "conditions": blueprint.payload["conditions"], "chapter": chapter,
+                                   "chapters": [{"id": item["id"], "title": item["title"]}
+                                                for item in family_chapters]},
+            "input": chapter_input, "chapter": chapter,
+            "continuation": {"append_only": bool(previous), "saved_characters": actual,
+                              **_saved_writing_context(previous),
+                             "part": part_index + 1},
+            "length_target": {
+                "family_characters": family_target,
+                "chapter_characters": chapter_target,
+                "minimum_chapter_characters": chapter_minimum,
+                "this_response_characters": min(2400, max(600, remaining)) if enforce_length else chapter_target,
+                "remaining_characters": remaining,
+                "paragraph_max_characters": 2400,
+                "instruction": "本次只返回新增正文段落，不重写或重复已保存内容。按本次字数分段扩展本章尚未覆盖的设计、实施、校验与风险；不得重复堆字，不得补造事实、参数、设备或来源。引用数量、金额、工期或目标时，保留资料中的原对象、单位和计划或实测状态，优先沿用完整事实原句；不能把并发人数改成若干个目标，把第几周的工作节点改成持续几周。未实测表示需要实际验证和记录，不表示测试数据必然无效或禁止量化测试。资料不足时明确待确认项，不编造结论。设备清单仅用于归类统计、容量与选型分析，不逐行照抄为正文；不要输出内部字段或占位词，不堆叠待审核尾注。总字数按去重且排除占位残片的正文非空白字符统计，不含标题、目录、图表或附件。",
+            },
+            "schema": {"chapter_id": chapter["id"], "title": chapter["title"],
+                       "paragraphs": ["string"], "source_ids": []},
+        }, output_validator=validate_output)
+        seen = {re.sub(r"\s+", "", paragraph) for paragraph in previous}
+        additions = []
+        for paragraph in payload["paragraphs"]:
+            normalized = re.sub(r"\s+", "", paragraph)
+            if normalized and normalized not in seen:
+                additions.append(paragraph)
+                seen.add(normalized)
+        if not additions:
+            raise ExecutionError("output_length_below_target")
+        payload["paragraphs"] = [*previous, *additions]
+        payload["source_ids"] = list(dict.fromkeys([*(existing.payload["source_ids"] if existing else []), *payload["source_ids"]]))
+        validate_chapter(payload)
+        _formal_paragraph_guard(payload["paragraphs"], family, draft=draft)
+        with db_lock:
             existing = chapters[chapter["id"]] = _store(task_id, fence, "chapter", payload, input_revision.sha256,
                                                        blueprint.sha256, family=family)
             actual = _chapter_character_count([existing])
             _record_output_generation(task_id, fence, family, family_target, _chapter_character_count(chapters.values()))
-            if not enforce_length or actual >= chapter_minimum:
-                break
-        if enforce_length and actual < chapter_minimum:
-            raise ExecutionError("output_length_below_target")
+            if parallel:
+                _parallel_chapter_progress(task_id, fence, family, chapter["id"],
+                    saved_characters=actual, revision_id=str(existing.pk), chapter_sha256=existing.sha256)
+        if not enforce_length or actual >= chapter_minimum:
+            break
+    if enforce_length and actual < chapter_minimum:
+        raise ExecutionError("output_length_below_target")
+    return existing
+
+
+def _assemble_family(task_id, fence, task, input_revision, blueprint, family, chapters):
+    family_chapters = blueprint_chapters(blueprint.payload, family)
+    family_target = _family_target(family)
+    chapter_total = len(family_chapters)
+    phase = "writing_technical" if family == "technical-solution" else "writing_feasibility"
+    label = "技术方案" if family == "technical-solution" else "可行性研究报告"
+    draft = task.pending_action in {"generate_outputs", "three_drafts"}
+    enforce_length = settings.PRODUCT_ENFORCE_OUTPUT_LENGTH
     ordered = [chapters.get(item["id"]) for item in family_chapters]
     if not ordered or any(item is None for item in ordered):
         raise ExecutionError("chapters_incomplete")
@@ -1194,6 +1296,219 @@ def _generate_family(task_id, fence, attempt_id, task, input_revision, blueprint
     _analysis_progress(task_id, fence, phase, 'completed', detail=f'{label} {chapter_total} 章正文已保存',
                        completed_count=chapter_total, total_count=chapter_total)
     return ordered
+
+
+def _generate_family(task_id, fence, attempt_id, task, input_revision, blueprint, family):
+    chapters = current_chapters(task, input_revision.sha256, blueprint.sha256, family)
+    chapters = _reuse_source_expansion_chapters(task, fence, input_revision, blueprint, family, chapters)
+    for chapter in blueprint_chapters(blueprint.payload, family):
+        _generate_chapter(task_id, fence, attempt_id, task, input_revision, blueprint, family, chapter, chapters)
+    return _assemble_family(task_id, fence, task, input_revision, blueprint, family, chapters)
+
+
+_WRITING_STOP_CODES = frozenset({
+    "lease_lost", "permission_changed", "model_call_limit", "agent_root_limit", "model_authorization_required",
+    "retrieval_authorization_required", "source_snapshot_changed", "blueprint_approval_required", "agent_binding_stale",
+})
+
+
+@atomic()
+def _parallel_chapter_progress(task_id, fence, family=None, chapter_id=None, *, jobs=None, **details):
+    task = _guard(task_id, fence)
+    progress = dict(task.checkpoint.get("parallel_writing", {}))
+    if jobs is not None:
+        progress = {"jobs": jobs, **details}
+    else:
+        record = next(item for item in progress["jobs"]
+                      if item["family"] == family and item["chapter_id"] == chapter_id)
+        record.update(details, updated_at=timezone.now().isoformat())
+    records = progress["jobs"]
+    progress.update(active_count=sum(item["status"] == "running" for item in records),
+                    completed_count=sum(item["status"] == "completed" for item in records),
+                    total_count=len(records), updated_at=timezone.now().isoformat())
+    task.checkpoint = {**task.checkpoint, "parallel_writing": progress}
+    _model_activity(task)
+    task.save(update_fields=["checkpoint", "updated_at"])
+    for report_family in dict.fromkeys(item["family"] for item in records):
+        selected = [item for item in records if item["family"] == report_family]
+        complete = sum(item["status"] == "completed" for item in selected)
+        active = sum(item["status"] == "running" for item in selected)
+        pending = any(item["status"] in {"pending", "running", "retry_wait"} for item in selected)
+        status = "running" if pending else "completed" if complete == len(selected) else "waiting"
+        phase = "writing_technical" if report_family == "technical-solution" else "writing_feasibility"
+        label = "技术方案" if report_family == "technical-solution" else "可行性研究报告"
+        _analysis_progress(task_id, fence, phase, status,
+            detail=f"{label}已完成 {complete}/{len(selected)} 章，当前 {active} 章并行编写，正文逐批保存",
+            completed_count=complete, total_count=len(selected), active_count=active,
+            saved_characters=sum(item.get("saved_characters", 0) for item in selected))
+
+
+def _writing_thread(operation, *args, **kwargs):
+    close_old_connections()
+    try:
+        return operation(*args, **kwargs)
+    finally:
+        close_old_connections()
+        connections.close_all()
+
+
+def _writing_concurrency(task, requested):
+    if not task.agent_root_id:
+        return requested
+    from .agent_runtime import AgentDenied
+    from .product_agent import runtime_guard_for_task
+
+    with db_lock:
+        try:
+            policy = runtime_guard_for_task(task).check().policy
+        except AgentDenied as error:
+            raise ExecutionError("agent_binding_stale") from error
+    limit, active = policy.get("max_concurrent"), policy.get("active")
+    if type(limit) is not int or not isinstance(active, dict) or limit <= len(active):
+        raise ExecutionError("agent_root_limit")
+    return min(requested, limit - len(active))
+
+
+def _generate_families(task_id, fence, attempt_id, task, input_revision, blueprint, families):
+    """One pool for all reports; dependent chapters receive committed predecessor prose."""
+    from .product_steps import StepRetryPending
+    from .product_writing_plan import build_writing_plan
+
+    try:
+        jobs = build_writing_plan(blueprint.payload, families)
+    except ValueError as error:
+        raise ExecutionError("invalid_blueprint") from error
+    results, failures = {}, []
+    # An outer caller transaction owns an uncommitted snapshot invisible to new
+    # connections. Production claims run outside it; keep such callers serial.
+    if connection.in_atomic_block or len(jobs) <= 1:
+        for family in families:
+            try:
+                results[family] = _generate_family(task_id, fence, attempt_id, task, input_revision, blueprint, family)
+            except Exception as error:
+                if getattr(error, "code", "execution_failed") in _WRITING_STOP_CODES:
+                    raise
+                failures.append(error)
+        return results, failures
+
+    concurrency = min(len(jobs), max(1, min(32, int(getattr(settings, "PRODUCT_WRITING_CONCURRENCY", 12)))))
+    concurrency = _writing_concurrency(task, concurrency)
+    chapters = {}
+    for family in families:
+        saved = current_chapters(task, input_revision.sha256, blueprint.sha256, family)
+        chapters[family] = _reuse_source_expansion_chapters(task, fence, input_revision, blueprint, family, saved)
+    identities = {(job["family"], job["chapter_id"]): job for job in jobs}
+    dependencies = {}
+    states = {}
+    progress = []
+    for identity, job in identities.items():
+        family, chapter_id = identity
+        dependencies[identity] = [((family, identifier) if (family, identifier) in identities
+            else next(key for key in identities if key[1] == identifier)) for identifier in job["depends_on"]]
+        saved = chapters[family].get(chapter_id)
+        actual = _chapter_character_count([saved]) if saved else 0
+        count = max(1, len(blueprint_chapters(blueprint.payload, family)))
+        minimum = _minimum_characters((_family_target(family) + count - 1) // count)
+        states[identity] = "completed" if saved and (not settings.PRODUCT_ENFORCE_OUTPUT_LENGTH or actual >= minimum) else "pending"
+        progress.append({"family": family, "chapter_id": chapter_id, "title": job["brief"]["chapter"]["title"],
+                         "depends_on": job["depends_on"], "status": states[identity], "saved_characters": actual,
+                         "minimum_characters": minimum, "chapter_sha256": saved.sha256 if saved else ""})
+    _parallel_chapter_progress(task_id, fence, jobs=progress, attempt_id=str(attempt_id), concurrency=concurrency)
+    running = {}
+    retry_after = {}
+    stopped = None
+    with ThreadPoolExecutor(max_workers=concurrency, thread_name_prefix="product-chapter") as pool:
+        while running or any(state == "pending" for state in states.values()):
+            if stopped is None:
+                try:
+                    _renew(task_id, fence)
+                    for identity, job in identities.items():
+                        if states[identity] != "pending":
+                            continue
+                        if identity in retry_after and retry_after[identity] > timezone.now():
+                            continue
+                        parents = dependencies[identity]
+                        if any(states[parent] in {"failed", "blocked", "cancelled"} for parent in parents):
+                            states[identity] = "blocked"
+                            _parallel_chapter_progress(task_id, fence, *identity, status="blocked",
+                                                       error_code="dependency_incomplete")
+                            continue
+                        if len(running) >= concurrency or not all(states[parent] == "completed" for parent in parents):
+                            continue
+                        states[identity] = "running"
+                        retry_after.pop(identity, None)
+                        _parallel_chapter_progress(task_id, fence, *identity, status="running", error_code="", retry_after=None)
+                        family, chapter_id = identity
+                        with db_lock:
+                            predecessors = [chapters[parent[0]][parent[1]] for parent in parents]
+                        running[pool.submit(_writing_thread, _generate_chapter,
+                            task_id, fence, attempt_id, task, input_revision, blueprint, family,
+                            job["brief"]["chapter"], chapters[family], writing_brief=job["brief"],
+                            dependency_chapters=predecessors,
+                            parallel=True)] = identity
+                except Exception as error:
+                    stopped = error
+                    failures.append(error)
+            if stopped is not None:
+                for future, identity in running.items():
+                    if future.cancel():
+                        states[identity] = "cancelled"
+                for identity in states:
+                    if states[identity] == "pending":
+                        states[identity] = "cancelled"
+            if not running:
+                if any(state == "pending" for state in states.values()):
+                    sleep(1)
+                    continue
+                break
+            done, _ = wait(running, timeout=1, return_when=FIRST_COMPLETED)
+            for future in done:
+                identity = running.pop(future)
+                try:
+                    future.result()
+                    states[identity] = "completed"
+                    if stopped is None:
+                        _parallel_chapter_progress(task_id, fence, *identity, status="completed")
+                except CancelledError:
+                    states[identity] = "cancelled"
+                except StepRetryPending as error:
+                    if stopped is None:
+                        states[identity] = "pending"
+                        retry_after[identity] = error.retry_after
+                        _parallel_chapter_progress(task_id, fence, *identity, status="retry_wait",
+                            error_code=error.cause_code, retry_after=error.retry_after.isoformat())
+                    else:
+                        states[identity] = "cancelled"
+                except Exception as error:
+                    states[identity] = "failed"
+                    failures.append(error)
+                    code = getattr(error, "code", "execution_failed")
+                    if code in _WRITING_STOP_CODES:
+                        stopped = error
+                    if stopped is None:
+                        _parallel_chapter_progress(task_id, fence, *identity, status="failed", error_code=code)
+    # The executor has joined every running call before any caller can _finish.
+    if stopped is not None:
+        try:
+            with atomic():
+                fresh = _guard(task_id, fence)
+                settled = deepcopy(fresh.checkpoint["parallel_writing"])
+                for record in settled["jobs"]:
+                    record["status"] = states[(record["family"], record["chapter_id"])]
+                    if record["status"] == "cancelled":
+                        record["error_code"] = getattr(stopped, "code", "execution_failed")
+                _parallel_chapter_progress(task_id, fence, jobs=settled.pop("jobs"), **settled)
+        except ExecutionError:
+            # A cancelled or fenced task is no longer ours to update.
+            pass
+        raise stopped
+    for family in families:
+        if all(states[identity] == "completed" for identity in identities if identity[0] == family):
+            try:
+                results[family] = _assemble_family(task_id, fence, task, input_revision, blueprint, family, chapters[family])
+            except Exception as error:
+                failures.append(error)
+    return results, failures
 
 
 def _item_in_sources(item, allowed):
@@ -1269,7 +1584,7 @@ def model_input(task, payload, source_ids=None, *, chapter=None):
     return context
 
 
-@transaction.atomic
+@atomic()
 def _analysis_progress(task_id, fence, phase, status, **details):
     task = _guard(task_id, fence)
     progress = dict(task.checkpoint.get("analysis_progress", {}))
@@ -1738,7 +2053,7 @@ def _valid_cached_review_batch(record, index, request, binding, calls):
                and call.get("response_sha256") == record["response_sha256"] for call in calls if isinstance(call, dict))
 
 
-@transaction.atomic
+@atomic()
 def _review_checkpoint(task_id, fence, family, binding, requests, record=None):
     from .product_content_quality import content_quality_policy_hash
     task = _guard(task_id, fence)
@@ -1796,6 +2111,8 @@ def _review_checkpoint(task_id, fence, family, binding, requests, record=None):
 
 
 def _review_family(task_id, fence, attempt_id, task, input_revision, blueprint, chapters, family="", *, guide_only=False):
+    from .product_steps import run_step
+
     family = family or "technical-solution"
     phase = 'review_feasibility' if family == 'feasibility' else 'review_technical'
     label = '可行性研究报告' if family == 'feasibility' else '技术方案'
@@ -1813,14 +2130,23 @@ def _review_family(task_id, fence, attempt_id, task, input_revision, blueprint, 
             # Even a zero-call recovery rechecks current permissions and fencing.
             _review_checkpoint(task_id, fence, family, binding, requests)
         else:
-            reviewer = _model(task_id, fence, attempt_id, settings.PRODUCT_REVIEW_ROUTE, request)
-            latest_call = DocumentTask.objects.get(pk=task_id).checkpoint["calls"][-1]
-            batch = {"batch": index, "request_sha256": digest(request), "passed": _validated_reviewer(reviewer, request),
-                     "reviewer_passed": reviewer["passed"], "model_call_input_sha256": latest_call["input_hash"],
-                     "model_call_attempt_id": latest_call["attempt_id"], "model_call": latest_call["call"],
-                     "response_sha256": digest(reviewer), "issues": list(reviewer["issues"]), "fragments": _review_fragments(request),
-                     **({"guide_checks": reviewer["guide_checks"]} if "guide_checks" in reviewer else {})}
+            def review_batch():
+                reviewer = _model(task_id, fence, attempt_id, settings.PRODUCT_REVIEW_ROUTE, request)
+                latest_call = DocumentTask.objects.get(pk=task_id).checkpoint["calls"][-1]
+                result = {"batch": index, "request_sha256": digest(request), "passed": _validated_reviewer(reviewer, request),
+                         "reviewer_passed": reviewer["passed"], "model_call_input_sha256": latest_call["input_hash"],
+                         "model_call_attempt_id": latest_call["attempt_id"], "model_call": latest_call["call"],
+                         "response_sha256": digest(reviewer), "issues": list(reviewer["issues"]), "fragments": _review_fragments(request),
+                         **({"guide_checks": reviewer["guide_checks"]} if "guide_checks" in reviewer else {})}
+                _review_checkpoint(task_id, fence, family, binding, requests, result)
+                return result
+
+            # The report checkpoint alone owns reuse; this step bounds recovery,
+            # and must not resurrect a batch rejected by that checkpoint.
+            batch = run_step(task_id, fence, f"review:{family}:{index}", {**binding, "batch": index}, review_batch,
+                             validate=lambda _result: False)
             _review_checkpoint(task_id, fence, family, binding, requests, batch)
+            reviewer = _batch_reviewer(batch, request)
         batch_passed = _validated_reviewer(reviewer, request)
         guide_audit = request.get("review_contract", {}).get("guide_audit_only")
         if guide_audit:
@@ -1872,33 +2198,8 @@ def _draft_review_binding(input_revision, blueprint, chapters):
             "quality_policy_sha256": content_quality_policy_hash()}
 
 
-def _guide_review_current(task, model, input_revision, blueprint, chapters):
-    if not isinstance(model, dict):
-        return False
-    try:
-        requests, scope = _planned_review_requests(task, input_revision, blueprint, chapters, "feasibility", guide_only=True)
-        binding = _review_binding(task, input_revision, blueprint, chapters, requests)
-        batches = model.get("coverage", {}).get("batches", [])
-        calls = DocumentTask.objects.get(pk=task.pk).checkpoint.get("calls", [])
-        if (model.get("scope") != scope or model.get("coverage", {}).get("review_binding") != binding
-                or len(batches) != len(requests) or not requests
-                or not all(_valid_cached_review_batch(batch, index, request, binding, calls)
-                           for index, (batch, request) in enumerate(zip(batches, requests), 1))):
-            return False
-        result = product_feasibility.reduce_guide_reviews(requests, [_batch_reviewer(batch, request)
-                                                            for batch, request in zip(batches, requests)])
-        issues = list(dict.fromkeys([*(issue for batch in batches for issue in batch["issues"]), *result["issues"]]))
-        return (model.get("guide_coverage") == result
-                and model.get("coverage", {}).get("complete") is True
-                and model.get("coverage", {}).get("all_batches_passed") is result["passed"]
-                and model.get("issues") == issues
-                and model.get("status") == ("passed" if result["passed"] and not issues else "issues_found"))
-    except (ProductError, ProductRulesError, ExecutionError, KeyError, TypeError, ValueError):
-        return False
-
-
 def _content_review_current(task, review, input_revision, blueprint, chapters):
-    """Bind a complete real review to the exact saved body and current policy."""
+    """Bind model review or draft program checks to the exact saved body and policy."""
     from .product_content_quality import content_quality_policy_hash
 
     if not review or review.change_reason != "worker_review":
@@ -1924,9 +2225,7 @@ def _content_review_current(task, review, input_revision, blueprint, chapters):
             and checked.get("quality_policy_sha256") == content_quality_policy_hash()
             and checked.get("program_checks_complete") is True and checked.get("passed") is False
             and checked.get("full_document_human_review_required") is True
-            and model == {"status": "not_run", "scope": "program_only", "full_document_human_review_required": True}
-            and (review.family != "feasibility" or not blueprint.payload.get("feasibility_guide")
-                 or _guide_review_current(task, checked.get("guide_review"), input_revision, blueprint, chapters)))
+            and model == {"status": "not_run", "scope": "program_only", "full_document_human_review_required": True})
     coverage = model.get("coverage", {})
     if not isinstance(coverage, dict):
         return False
@@ -2024,21 +2323,13 @@ def _ensure_content_review(task, fence, attempt_id, input_revision, blueprint, c
             model_review={"status": "not_run", "scope": "program_only", "full_document_human_review_required": True})
         review = task.revisions.filter(kind="review", family=family).order_by("-version").first()
         current = _content_review_current(task, review, input_revision, blueprint, chapters)
-        if family == "feasibility" and blueprint.payload.get("feasibility_guide"):
-            checked["guide_review"] = (review.payload["guide_review"] if current else
-                _review_family(task.pk, fence, attempt_id, task, input_revision, blueprint, chapters,
-                               family, guide_only=True))
-            guide = checked["guide_review"]["guide_coverage"]
-            checked["issues"].extend({"code": "feasibility_requirement_gap", "text": issue}
-                                     for issue in guide["issues"])
-            checked["issues"].extend({"code": "feasibility_requirement_pending",
-                "text": f"指南要求 {requirement_id} 尚待补充或完整核对。"} for requirement_id in guide.get("pending", []))
-            checked["draft_quality"].update(quality_issue_count=len(checked["issues"]),
-                quality_issue_codes=sorted({issue["code"] for issue in checked["issues"]}))
         if current and review.payload.get("diagram_review"):
             checked["diagram_review"] = review.payload["diagram_review"]
         if not current or checked != review.payload:
             review = _store(task.pk, fence, "review", checked, input_revision.sha256, blueprint.sha256, family=family)
+        phase = "review_feasibility" if family == "feasibility" else "review_technical"
+        _analysis_progress(task.pk, fence, phase, "skipped",
+                           detail="AI复核未执行，文件生成后由人工统一审核", human_review_required=True)
         return review
     if blocking:
         # Keep rejected program evidence reviewable without invoking the model
@@ -2157,7 +2448,7 @@ def _generate_diagrams_uncached(task_id, fence, attempt_id, document, *, draft=F
             if (draft and not document.get("diagram_render_feedback") and error.diagram_validation_reason not in {
                     "diagram evidence outside authored chapter", "diagram identifiers differ from planned figures"}
                     and not any(issue["code"] == "body_source_identifier" for issue in error.quality_issues)):
-                with transaction.atomic():
+                with atomic():
                     task = _guard(task_id, fence)
                     excerpts = excerpt_diagrams(figures, paragraphs)
                     task.checkpoint["calls"][-1]["diagram_excerpt_fallback"] = {
@@ -2180,7 +2471,7 @@ def _diagram_progress(task_id, fence, family, status, *, figure_count, pending_c
     _analysis_progress(task_id, fence, phase, status, detail=details[status], figure_count=figure_count, pending_count=pending_count)
     if status in {"completed", "pending"}:
         from .product_diagrams import minimum_diagrams
-        with transaction.atomic():
+        with atomic():
             task = _guard(task_id, fence)
             progress = dict(task.checkpoint.get("output_generation", {}))
             progress[family] = {**progress.get(family, {}), "diagram_count": figure_count,
@@ -2236,7 +2527,7 @@ def _render(task, fence, attempt_id, input_revision, blueprint, chapters):
             "template_approval_hash": digest(candidate["render_evidence"]["template_approval"]),
             "draft_fallback": {"path": generated["path"], "sha256": generated["sha256"]}}
         generated = {**candidate, "path": rendered_docx["path"], "sha256": rendered_docx["sha256"], "render_evidence": evidence}
-    with transaction.atomic():
+    with atomic():
         fresh = _guard(task.pk, fence)
         version = (DocumentArtifact.objects.filter(task=fresh).aggregate(value=Max("version"))["value"] or 0) + 1
         DocumentArtifact.objects.create(task=fresh, version=version, path=generated["path"], sha256=generated["sha256"],
@@ -2249,7 +2540,7 @@ def _render(task, fence, attempt_id, input_revision, blueprint, chapters):
 def _execute_claim_action(task_id, fence, attempt_id):
     task = DocumentTask.objects.get(pk=task_id)
     try:
-        with transaction.atomic():
+        with atomic():
             _guard(task_id, fence)
         input_revision = current_revision(task, "input")
         if input_revision is None:
@@ -2267,7 +2558,7 @@ def _execute_claim_action(task_id, fence, attempt_id):
                 snapshot = retrieve_for_task(task, query)
             except RetrievalError as error:
                 raise ExecutionError("retrieval_" + error.code) from None
-            with transaction.atomic():
+            with atomic():
                 fresh = _guard(task_id, fence)
                 if not authorization_current(fresh, snapshot)["current"]:
                     raise ExecutionError("retrieval_authorization_required")
@@ -2378,7 +2669,7 @@ def _execute_claim_action(task_id, fence, attempt_id):
                 from .product_models import DocumentStep
                 # Locally valid decisions can conflict across batches. A manual retry
                 # must reconsider them, rather than replay the same rejected plan.
-                with transaction.atomic():
+                with atomic():
                     _guard(task_id, fence)
                     DocumentStep.objects.filter(task_id=task_id, key__startswith="blueprint:scope:",
                         input_hash__in=scope_step_hashes, status="completed").update(status="pending", error_code="invalid_blueprint")
@@ -2398,6 +2689,7 @@ def _execute_claim_action(task_id, fence, attempt_id):
             from .product_documents import preflight_document_rendering
             from .product_steps import StepRetryPending
             from .product_delivery import artifact_delivery, finish_output_delivery
+            from .product_writing_revision import ensure_writing_consistency
 
             families = task.checkpoint.get("output_families", ["technical-solution", "feasibility", "presentation"])
             if (not isinstance(families, list) or not families or any(family not in {"technical-solution", "feasibility", "presentation"} for family in families)
@@ -2406,10 +2698,28 @@ def _execute_claim_action(task_id, fence, attempt_id):
                 raise ExecutionError("invalid_request")
             preflight_document_rendering(draft=True)
             reports = []
-            failures = []
-            for family in (value for value in families if value != "presentation"):
+            report_families = [value for value in families if value != "presentation"]
+            chapters_by_family, failures = _generate_families(
+                task_id, fence, attempt_id, task, input_revision, blueprint, report_families)
+            blocked = set()
+            if chapters_by_family:
+                ordered = [chapter for family in report_families for chapter in chapters_by_family.get(family, [])]
+                _content_quality_guard(ordered, input_revision.payload, blueprint.payload, draft=True)
                 try:
-                    _generate_family(task_id, fence, attempt_id, task, input_revision, blueprint, family)
+                    consistency = ensure_writing_consistency(
+                        task_id, fence, attempt_id, task, input_revision, blueprint, chapters_by_family)
+                    chapters_by_family = consistency["chapters"]
+                    blocked = set(consistency["blocked_families"])
+                    failures.extend(consistency.get("failures", []))
+                    if blocked:
+                        failures.append(ExecutionError("content_review_required"))
+                except Exception as error:
+                    if getattr(error, "code", "execution_failed") in _WRITING_STOP_CODES:
+                        raise
+                    failures.append(error)
+                    blocked.update(chapters_by_family)
+            for family in (value for value in report_families if value in chapters_by_family and value not in blocked):
+                try:
                     _analysis_progress(task_id, fence, 'outputs', 'running', detail='正文已保存，正在制作可下载文件')
                     reports.extend(generate_report_drafts(task, fence, attempt_id, input_revision, blueprint,
                                                          families=[family]))
@@ -2435,6 +2745,22 @@ def _execute_claim_action(task_id, fence, attempt_id):
             return finish_output_delivery(task, fence, attempt_id, families=families)
         if task.pending_action == "three_drafts":
             from .product_three_drafts import generate_three_drafts
+            from .product_steps import StepRetryPending
+            from .product_writing_revision import ensure_writing_consistency
+            chapters_by_family = {}
+            for family in ("technical-solution", "feasibility"):
+                current = current_chapters(task, input_revision.sha256, blueprint.sha256, family)
+                ordered = [current.get(chapter["id"]) for chapter in blueprint_chapters(blueprint.payload, family)]
+                if not ordered or any(chapter is None for chapter in ordered):
+                    raise ExecutionError("chapters_incomplete")
+                chapters_by_family[family] = ordered
+            consistency = ensure_writing_consistency(
+                task_id, fence, attempt_id, task, input_revision, blueprint, chapters_by_family)
+            failures = consistency.get("failures", [])
+            if failures:
+                raise next((error for error in failures if isinstance(error, StepRetryPending)), failures[0])
+            if consistency["blocked_families"]:
+                raise ExecutionError("content_review_required")
             return generate_three_drafts(task, fence, attempt_id, input_revision, blueprint)
         if task.pending_action == "presentation":
             from .product_three_drafts import generate_presentation
@@ -2470,7 +2796,7 @@ def _execute_claim_action(task_id, fence, attempt_id):
                    "office_render_failed", "office_render_invalid_output", "artifact_hash_mismatch", "invalid_path",
                    "retrieval_disabled", "retrieval_authorization_required", "retrieval_auth_failed", "retrieval_unavailable", "retrieval_invalid_response", "retrieval_source_conflict",
                    "model_call_limit", "attempt_limit", "output_truncated", "output_length_below_target", "repeated_body_filler", "investment_evidence_required", "lease_lost", "permission_changed", "invalid_model_output", "condition_missing", "invalid_blueprint", "invalid_template_version", "agent_binding_stale", "agent_root_limit",
-                   "ragflow_required", "rate_limited", "timeout", "gateway_unavailable", "target_not_allowed", "missing_key", "forbidden", "disabled", "execution_failed",
+                   "ragflow_required", "rate_limited", "timeout", "gateway_unavailable", "upstream_error", "upstream_invalid_request", "upstream_auth", "target_not_allowed", "missing_key", "forbidden", "disabled", "execution_failed",
                    "busy", "invalid_request", "internal_error", "model_configuration_changed", "unsupported_capability",
                    "delivery_incomplete", "web_search_unavailable", "web_search_invalid_response", "web_search_no_hits", "web_search_query_required",
                    "unconfigured", "invalid_response", "request_too_large", "response_too_large", "document_validation_failed", "document_render_failed", "diagram_generation_required", "diagram_generation_invalid", "diagram_render_failed", "stale_pair", "invalid_report", "report_approval_required", "presentation_unavailable"}

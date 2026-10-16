@@ -1,6 +1,8 @@
-import { useState } from "react";
-import { ArrowRight, CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Folder, MoreHorizontal, Plus, Search } from "lucide-react";
+import { useEffect, useId, useRef, useState } from "react";
+import { ArrowRight, CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Clock3, Folder, MoreHorizontal, Pin, Plus, Search, Trash2 } from "lucide-react";
+import { ApiError } from "../api";
 import { CenterLink } from "../shared";
+import { deleteTask, pinTask } from "./product-api";
 import type { ProductOverview, TaskSummary } from "./product-api";
 import { EmptyState, LoadState } from "./workbench-shared";
 import { formatDate, goProduct, projectUrl, stageNames, stateNames, useProductOverview } from "./workbench-state";
@@ -26,6 +28,29 @@ const errorLabels: Record<string, string> = {
   revision_requested: "蓝图待修改",
   source_permission_changed: "资料权限需确认",
 };
+
+function ProjectActions({ task, busy, onAction }: { task: TaskSummary; busy: boolean; onAction: (task: TaskSummary, action: "pin" | "delete") => void }) {
+  const id = useId(), menu = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState({ top: 0, left: 0 });
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (!open) return;
+    const close = () => menu.current?.hidePopover();
+    window.addEventListener("scroll", close, true); window.addEventListener("resize", close);
+    return () => { window.removeEventListener("scroll", close, true); window.removeEventListener("resize", close); };
+  }, [open]);
+  const act = (action: "pin" | "delete") => { menu.current?.hidePopover(); onAction(task, action); };
+  return <>
+    <button type="button" disabled={busy} popoverTarget={id} aria-label={task.title + "的更多操作"} aria-expanded={open} aria-controls={id} onClick={event => {
+      const rect = event.currentTarget.getBoundingClientRect();
+      setPosition({ left: Math.max(8, Math.min(rect.right - 148, window.innerWidth - 156)), top: rect.bottom + 104 > window.innerHeight ? Math.max(8, rect.top - 104) : rect.bottom + 6 });
+    }}><MoreHorizontal size={20}/></button>
+    <div id={id} ref={menu} popover="auto" className="pp-project-menu" role="group" aria-label={task.title + "的项目操作"} style={position} onToggle={event => setOpen(event.newState === "open")}>
+      <button type="button" disabled={busy} autoFocus onClick={() => act("pin")}><Pin size={16}/>{task.is_pinned ? "取消置顶" : "置顶"}</button>
+      <button type="button" disabled={busy} className="pp-delete-project" onClick={() => act("delete")}><Trash2 size={16}/>删除</button>
+    </div>
+  </>;
+}
 
 export function ProjectStatus({ task }: { task: TaskSummary }) {
   const tone = task.state === "COMPLETED" ? "good" : ["FAILED", "WAITING_INPUT"].includes(task.state) ? "warning" : ["CANCELLED", "DRAFT"].includes(task.state) ? "neutral" : "info";
@@ -59,14 +84,33 @@ export default function ProductProjects({ view = "projects" }: { view?: keyof ty
 
 function ProjectList({ view, filter, query, page, pageSize }: { view: keyof typeof views; filter: string; query: string; page: number; pageSize: number }) {
   const [search, setSearch] = useState(query);
+  const lock = useRef(false);
+  const [busy, setBusy] = useState(false), [actionError, setActionError] = useState("");
   const requestQuery = new URLSearchParams({ filter, q: query, page: String(page), page_size: String(pageSize) }).toString();
-  const { data, error, reload } = useProductOverview(requestQuery);
+  const { data, error, reload } = useProductOverview(requestQuery, true, lock);
   const config = views[view];
   const returnTo = window.location.pathname + window.location.search;
   const link = (nextFilter = filter, nextPage = 1, nextQuery = query, nextSize = pageSize) => "/centers/product/" + view + "?" + new URLSearchParams({ filter: nextFilter, page: String(nextPage), q: nextQuery, page_size: String(nextSize) });
   const projectLink = (id: string) => projectUrl(id, config.tab) + "&returnTo=" + encodeURIComponent(returnTo);
   const currentPage = data?.pagination.page ?? page;
   const totalPages = data?.pagination.pages ?? 0;
+
+  async function act(task: TaskSummary, action: "pin" | "delete") {
+    if (lock.current || !task.can_manage) return;
+    lock.current = true;
+    if (action === "delete" && !window.confirm(`确认删除项目“${task.title}”？删除后将结束该项目的后台任务，并从项目列表移除，且不可恢复。`)) { lock.current = false; return; }
+    setBusy(true); setActionError("");
+    try {
+      if (action === "delete") await deleteTask(task.id, task.version);
+      else await pinTask(task.id, task.version, !task.is_pinned);
+      window.dispatchEvent(new Event("product:tasks-changed"));
+      if (action === "delete" && data?.projects.length === 1 && currentPage > 1) goProduct(link(filter, currentPage - 1));
+      else reload();
+    } catch (reason) {
+      setActionError(reason instanceof Error ? reason.message : "项目操作失败，请重试。");
+      if (reason instanceof ApiError && reason.status === 409) reload();
+    } finally { lock.current = false; setBusy(false); }
+  }
 
   return <div className="pd-workspace pp-page">
     <header className="pp-heading"><div><h1>{config.title}</h1><p>{config.description}</p></div><CenterLink href="/centers/product/new" className="pp-primary"><Plus size={19}/>新建项目</CenterLink></header>
@@ -86,14 +130,15 @@ function ProjectList({ view, filter, query, page, pageSize }: { view: keyof type
         <button className="pp-reset" onClick={() => goProduct(link("all", 1, "", pageSize))}>重置</button>
       </div>
       <p id="pp-filter-note" className="pp-filter-note">仅显示当前账号可访问的项目。阶段、所有者和日期筛选暂不可用。</p>
+      {actionError && <p className="pp-action-error" role="alert">{actionError}</p>}
       {!data ? <LoadState error={error} reload={reload}/> : data.projects.length ? <div className="pp-table-wrap"><table className="pp-table">
         <colgroup><col style={{ width: "35%" }}/><col style={{ width: "12%" }}/><col style={{ width: "13%" }}/><col style={{ width: "12%" }}/><col style={{ width: "14%" }}/><col style={{ width: "14%" }}/></colgroup>
         <thead><tr><th>项目名称</th><th>当前阶段</th><th>状态</th><th>项目所有者</th><th>最近更新</th><th>操作</th></tr></thead>
         <tbody>{data.projects.map(task => <tr key={task.id}>
-          <td><CenterLink href={projectLink(task.id)} className="pp-project-name"><Folder size={20}/><strong title={task.title}>{task.title}</strong></CenterLink></td>
+          <td><div className="pp-project-title"><CenterLink href={projectLink(task.id)} className="pp-project-name"><Folder size={20}/><strong title={task.title}>{task.title}</strong></CenterLink>{task.is_pinned && <span className="pp-pinned"><Pin size={12}/>置顶</span>}</div></td>
           <td>{stageNames[task.stage] || "阶段待确认"}</td><td><ProjectStatus task={task}/></td>
           <td>{task.owner_name || "未提供"}</td><td>{formatDate(task.updated_at)}</td>
-          <td><div className="pp-row-actions"><CenterLink href={projectLink(task.id)}>{config.action}<ArrowRight size={16}/></CenterLink><button disabled aria-label="更多操作暂不可用" title="当前暂无更多操作"><MoreHorizontal size={20}/></button></div></td>
+          <td><div className="pp-row-actions"><CenterLink href={projectLink(task.id)}>{config.action}<ArrowRight size={16}/></CenterLink>{task.can_manage && <ProjectActions task={task} busy={busy} onAction={(item, action) => void act(item, action)}/>}</div></td>
         </tr>)}</tbody>
       </table></div> : <EmptyState title={query || filter !== "all" ? "没有符合条件的项目" : "尚未创建项目"} detail={query || filter !== "all" ? "调整关键词或状态筛选后再试。" : "新建项目后即可开始蓝图与成果编制。"} create={!query && filter === "all"}/>}
       <footer className="pp-pagination">

@@ -1,0 +1,86 @@
+{
+  "source": "User supplied enterprise detail style reference, 2026-10-16",
+  "source_sha256": "b7e274fd80dd67dd53af3bf07c487ed920ee80142f67756aa1d8933fde82fe3c",
+  "assets": [
+    {
+      "file": "hero-architecture.png",
+      "crop": [
+        1010,
+        58,
+        1373,
+        244
+      ],
+      "purpose": "decorative reference illustration, not a company premises claim"
+    },
+    {
+      "file": "ksznkj-logo.png",
+      "crop": [
+        69,
+        90,
+        188,
+        208
+      ],
+      "purpose": "company-specific supplied brand"
+    },
+    {
+      "file": "business-architecture.png",
+      "crop": [
+        294,
+        734,
+        344,
+        808
+      ],
+      "purpose": "decorative reference illustration, not a company premises claim"
+    },
+    {
+      "file": "business-lighting.png",
+      "crop": [
+        604,
+        734,
+        650,
+        808
+      ],
+      "purpose": "decorative reference illustration, not a company premises claim"
+    },
+    {
+      "file": "business-network.png",
+      "crop": [
+        910,
+        734,
+        953,
+        808
+      ],
+      "purpose": "decorative reference illustration, not a company premises claim"
+    },
+    {
+      "file": "business-park.png",
+      "crop": [
+        302,
+        825,
+        344,
+        902
+      ],
+      "purpose": "decorative reference illustration, not a company premises claim"
+    },
+    {
+      "file": "business-city.png",
+      "crop": [
+        618,
+        825,
+        650,
+        902
+      ],
+      "purpose": "decorative reference illustration, not a company premises claim"
+    },
+    {
+      "file": "business-iot.png",
+      "crop": [
+        921,
+        825,
+        953,
+        902
+      ],
+      "purpose": "decorative reference illustration, not a company premises claim"
+    }
+  ]
+}

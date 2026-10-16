@@ -1,0 +1,22 @@
+{
+  "overall": "PASS",
+  "scope": "Actual shared detail component SSR over all 1283 real list projections per existing role, editable and read-only branches; not 1283 browser navigations",
+  "checks": [
+    {
+      "identity": "manager_user",
+      "companies": 1283,
+      "permission_variants": 2,
+      "enabled": 87,
+      "disabled": 1196,
+      "result": "PASS"
+    },
+    {
+      "identity": "product_user",
+      "companies": 1283,
+      "permission_variants": 2,
+      "enabled": 87,
+      "disabled": 1196,
+      "result": "PASS"
+    }
+  ]
+}
