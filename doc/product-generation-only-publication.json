@@ -1,0 +1,47 @@
+{
+  "unit": "P-G01",
+  "status": "PUBLISHED_AND_REMOTE_VERIFIED",
+  "verified_at": "2026-10-19T00:36:29.552988+08:00",
+  "repository": "https://github.com/qiyuxrang/NewAi_platform",
+  "branch": "codex/baichuan-delivery-20261018",
+  "implementation_commit": "0a0328843e3afab3eac90c6d197442f2772b0b05",
+  "remote_tree": "ea7627b742e7b207f3fadd5e0e224cf8d2d85703",
+  "remote_tree_matches_local": true,
+  "changed_paths_verified": 19,
+  "remote_blob_readbacks": [
+    {
+      "path": "services/business/backend/portal/product_generation_policy.py",
+      "git_blob": "3920d6799d11826bbac309b235a2cfe3532a143f",
+      "sha256": "86e4df9dd62f51d188993b092aaea8cae606b84ab98e47f3cf524a15f460407f",
+      "bytes": 1023
+    },
+    {
+      "path": "services/business/backend/portal/product_worker.py",
+      "git_blob": "c1539a800d6a0b5558a6e311b0b96ff4322a0332",
+      "sha256": "4a56bd2ca9d7d2b673671c9c5e3222a1876d6130a815ea66ae6c06689a8cb97d",
+      "bytes": 194990
+    },
+    {
+      "path": "doc/product-generation-only-receipt.json",
+      "git_blob": "1f492973dff7127875a17c1368decf3141e21c3c",
+      "sha256": "0baab3cbd946d58ffceeeaf7eae419e5942a0581ea59a048c7c60318651f76cb",
+      "bytes": 11237
+    }
+  ],
+  "credential_scan": {
+    "status": "PASS",
+    "files": 19,
+    "findings": 0
+  },
+  "vendor_sha256_verified": 26,
+  "tested_source_fingerprints_verified": 13,
+  "frontend_unchanged": true,
+  "existing_public_company_data_unchanged": true,
+  "main_unchanged": true,
+  "test_receipt": "doc/product-generation-only-receipt.json",
+  "tests_rerun_for_publication": false,
+  "services_restarted": false,
+  "old_projects_requeued": false,
+  "production_deployed": false,
+  "note": "验收收据保留验收时未提交状态；本收据记录后续实际提交与远端校验。文档收尾提交另由分支历史记录。"
+}
