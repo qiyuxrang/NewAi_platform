@@ -1,0 +1,35 @@
+{
+  "unit": "P-G01",
+  "status": "IMPLEMENTED_AND_ISOLATED_ACCEPTED",
+  "source_commit": "5db3b95294953624856bd449dd7f13fad24c54b1",
+  "policy": "generation-only-v1",
+  "user_authorized": "取消内容核验阻断，贯通三件套；页面外观不变",
+  "implementation": "saved_uncommitted",
+  "frontend_modified": false,
+  "services_restarted": false,
+  "live_project_requeued": false,
+  "production_deployed": false,
+  "legacy_current_comparison": ".runtime/product-generation-only/20261019-001108-19116",
+  "legacy_baseline_comparison": ".runtime/product-generation-only/20261019-001041-2256",
+  "next": "新策略代码与隔离验收完成；未自动切换现有服务或重跑旧项目。后续使用当前项目正常确认蓝图，不增加内容复核审批。正式部署另按明确目标环境执行。",
+  "finished_at": "2026-10-19T00:22:00.947644+08:00",
+  "final_regression": {
+    "count": 92,
+    "seconds": 225.555,
+    "failures": [],
+    "errors": [],
+    "root": ".runtime/product-generation-only/20261019-001734-23476",
+    "log_sha256": "4f6c3d498efa95d478ee6a8faa12493f6e7a5478e785c285a94ef63be65a6796"
+  },
+  "receipt": "doc/product-generation-only-receipt.json",
+  "legacy_remaining_failures": 10,
+  "previous_validation": ".runtime/product-generation-only/20261019-001031-24412",
+  "active_validation": null,
+  "publication": {
+    "status": "PREPARED",
+    "authorized_by": "2026-10-19 用户：上传到github仓库",
+    "repository": "https://github.com/qiyuxrang/NewAi_platform",
+    "branch": "codex/baichuan-delivery-20261018",
+    "production_deployed": false
+  }
+}

@@ -7,3 +7,7 @@ deploy/cloud/*.sh text eol=lf
 # Published data is byte-addressed; preserve CSV line endings and field contents.
 data/baichuan/** -text whitespace=cr-at-eol
 data/baichuan/companies.csv whitespace=cr-at-eol,-blank-at-eol
+
+# Vendored exporter hashes describe LF bytes, including on Windows checkouts.
+services/business/backend/portal/product_assets/ppt_master_runtime/upstream/** text eol=lf
+services/business/backend/portal/product_assets/ppt_master_runtime/LICENSE text eol=lf

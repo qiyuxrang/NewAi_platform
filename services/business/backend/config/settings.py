@@ -217,6 +217,7 @@ def _product_configuration(name):
 
 PRODUCT_TEMPLATE_APPROVAL = _product_configuration("PORTAL_PRODUCT_TEMPLATE_APPROVAL")
 PRODUCT_OFFICE_RENDER_ENABLED = os.environ.get("PORTAL_PRODUCT_OFFICE_RENDER_ENABLED") == "1"
+PRODUCT_CONTENT_VERIFICATION_ENABLED = os.environ.get("PORTAL_PRODUCT_CONTENT_VERIFICATION_ENABLED") == "1"
 PRODUCT_OFFICE_RENDERER = os.environ.get("PORTAL_PRODUCT_OFFICE_RENDERER", "word")
 if PRODUCT_OFFICE_RENDERER not in {"word", "libreoffice"}:
     raise ImproperlyConfigured("PORTAL_PRODUCT_OFFICE_RENDERER 必须为 word 或 libreoffice")
