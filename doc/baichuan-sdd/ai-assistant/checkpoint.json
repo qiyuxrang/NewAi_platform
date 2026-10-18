@@ -4618,5 +4618,17 @@
     "completed_at": "2026-10-18T23:29:12.116635+08:00",
     "source_commit": "1afd65ddd8bf02962bad624f51a04062a186c168",
     "remote_verification": "doc/baichuan-sdd/ai-assistant/evidence/AI-T17/2026-10-18-d40-publication-receipt.json"
+  },
+  "github_handoff_check": {
+    "unit": "AI-D41",
+    "status": "ACCEPTED_PENDING_PUBLICATION",
+    "previous_published_commit": "3f30de73f1eee2e877d821619f28137f3b8b8bed",
+    "scope": "Full GitHub/data audit plus explicit empty owned local restore, no frontend changes or service restart",
+    "next": "Commit and push explicit handoff paths, verify remote head/tree/data and publish final receipt; do not restart frontend or import into current catalog",
+    "receipt": "doc/github-local-update-receipt.json",
+    "finished_at": "2026-10-19T00:55:40.598457+08:00",
+    "tests": 7,
+    "company_count": 1283,
+    "table_rows": 25843
   }
 }

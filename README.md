@@ -5,11 +5,12 @@
 - 员工工作台：`frontend`；管理员后台：`manage_front`；平台网关：`platform`。
 - 业务源码：`services/business`；原工程报价逻辑：`services/engineering`；原生 Agent 与企业 Bridge：`openclaw`。
 - 本机统一入口：`启动项目.cmd` / `停止项目.cmd`。说明见 [启动说明](启动说明.md)，当前验证范围见 [迁移验收记录](doc/enterprise-migration-execution.md)。
+- 本轮完整交付在 `codex/baichuan-delivery-20261018` 分支，包含[企业快照](data/baichuan/README.md)。另一台电脑更新、空库恢复、依赖与私有配置要求见[换机更新与启动](doc/github-local-update.md)。
 - RAGFlow 保留为外部服务，通过受控 MCP 与现有业务权限接入。
 - Linux Docker 部署候选包与操作步骤见 [云部署说明](deploy/cloud/README.md)，三件套范围及验收要求见 [交付标准](doc/cloud-product-delivery-standard.md)，本次本地验证见 [部署包验证记录](doc/cloud-package-verification.md)。
 - 三件套实际文件、Office 页面、下载与预览测试见 [三件套测试记录](doc/three-piece-test-report-20261011.md)。
 
-仓库包含源码、依赖清单、配置模板与测试。实际 `.env`、密码、API 密钥、业务数据库和资料、Python/Node 运行时、依赖安装目录及 Docker 数据卷不上传。首次在另一台电脑部署需配置本机环境和私有配置；当前验收不代表克隆后免安装启动。原有许可证与上游说明保留。
+仓库包含源码、依赖清单、配置模板、测试和用户授权公开的百川企业快照。实际 `.env`、密码、API 密钥、完整运行数据库、私有业务附件、Python/Node 运行时、依赖安装目录及 Docker 数据卷不上传。首次在另一台电脑部署需配置本机环境和私有配置；当前验收不代表克隆后免安装启动。原有许可证与上游说明保留。
 
 ## 上游 MultiUserClaw 说明
 

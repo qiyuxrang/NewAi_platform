@@ -1,0 +1,4 @@
+# Same pinned application dependencies as the delivered deployment image.
+-r ../../deploy/cloud/requirements.lock
+# The loopback-only Windows launcher uses SQLite instead of PostgreSQL.
+aiosqlite==0.22.1
