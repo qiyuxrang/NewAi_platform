@@ -165,7 +165,8 @@
     "Select delivery branch, not main",
     "Retain/install Python, Node and dependencies",
     "Retain private accounts/model configuration; fresh machines create separate accounts",
-    "Existing whole-project environment additionally needs its own databases, private files, Docker volumes and Office"
+    "Existing whole-project environment additionally needs its own databases, private files, Docker volumes and Office",
+    "3080 enterprise entry must check backup/incremental migrations and refresh ignored frontend/dist / manage_front/.next build artifacts on that computer; pulling source does not refresh them"
   ],
   "final_remote_audit": {
     "status": "PASS_FULL_TRACKED_TREE_AND_CATALOG_AUDIT",
