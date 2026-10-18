@@ -1,16 +1,16 @@
 {
   "schema_version": 1,
   "spec_version": "1.0",
-  "updated_on": "2026-10-18",
+  "updated_on": "2026-10-19",
   "timezone": "Asia/Shanghai",
-  "scope": "AI-D39 current local predeployment scope complete; no formal deployment, physical devices/Safari/OS image not claimed; speed/enrichment deferred",
+  "scope": "AI-D41 full GitHub tree/catalog verified and empty-local restore accepted; target PC installation/private configuration distinct; no deployment or enrichment",
   "delivery_type": "implementation",
   "implementation_authorized": true,
   "implementation_status": "completed_current_scope",
   "current_task": null,
   "next_task": null,
-  "last_completed_unit": "AI-D39部署前当前范围完成（2026-10-18T21:00:40.390306+08:00）：用户明确尚未到正式部署阶段，本轮未部署。新增Chrome for Testing155.0.8059.84与Firefox157原页面补验：两角色各4视口，另Firefox原生关闭blur能力，共24组视口/6组触屏仿真通过；两浏览器四组角色的原结果恢复、文件选择与移除、既有Excel下载及刷新通过。portal93表+platform6表、18451文件/1131103415B备份与恢复副本哈希一致；两角色密码/绑定/权限/结果/既有Excel及36份附件实际回读通过。0应用源码改动、0新查询/模型/导出生成、0构建/服务重启，163当前前端指纹与全部资料保持。D38的617项/前端16项为输入未变的历史有效检查，本轮不冒充重跑。真机、Safari、物理输入法及新机器整机冷恢复未执行；速度/资料补全继续按用户要求延期，不是当前交付前置项。",
-  "observed_repository_head": "ef1676cd8327d693dab897c45a234ba91413884e",
+  "last_completed_unit": "AI-D41 GitHub 全量核对与换机恢复交付：17,179 路径完整根树、1,768 企业数据对象、当前所属库 9 表/25,843 行一致；最终7项恢复测试通过，新路径两角色检索/Excel通过。代码/文档已发布，前端和现用资料未变；目标机安装及私有模型/Office另行核对。",
+  "observed_repository_head": "8c021c758fc1d92beea3fcb46efb075427e5da6f",
   "target_environment": {
     "status": "confirmed_owned_local_original_workbook_restore; historical_enriched_database_not_found",
     "database": ".runtime/baichuan-ai-local/portal.sqlite3",
@@ -4621,14 +4621,18 @@
   },
   "github_handoff_check": {
     "unit": "AI-D41",
-    "status": "ACCEPTED_PENDING_PUBLICATION",
+    "status": "PUBLISHED_AND_REMOTE_VERIFIED",
     "previous_published_commit": "3f30de73f1eee2e877d821619f28137f3b8b8bed",
     "scope": "Full GitHub/data audit plus explicit empty owned local restore, no frontend changes or service restart",
-    "next": "Commit and push explicit handoff paths, verify remote head/tree/data and publish final receipt; do not restart frontend or import into current catalog",
+    "next": "另一台电脑按 doc/github-local-update.md 切换交付分支更新；保留私有环境。新空库可显式恢复，现用库不覆盖。目标机未实际运行，不宣称免配置冷启动。",
     "receipt": "doc/github-local-update-receipt.json",
     "finished_at": "2026-10-19T00:55:40.598457+08:00",
     "tests": 7,
     "company_count": 1283,
-    "table_rows": 25843
+    "table_rows": 25843,
+    "implementation_commit": "8c021c758fc1d92beea3fcb46efb075427e5da6f",
+    "final_verified_at": "2026-10-19T01:00:57.675463+08:00",
+    "tracked_paths_verified": 17179,
+    "data_paths_verified": 1768
   }
 }
