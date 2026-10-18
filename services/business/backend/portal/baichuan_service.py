@@ -248,6 +248,8 @@ def save_company(user, payload, company_id=None):
         with transaction.atomic():
             company = company_for(user, company_id, lock=True) if company_id is not None else None
             data = validate_payload(payload, company)
+            from .baichuan_facts import manual_snapshot, record_manual_changes
+            before = manual_snapshot(company)
             code = data["company"]["credit_code"]
             if code and Company.objects.filter(credit_code=code).exclude(pk=company_id).exists():
                 raise BaichuanError("duplicate_company", "统一社会信用代码已存在。", 409)
@@ -274,6 +276,7 @@ def save_company(user, payload, company_id=None):
                 model.objects.filter(company=company).exclude(pk__in=kept).delete()
             audit(user, action, company.pk, changes=[*COMPANY_FIELDS, "qualifications", "people"])
             company.refresh_from_db()
+            record_manual_changes(user, company, before)
             return company
     except IntegrityError:
         # Only the known unique constraint becomes a business conflict; other DB faults remain failures.

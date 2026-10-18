@@ -1,0 +1,122 @@
+{
+  "task": "AI-T16",
+  "synthetic": true,
+  "target_database_accessed": false,
+  "scope": "deterministic resumed query task -> worker -> fixed snapshot -> XLSX -> authorized download",
+  "natural_language_model_verified": false,
+  "network_calls": 0,
+  "model_calls": 0,
+  "sqlite": "3.53.1",
+  "python": "3.13.16",
+  "openpyxl": "3.1.5",
+  "cpu": "Intel64 Family 6 Model 140 Stepping 2, GenuineIntel",
+  "logical_cpus": 8,
+  "platform": "Windows-11-10.0.26200-SP0",
+  "concurrency": 1,
+  "cold_definition": "Django connection closed, first sample; OS cache not evicted",
+  "p95_method": "nearest rank over warm samples; limited exploratory sample, not population guarantee",
+  "warm_samples": 0,
+  "datasets": [
+    {
+      "companies": 1000,
+      "certificates": 1000,
+      "fixture_setup_ms": 438.654,
+      "samples": [
+        {
+          "cache": "connection_cold",
+          "query_submit_ms": 15.872,
+          "structured_match_ms": 157.847,
+          "match_and_snapshot_ms": 183.266,
+          "query_worker_ms": 239.058,
+          "first_snapshot_ready_ms": 261.797,
+          "export_submit_ms": 29.27,
+          "xlsx_build_ms": 565.255,
+          "xlsx_publish_ms": 4.761,
+          "export_worker_ms": 621.373,
+          "authorized_download_ms": 33.846,
+          "xlsx_read_validate_ms": 253.313,
+          "total_ms": 1208.122,
+          "snapshot_publish_overhead_ms": 25.419,
+          "xlsx_bytes": 157461,
+          "xlsx_sha256": "c7004f340f2f31b8f853d50f7753d2cacb1f5ba84adc76ad3cc10645f6ac71e3",
+          "counts": {
+            "confirmed": 500,
+            "candidate": 500,
+            "excluded": 0
+          },
+          "xlsx_rows_validated": 2000,
+          "query_terminal": "partial",
+          "export_terminal": "completed"
+        }
+      ],
+      "identical_snapshot_row_algorithm_comparison": {
+        "before_ms": 956.889,
+        "after_ms": 489.034,
+        "speedup": 1.957,
+        "same_snapshot_and_generated_at": true,
+        "worksheet_and_style_xml_identical": true,
+        "xml_entries_compared": [
+          "xl/workbook.xml",
+          "xl/styles.xml",
+          "xl/worksheets/sheet1.xml",
+          "xl/worksheets/sheet2.xml",
+          "xl/worksheets/sheet3.xml"
+        ],
+        "counts_identical": true
+      }
+    },
+    {
+      "companies": 5000,
+      "certificates": 5000,
+      "fixture_setup_ms": 1616.83,
+      "samples": [
+        {
+          "cache": "connection_cold",
+          "query_submit_ms": 19.699,
+          "structured_match_ms": 1052.365,
+          "match_and_snapshot_ms": 1116.22,
+          "query_worker_ms": 1178.987,
+          "first_snapshot_ready_ms": 1206.874,
+          "export_submit_ms": 82.562,
+          "xlsx_build_ms": 2697.51,
+          "xlsx_publish_ms": 4.903,
+          "export_worker_ms": 2804.247,
+          "authorized_download_ms": 76.445,
+          "xlsx_read_validate_ms": 898.355,
+          "total_ms": 5101.895,
+          "snapshot_publish_overhead_ms": 63.855,
+          "xlsx_bytes": 745556,
+          "xlsx_sha256": "f49185edc6013099955889a3b74332f0cb2bb5a8efde99581f25841e7917cea7",
+          "counts": {
+            "confirmed": 2500,
+            "candidate": 2500,
+            "excluded": 0
+          },
+          "xlsx_rows_validated": 10000,
+          "query_terminal": "partial",
+          "export_terminal": "completed"
+        }
+      ],
+      "identical_snapshot_row_algorithm_comparison": {
+        "before_ms": 10736.977,
+        "after_ms": 2687.476,
+        "speedup": 3.995,
+        "same_snapshot_and_generated_at": true,
+        "worksheet_and_style_xml_identical": true,
+        "xml_entries_compared": [
+          "xl/workbook.xml",
+          "xl/styles.xml",
+          "xl/worksheets/sheet1.xml",
+          "xl/worksheets/sheet2.xml",
+          "xl/worksheets/sheet3.xml"
+        ],
+        "counts_identical": true
+      }
+    }
+  ],
+  "complete": true,
+  "wall_limit_seconds": 120,
+  "started_at_utc": "2026-10-17T12:10:38.144287+00:00",
+  "schema_setup_ms": 6492.006,
+  "completed_at_utc": "2026-10-17T12:11:07.938055+00:00"
+}

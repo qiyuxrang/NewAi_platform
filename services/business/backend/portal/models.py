@@ -223,3 +223,7 @@ from .agent_models import (AgentProject, AgentAttachment, AgentConversation, Age
                            AgentRequirement, AgentRun, AgentRootAction, AgentEvent,
                            AgentBusinessReference, AgentSkillInstallation)
 from .baichuan_models import Company, CompanyQualification, CompanyPerson
+from .baichuan_assistant_models import (BaichuanEvidence, BaichuanFactRevision, BaichuanCertificate,
+    BaichuanQualificationRule, BaichuanConversation, BaichuanMessage, BaichuanAttachment,
+    BaichuanJob, BaichuanJobItem, BaichuanMatchSnapshot, BaichuanResearchManifest,
+    BaichuanResearchItem, BaichuanExport)

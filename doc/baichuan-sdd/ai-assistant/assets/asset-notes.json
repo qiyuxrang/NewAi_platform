@@ -1,0 +1,15 @@
+{
+  "source": "User-supplied reference image",
+  "processing": "Deterministic edge-connected blue background removal; no AI generation or 3D model",
+  "source_size": [
+    240,
+    341
+  ],
+  "asset_size": [
+    219,
+    353
+  ],
+  "recommended_display_height_css_px": 110,
+  "removed_background_pixels": 43453,
+  "note": "Presentation assets only. Existing application code and data were not changed."
+}

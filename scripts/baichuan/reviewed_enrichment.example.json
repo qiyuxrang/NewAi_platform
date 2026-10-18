@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "source_workbook_sha256": "REPLACE_WITH_ORIGINAL_WORKBOOK_SHA256",
+  "review_status": "reviewed_public_source",
+  "reviewer": "assistant_source_review",
+  "reviewed_at": "2026-10-17T12:00:00+00:00",
+  "items": [
+    {
+      "company_id": "REPLACE_WITH_EXISTING_COMPANY_UUID",
+      "name": "完整在库企业名称（禁止品牌简称）",
+      "expected_version": 1,
+      "sources": [
+        {
+          "id": "official-contact",
+          "url": "https://www.example.com/contact",
+          "title": "企业官网联系页面",
+          "read_status": "completed",
+          "retrieved_at": "2026-10-17T11:59:00+00:00",
+          "body": "完整在库企业名称（禁止品牌简称）\n办公地址：陕西省西安市示例路1号\n联系电话：029-12345678",
+          "content_sha256": "REPLACE_WITH_SHA256_OF_EXACT_UTF8_BODY",
+          "excerpt": "完整在库企业名称（禁止品牌简称）\n办公地址：陕西省西安市示例路1号\n联系电话：029-12345678",
+          "locator": {"section": "联系我们", "text_start": 0, "text_end": 77},
+          "official_site_basis": "legal_name_publication",
+          "publication_kind": "corporate"
+        }
+      ],
+      "fields": {
+        "address": {"value": "陕西省西安市示例路1号", "source_id": "official-contact"},
+        "phone": {"value": "029-12345678", "source_id": "official-contact"}
+      }
+    }
+  ]
+}

@@ -1,0 +1,24 @@
+# AI-T12 N3 bounded public-source review
+
+Completed 2026-10-18 02:40 +08. Fixed original selection SHA325ef186a48b6bff774d8937f57e61d3f2297a686fd30099581cacf1ed7b8c68, actual `no_usable_retained_lead`592, slice `[40:60]`. Twenty accepted IDs after existing L/night/contact/HTTP/N1/N2 cohort exclusions, 20 fresh readonly rows matched at final review. First-discovery coverage added **0**.
+
+Each company received exactly one new query specifying contact fields or location (20 queries, five calls). Search archives are retained and were not used as actual body. Ten exact URL attempts yielded seven complete actual bodies, one HTTP302 not followed, one TLS handshake timeout, and one preflight assertion without HTTP response. Thus eight HTTP responses in total, not ten successful GETs. Maximum two URL attempts for any target. No automatic retry, insecure TLS, guessed URL, login, proxy inheritance or captcha bypass.
+
+Six companies/twelve empty-field candidates, pending root review: email2/address5/city5; directory5/government1.
+
+- 西安旌旗电子股份有限公司: email `flag@flagele.com`, [CNPP brand directory](https://www.cnpp.cn/pinpai/24875.html), exact company name contact block. Directory explicitly warns information may be outdated. The literal HTTP website embedded in its actual link was attempted once but failed preflight before a response; website remains unknown and no root URL was guessed.
+- 陕西占炜建筑工程有限公司: public operating address `陕西省西安市浐灞生态区欧亚大道1188号企业孵化中心C56` and literal city西安市, [target directory detail](https://www.zhaotoubiaowang.com/company/detail_for_79538721.html), reached by actual full-name list anchor. Contact date unknown; expired certificate date is not an address-update date. Platform400 phone excluded.
+- 陕西慧缘网络科技有限公司: supplier address `陕西省西安市高新区科技二路软件园示范区秦风阁F301室` and city西安市, [government procurement notice dated2025-06-09](https://www.ccgp-shaanxi.gov.cn/freecms/site/shaanxi/ggxx/info/2025/8a69c7c2967256de019753a21ac86209.html?noticeId=7f707993-450a-11f0-8063-08c0eb20c666&noticeType=001026). Only the supplier table is evidence. Purchaser, agency and project contacts excluded. This is a dated public supplier disclosure, not independent current registration verification; the HR workplace address serves a different purpose and was not merged.
+- 西安人和环保工程有限公司: directory street address `陕西省西安市雁塔区电子西街` and literal city西安市, [supplier profile](https://cn.made-in-china.com/showroom/zhang985433-companyinfo.html). **Known account-last-login date2023-02-03; address update date unknown.** This is not described as current company information; no building/street number supplied, hidden phone and fax not imported. Root may hold this entire company's two fields for insufficient freshness. Independent timestamp/hash/offset review preserves this limitation without changing the frozen candidate.
+- 陕西智辰建设工程有限公司: `陕西省铜川市新区正阳路华荣商城4号三层` and city铜川市, [exact directory detail](https://www.zhaotoubiaowang.com/company/detail_for_79317379.html). Its exact full-name anchor was visible in the same already-read list body, not inferred. Update date unknown; old qualification text not independently verified or imported.
+- 陕西旭日建筑劳务有限责任公司: address `陕西省西安市经开区凤城二路16号新世纪大厦12001室`, city西安市 and email `zhangyfkj@163.com`, [mixed company directory](https://www.qiyeku.cn/tag/company754c34.html). Only the complete target's contiguous company block was used; existing phone matches and remains untouched. Field publication/update date unknown; incorporation date is not freshness evidence.
+
+The remaining fourteen targets retain individual gaps: branch contacts differ from parent, school footer belongs to school, old government/project/patent/litigation addresses were not promoted to current contacts, science lists lack contact facts, HR channels not business contacts, and no exact subject result remains unknown. 辽宁融汇达's name does not authorize changing the nonempty original陕西province. All original nonempty fields remain untouched.
+
+Actual validation: 20 short SQLite `mode=ro/query_only` final ID/name/version/field comparisons passed. All candidate fields still empty. Original journal/raw/body hashes and contiguous excerpt offsets checked. Existing `validate_batch` actually passed with SQL/socket/DNS access denied. 0model/business-write/frontend/service changes; root is sole applier.
+
+Private N3 cohort/journal/search1–5/raw/body/checkpoints/candidate/final receipt/timestamp review/freeze remain in `.runtime/baichuan-ai-local/independent-enrichment-20261017/`. Public disclosures are neither registry verification nor verified certification, and this unit does not establish that the whole company corpus is complete.
+
+Candidate SHA256: `15bbed40b3b9b8b64310b2d81a23375aa9cb1eafa5edddae9c490bed700dd706`
+
+Journal SHA256: `1b37f3433baef495528c785260125a4a08b17a7f74afaa9a78d546b99472e236`

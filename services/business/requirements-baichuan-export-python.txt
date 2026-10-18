@@ -1,0 +1,5 @@
+# Optional Baichuan XLSX writer in the business backend interpreter.
+# Same existing versions as requirements-product-parser-python.txt and cloud lock.
+# Declare only; installing this file is a separate deployment operation.
+openpyxl==3.1.5
+et_xmlfile==2.0.0

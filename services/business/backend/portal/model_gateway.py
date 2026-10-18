@@ -4,6 +4,7 @@ import uuid
 from contextlib import closing
 from datetime import timedelta
 from http.client import HTTPException
+from math import ceil
 from time import monotonic
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -51,10 +52,15 @@ ERROR_MESSAGES = {
 
 
 class GatewayError(Exception):
-    def __init__(self, code, message=None, status=502, *, diagnostic=None):
+    def __init__(self, code, message=None, status=502, *, diagnostic=None,
+                 reservation_rejected=False, retry_after=None):
         self.code = code if isinstance(code, str) and code in ERROR_MESSAGES else "upstream_error"
         self.message = ERROR_MESSAGES[self.code]
         self.status = status
+        # Only local admission rejects may be rescheduled without replaying a
+        # possibly sent provider request. Upstream 429/timeout are not these.
+        self.reservation_rejected = reservation_rejected is True
+        self.retry_after = retry_after if type(retry_after) is int and 1 <= retry_after <= 61 else None
         self.diagnostic = {}
         if isinstance(diagnostic, dict):
             upstream_status = diagnostic.get("upstream_status")
@@ -466,10 +472,12 @@ def _reserve(user, model, purpose, route, config_version=""):
         pending = ModelCallLog.objects.filter(model=model, status="pending", created_at__gte=pending_since).count()
         max_pending = getattr(settings, "MODEL_MAX_PENDING_PER_MODEL", 4)
         if pending >= max_pending:
-            raise GatewayError("busy", status=429)
+            raise GatewayError("busy", status=429, reservation_rejected=True, retry_after=2)
         route_recent = recent.filter(route=route) if route else recent
         if route_recent.count() >= limit or (purpose == "test" and recent.filter(purpose="test", model=model).exists()):
-            raise GatewayError("rate_limited", status=429)
+            oldest = route_recent.order_by("created_at").first()
+            delay = max(1, min(61, ceil(61 - (timezone.now() - oldest.created_at).total_seconds()))) if oldest else 2
+            raise GatewayError("rate_limited", status=429, reservation_rejected=True, retry_after=delay)
         return ModelCallLog.objects.create(actor=user, route=route, model=model, purpose=purpose,
                                            status="pending", duration_ms=0, model_public_id=model.public_id,
                                            config_version=config_version)

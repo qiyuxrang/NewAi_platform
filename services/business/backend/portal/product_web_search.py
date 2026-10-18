@@ -112,6 +112,9 @@ def configuration():
     provider = getattr(settings, "PRODUCT_WEB_SEARCH_PROVIDER", "tavily")
     if getattr(settings, "PRODUCT_WEB_SEARCH_ENABLED", False) is not True:
         fail("web_search_unconfigured")
+    if provider == "bing_rss":
+        from .product_bing_rss import configured
+        return provider, configured()
     if provider == "searxng":
         base_url = getattr(settings, "PRODUCT_WEB_SEARCH_SEARXNG_URL", "")
         if not _valid_searxng_url(base_url):
@@ -171,9 +174,9 @@ def _source(row, provider, query, retrieved_at):
     if not isinstance(row, dict):
         fail("web_search_invalid_response")
     title, url = row.get("title"), row.get("url")
-    content = row.get("content" if provider in {"tavily", "searxng"} else "description")
+    content = row.get("content" if provider in {"tavily", "searxng", "bing_rss"} else "description")
     title_only = False
-    if provider == "searxng" and (not isinstance(content, str) or not content.strip()):
+    if provider in {"searxng", "bing_rss"} and (not isinstance(content, str) or not content.strip()):
         content = title if isinstance(title, str) else ""
         title_only = True
     if (not isinstance(title, str) or not title.strip() or len(title) > 1000
@@ -200,7 +203,11 @@ def _source(row, provider, query, retrieved_at):
 
 
 def search_public_references(queries):
-    """At most three allow-listed professional queries; no automatic retry."""
+    """At most three allow-listed queries; local experimental RSS uses one.
+
+    Validate the entire requested list before the provider-specific limit. RSS
+    deliberately does not retry or schedule immediate consecutive requests.
+    """
     if (not isinstance(queries, list) or not 1 <= len(queries) <= 3
             or any(not isinstance(query, str) for query in queries)):
         fail("web_search_invalid_response")
@@ -211,9 +218,14 @@ def search_public_references(queries):
         if (not query.endswith(suffix) or not 1 <= len(labels) <= len(allowed)
                 or any(label not in allowed for label in labels)):
             fail("web_search_invalid_response")
+    provider, _ = configuration()
+    selected = queries[:1] if provider == "bing_rss" else queries
     sources = {}
-    for query in queries:
+    for query in selected:
         for source in _provider_search(query):
+            if provider == "bing_rss":
+                source = {**source, "query_limited": len(queries) > 1,
+                          "query_count_requested": len(queries), "query_count_executed": 1}
             sources.setdefault(source["id"], source)
     return list(sources.values())
 
@@ -228,6 +240,11 @@ def search_public_query(query):
 
 def _provider_search(query):
     provider, credential = configuration()
+    if provider == "bing_rss":
+        from .product_bing_rss import search
+        retrieved_at = timezone.now().isoformat()
+        return [{**_source(row, provider, query, retrieved_at), "discovery_only": True,
+                 "provider_stability": "experimental_rss"} for row in search(query)]
     if provider == "tavily":
         request = Request("https://api.tavily.com/search", method="POST",
             data=json.dumps({"query": query, "max_results": 6, "search_depth": "basic",
