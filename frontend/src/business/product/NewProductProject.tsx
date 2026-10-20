@@ -82,19 +82,8 @@ export default function NewProductProject() {
       let currentTask: DocumentTask = record.task;
       while (record.remaining.length) {
         const file = record.remaining[0];
-        const previousSourceIds = new Set(currentTask.sources.map(source => source.id));
         setProgress(`正在上传并解析 ${file.name}…`);
-        try {
-          currentTask = await uploadSource(currentTask.id, file, currentTask.version, controller.signal, file === record.equipment ? 'equipment' : 'background');
-        } catch (reason) {
-          // A lost HTTP response may follow a successful upload. Reconcile only an
-          // exact, newly created name/size/hash snapshot; never blindly repeat it.
-          if (controller.signal.aborted) throw reason;
-          const fresh: DocumentTask | null = await getTask(currentTask.id, controller.signal).catch(() => null);
-          const hash = crypto.subtle ? Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", await file.arrayBuffer()))).map(byte => byte.toString(16).padStart(2, "0")).join("") : "";
-          if (fresh && hash && fresh.sources.some(source => !previousSourceIds.has(source.id) && source.original_name === file.name && source.size === file.size && source.sha256 === hash && source.purpose === (file === record.equipment ? 'equipment' : 'background'))) currentTask = fresh;
-          else throw reason;
-        }
+        currentTask = await uploadSource(currentTask.id, file, currentTask.version, controller.signal, file === record.equipment ? 'equipment' : 'background', currentTask.sources);
         record.task = currentTask;
         record.remaining = record.remaining.slice(1);
         setUploadProgress(value => ({ ...value, completed: value.total - record.remaining.length }));

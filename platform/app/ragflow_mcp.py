@@ -114,27 +114,40 @@ async def knowledge_question(token, department, question):
     async with bound_portal(token, department) as (_, client, headers):
         if department == "product":
             before = portal_json(await client.get("/api/product/knowledge/status/"))
+            if before.get("assistant_export_allowed") is not True:
+                raise HTTPException(403, "该资料未获准交由当前助手处理")
             revision = before.get("authorization_revision")
             if before.get("available") is not True or not isinstance(revision, str) or not re.fullmatch(r"[0-9a-f]{64}", revision):
                 raise HTTPException(503, "产品知识检索尚未就绪")
             result = portal_json(await client.post("/api/product/knowledge/retrieve/", json={"question": question}, headers=headers))
             after = portal_json(await client.get("/api/product/knowledge/status/"))
+            if after.get("assistant_export_allowed") is not True or result.get("assistant_export_allowed") is not True:
+                raise HTTPException(403, "该资料未获准交由当前助手处理")
             # Compare the exact live scope, not merely status or module membership.
             # A partial document revoke changes this hash even if another remains.
             if after.get("available") is not True or after.get("authorization_revision") != revision or result.get("authorization_revision") != revision:
                 raise HTTPException(403, "产品知识授权已变化，请重新检索")
             if result.get("status") != "completed" or not isinstance(result.get("sources"), list):
                 raise HTTPException(502, "产品知识检索响应异常")
-            result = {"status": result["status"], "sources": result["sources"]}
         elif department == "engineering":
+            before = portal_json(await client.get("/api/engineering/knowledge/"))
+            if before.get("assistant_export_allowed") is not True:
+                raise HTTPException(403, "该资料未获准交由当前助手处理")
+            revision = before.get("authorization_revision")
+            if before.get("status") != "ready" or not isinstance(revision, str) or not revision:
+                raise HTTPException(403, "工程知识授权或任务检查状态已变化")
             result = portal_json(await client.post("/api/engineering/knowledge/retrieve/", json={"question": question}, headers=headers))
             state = portal_json(await client.get("/api/engineering/knowledge/"))
-            if state.get("status") != "ready":
+            if state.get("assistant_export_allowed") is not True or result.get("assistant_export_allowed") is not True:
+                raise HTTPException(403, "该资料未获准交由当前助手处理")
+            if (state.get("status") != "ready" or state.get("authorization_revision") != revision
+                    or result.get("authorization_revision") != revision):
                 raise HTTPException(403, "工程知识授权或任务检查状态已变化")
             if result.get("status") != "completed" or not isinstance(result.get("sources"), list):
                 raise HTTPException(502, "工程知识检索响应异常")
         else:
             raise HTTPException(403, "该部门尚无已接入的知识接口")
+        result = {"status": result["status"], "sources": result["sources"]}
     return result
 
 

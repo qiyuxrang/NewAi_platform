@@ -1,4 +1,4 @@
-import { apiRequest } from '../api.ts';
+import { apiRequest, isApiError } from '../api.ts';
 export const root = '/api/hr/recruitment/';
 export interface Requirement {
   created_by_id?: number | string;
@@ -32,6 +32,29 @@ const statusLabels: Record<string, string> = { pending: '待上传/待开始', q
   partial_failed: '部分失败', failed: '处理失败', draft: '草稿', confirmed: '已确认' };
 export const statusText = (status: string) => statusLabels[status] || status;
 export const message = (error: unknown) => error instanceof Error ? error.message : '请求失败，请重试';
+export const outcomeUnknown = (error: unknown) => !isApiError(error) || error.status >= 500;
+export function actionMessage(error: unknown) {
+  if (outcomeUnknown(error)) return `${message(error)} 提交结果尚未核实，请先刷新记录核对状态，避免重复提交。`;
+  if (isApiError(error) && error.status === 409) return `${message(error)} 请先刷新记录，再根据最新状态操作。`;
+  return message(error);
+}
+export function failureGuidance(code: string) {
+  const reasons: Record<string, string> = {
+    invalid_file: '文件损坏、加密或格式不受支持；请检查原件，修复后建立新批次。',
+    invalid_encoding: 'TXT 编码无效；请另存为 UTF-8 后建立新批次。',
+    text_unavailable: '未能提取正文；请核对原件，提供可识别的文件后建立新批次。',
+    text_too_large: '正文超出模型或解析限制，未截断；请人工核对并整理原件后建立新批次。',
+    vision_review_required: '页面识别不完整；请人工核对原件，不应据此判断候选人。',
+    attempt_limit: '已达到处理尝试上限；请联系管理员核查，不再重试本项。',
+    permission_changed: '业务授权已变化；请联系管理员核对授权。',
+    forbidden: '模型或资料授权不足；请联系管理员核对授权。',
+    stale_revision: '岗位要求已变化；请使用当前正式 JD 建立新批次。',
+    extractor_unavailable: '解析运行时不可用或超时；请管理员恢复后重试失败项。',
+    invalid_model_output: '模型返回内容未通过校验；可重试失败项，持续失败请联系管理员。',
+    worker_error: '后台处理异常；可重试失败项，持续失败请联系管理员。',
+  };
+  return code ? reasons[code] || `处理失败（${code}）；请核对原件与授权，可重试失败项，持续失败请联系管理员。` : '—';
+}
 
 export const retentionNotice = '获准招聘资料长期归档，不自动到期；人工删除、撤权及旧规则下已失效的资料仍不可访问。';
 export function screeningCounts(batch: Batch) {

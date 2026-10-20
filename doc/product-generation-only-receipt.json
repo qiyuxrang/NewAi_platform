@@ -1,0 +1,200 @@
+{
+  "unit": "P-G01",
+  "status": "PASS_CURRENT_SCOPE",
+  "finished_at": "2026-10-19T00:22:00.947644+08:00",
+  "source_commit": "5db3b95294953624856bd449dd7f13fad24c54b1",
+  "source_branch": "codex/baichuan-delivery-20261018",
+  "working_changes_committed": false,
+  "source_pins": {
+    "services/business/backend/config/settings.py": "8026102fee696d1e6ee0a9a5fbb5f316d085fc628ddd54adafe46e94fd2917fe",
+    "services/business/backend/portal/product_assets/mermaid-runtime/render.mjs": "f7df28763c4280c345ea57b91178f3563784d844db0a52d0c5be51ea3456705b",
+    "services/business/backend/portal/product_assets/ppt_master_runtime/runner.py": "00ee124027577042a65571f7631569f38a10cb2bee6ef474b4afb2fa7128adda",
+    "services/business/backend/portal/product_delivery.py": "1a05832b3ac31693b68c164fe0f1436b193d712cb1cdd5e9f41027b010f990af",
+    "services/business/backend/portal/product_diagrams.py": "c9666b0b050ca8c7a3ea6fd6bb1fc0e92677083cd5dfa7f58308695a7382abae",
+    "services/business/backend/portal/product_documents.py": "eb98b2a65ae0d0e3e5483050d65f8b69dddeab552e0b84dd9c04c56c50c06724",
+    "services/business/backend/portal/product_pair.py": "968354368511113559def10a02426089f53f85b134c45bad7f82558907b285df",
+    "services/business/backend/portal/product_ppt_master.py": "2c54b93c16e593f6ada1f5c03456f0f0e0b9b2181348e30c04cdbc2366875857",
+    "services/business/backend/portal/product_three_drafts.py": "2035cd2b8f0ce2286fc0c16ce43e6d7ed711f383cddd532416be691adb9819b0",
+    "services/business/backend/portal/product_worker.py": "165ed7d6f171aa7d75f2cc2b4e591ffe11a8f11e49e0ab52cd0d976fe9517c0d",
+    "scripts/test-product-generation-only.py": "126ce0594b684b88aa1a1181ee216c5f1bf8d3ef5916c5011632e7f692f42264",
+    "services/business/backend/portal/product_generation_policy.py": "86e4df9dd62f51d188993b092aaea8cae606b84ab98e47f3cf524a15f460407f",
+    "services/business/backend/portal/tests/test_product_generation_only.py": "08a85ea87afe575c0c1fbe44f8c2224d1d9981a6f5392abe79276932c48726c0"
+  },
+  "policy": "generation-only-v1",
+  "final_regression": {
+    "count": 92,
+    "seconds": 225.555,
+    "failures": [],
+    "errors": [],
+    "root": ".runtime/product-generation-only/20261019-001734-23476",
+    "log_sha256": "4f6c3d498efa95d478ee6a8faa12493f6e7a5478e785c285a94ef63be65a6796"
+  },
+  "native_exporter_adapter_tests": {
+    "count": 4,
+    "seconds": 1.848,
+    "failures": 0,
+    "errors": 0,
+    "command": ".runtime/company-test/python/Scripts/python.exe -X utf8 services/business/backend/portal/product_assets/ppt_master_runtime/test_runtime.py"
+  },
+  "legacy_comparison": {
+    "status": "NO_NEW_FAILURES_NOT_ALL_GREEN",
+    "baseline": {
+      "count": 47,
+      "seconds": 111.113,
+      "failures": [
+        "test_exact_50k_and_70k_effective_length_boundaries (portal.tests.test_product_auto_delivery.AutomaticDeliveryTests.test_exact_50k_and_70k_effective_length_boundaries) (family='feasibility')",
+        "test_exact_approved_quantity_warning_survives_ppt_action_and_completion (portal.tests.test_product_auto_delivery.AutomaticDeliveryTests.test_exact_approved_quantity_warning_survives_ppt_action_and_completion)",
+        "test_pair_retains_warning_evidence_without_turning_it_into_a_ppt_blocker (portal.tests.test_product_auto_delivery.AutomaticDeliveryTests.test_pair_retains_warning_evidence_without_turning_it_into_a_ppt_blocker)",
+        "test_ppt_requires_both_delivered_reports_and_a_real_passing_quality_gate (portal.tests.test_product_auto_delivery.AutomaticDeliveryTests.test_ppt_requires_both_delivered_reports_and_a_real_passing_quality_gate)",
+        "test_diagram_only_warning_keeps_real_review_and_current_artifact_on_resume (portal.tests.test_product_draft_review.DraftReviewTests.test_diagram_only_warning_keeps_real_review_and_current_artifact_on_resume)",
+        "test_findings_leave_current_downloadable_drafts_and_real_review_evidence (portal.tests.test_product_draft_review.DraftReviewTests.test_findings_leave_current_downloadable_drafts_and_real_review_evidence)",
+        "test_technical_draft_is_downloadable_before_feasibility_generation_fails (portal.tests.test_product_draft_review.DraftReviewTests.test_technical_draft_is_downloadable_before_feasibility_generation_fails)",
+        "test_legacy_three_drafts_program_checks_saved_body_and_preserves_real_tail_findings (portal.tests.test_product_three_drafts.ThreeDraftFlowTests.test_legacy_three_drafts_program_checks_saved_body_and_preserves_real_tail_findings)",
+        "test_owner_blueprint_confirmation_generates_three_outputs_without_report_approval (portal.tests.test_product_three_drafts.ThreeDraftFlowTests.test_owner_blueprint_confirmation_generates_three_outputs_without_report_approval)",
+        "test_report_pair_generation_skips_ppt_and_records_program_checks (portal.tests.test_product_three_drafts.ThreeDraftFlowTests.test_report_pair_generation_skips_ppt_and_records_program_checks)"
+      ],
+      "errors": [
+        "test_real_18_page_native_export_is_bound_and_download_cache_valid (portal.tests.test_product_ppt_master_flow.PPTMasterFlowTests.test_real_18_page_native_export_is_bound_and_download_cache_valid)"
+      ]
+    },
+    "current": {
+      "count": 47,
+      "seconds": 109.454,
+      "failures": [
+        "test_exact_50k_and_70k_effective_length_boundaries (portal.tests.test_product_auto_delivery.AutomaticDeliveryTests.test_exact_50k_and_70k_effective_length_boundaries) (family='feasibility')",
+        "test_exact_approved_quantity_warning_survives_ppt_action_and_completion (portal.tests.test_product_auto_delivery.AutomaticDeliveryTests.test_exact_approved_quantity_warning_survives_ppt_action_and_completion)",
+        "test_pair_retains_warning_evidence_without_turning_it_into_a_ppt_blocker (portal.tests.test_product_auto_delivery.AutomaticDeliveryTests.test_pair_retains_warning_evidence_without_turning_it_into_a_ppt_blocker)",
+        "test_ppt_requires_both_delivered_reports_and_a_real_passing_quality_gate (portal.tests.test_product_auto_delivery.AutomaticDeliveryTests.test_ppt_requires_both_delivered_reports_and_a_real_passing_quality_gate)",
+        "test_diagram_only_warning_keeps_real_review_and_current_artifact_on_resume (portal.tests.test_product_draft_review.DraftReviewTests.test_diagram_only_warning_keeps_real_review_and_current_artifact_on_resume)",
+        "test_findings_leave_current_downloadable_drafts_and_real_review_evidence (portal.tests.test_product_draft_review.DraftReviewTests.test_findings_leave_current_downloadable_drafts_and_real_review_evidence)",
+        "test_technical_draft_is_downloadable_before_feasibility_generation_fails (portal.tests.test_product_draft_review.DraftReviewTests.test_technical_draft_is_downloadable_before_feasibility_generation_fails)",
+        "test_legacy_three_drafts_program_checks_saved_body_and_preserves_real_tail_findings (portal.tests.test_product_three_drafts.ThreeDraftFlowTests.test_legacy_three_drafts_program_checks_saved_body_and_preserves_real_tail_findings)",
+        "test_owner_blueprint_confirmation_generates_three_outputs_without_report_approval (portal.tests.test_product_three_drafts.ThreeDraftFlowTests.test_owner_blueprint_confirmation_generates_three_outputs_without_report_approval)",
+        "test_report_pair_generation_skips_ppt_and_records_program_checks (portal.tests.test_product_three_drafts.ThreeDraftFlowTests.test_report_pair_generation_skips_ppt_and_records_program_checks)"
+      ],
+      "errors": []
+    },
+    "baseline_root": ".runtime/product-generation-only/20261019-001041-2256",
+    "current_root": ".runtime/product-generation-only/20261019-001108-19116",
+    "baseline_commit": "5db3b95294953624856bd449dd7f13fad24c54b1"
+  },
+  "synthetic_chain": {
+    "policy": "generation-only-v1",
+    "scope": "synthetic_short_body_real_word_ppt_office_render",
+    "state": "COMPLETED",
+    "model": "deterministic_substitute",
+    "model_actions": [
+      "chapter",
+      "chapter",
+      "chapter",
+      "chapter",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "diagram",
+      "presentation_plan",
+      "presentation_plan",
+      "presentation_plan",
+      "presentation_plan",
+      "presentation_plan",
+      "presentation_plan",
+      "presentation_slide",
+      "presentation_slide",
+      "presentation_slide",
+      "presentation_slide",
+      "presentation_slide",
+      "presentation_slide",
+      "presentation_slide",
+      "presentation_slide",
+      "presentation_slide",
+      "presentation_slide",
+      "presentation_slide",
+      "presentation_slide",
+      "presentation_slide",
+      "presentation_slide",
+      "presentation_slide",
+      "presentation_slide",
+      "presentation_slide"
+    ],
+    "targets": {
+      "technical": 50000,
+      "feasibility": 70000
+    },
+    "content_checks": "not_run",
+    "artifacts": [
+      {
+        "family": "technical-solution",
+        "sha256": "17433b15dd4975358f096682ca9554c36d6858a4f0cb6fc084f8d28a96ccf460",
+        "pages": 7,
+        "path": ".runtime/product-generation-only/20261019-001734-23476/artifacts/5818bb2d-c60c-42d4-96e1-71d22badf964/artifacts/6a06ecd7ddd44f2aaa34fc970c33c808/draft.docx",
+        "bytes": 222438
+      },
+      {
+        "family": "feasibility",
+        "sha256": "9ab94d789dc426530f63b6db0655cb7528a431b0a5be83be45f72682ab0d61cf",
+        "pages": 11,
+        "path": ".runtime/product-generation-only/20261019-001734-23476/artifacts/5818bb2d-c60c-42d4-96e1-71d22badf964/artifacts/5b3a3f6381d04bfbb4c05377faf58ad7/draft.docx",
+        "bytes": 292524
+      },
+      {
+        "family": "presentation",
+        "sha256": "1c04cf4f01e2e2372d5de87c8592fe333bd651522f71c693e374edbdd08060cd",
+        "pages": 17,
+        "path": ".runtime/product-generation-only/20261019-001734-23476/artifacts/5818bb2d-c60c-42d4-96e1-71d22badf964/artifacts/7dc8bb1ee4614dbab2e1d725dd967b62/draft.pptx",
+        "bytes": 73179
+      }
+    ],
+    "execution_attempts": 2,
+    "report_ids_hashes_reused": true,
+    "action_counts": {
+      "chapter": 4,
+      "diagram": 35,
+      "presentation_plan": 6,
+      "presentation_slide": 17
+    }
+  },
+  "frontend_src_files_pinned": 137,
+  "frontend_unchanged": true,
+  "published_company_data_unchanged": true,
+  "services_restarted": false,
+  "live_project_requeued": false,
+  "production_deployed": false,
+  "real_model_calls": 0,
+  "upstream_hashes_verified": 26,
+  "limitations": [
+    "合成短正文与确定性模型替身；不代表实际模型12万字项目内容质量验收",
+    "旧内容核验配置的10项历史测试失败保留，与提交版本相同；不宣称全项目测试全绿",
+    "未切换现有运行服务、未重跑历史项目、未提交推送或正式部署"
+  ]
+}

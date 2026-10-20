@@ -12,7 +12,7 @@ try {
     try { $locked = $mutex.WaitOne(0) } catch [System.Threading.AbandonedMutexException] { $locked = $true }
     if (!$locked) { throw 'Another enterprise service helper is active; no process was stopped.' }
 if (!$GatewayOnly -and !$ModelGatewayOnly) {
-    & (Join-Path $PSScriptRoot 'stop-business-workers.ps1') -Workers product,hr,engineering -CheckOnly:$CheckOnly
+    & (Join-Path $PSScriptRoot 'stop-business-workers.ps1') -Workers product,hr,engineering,baichuan,tender -CheckOnly:$CheckOnly
 }
 if (Test-Path -LiteralPath $stateFile) {
     $state = Get-Content -LiteralPath $stateFile -Raw | ConvertFrom-Json

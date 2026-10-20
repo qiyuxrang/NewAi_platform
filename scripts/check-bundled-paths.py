@@ -1,8 +1,11 @@
 """Small, isolated deployment checks. No database/network/process mutations."""
 import importlib.util
+import io
 import os
 from pathlib import Path
-from unittest.mock import patch
+import sys
+from types import ModuleType, SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 root = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("business_runner", root / "scripts/run-business-service.py")
@@ -41,4 +44,68 @@ with patch.dict(os.environ, {"PORTAL_PRODUCT_STORAGE_ROOT": "../../escape"}, cle
     else:
         raise AssertionError("Escaping storage path was accepted")
 compile((root / "scripts/run-business-service.py").read_text(encoding="utf-8-sig"), "run-business-service.py", "exec")
+# Exercise actual CLI dispatch with synthetic Django; no settings/database or worker is loaded.
+django = ModuleType("django")
+django.setup = lambda: None
+conf = ModuleType("django.conf")
+conf.settings = SimpleNamespace(BAICHUAN_ASSISTANT_ENABLED=True, PORTAL_BAICHUAN_SCOPE_CONFIRMED=True,
+                                BAICHUAN_ASSISTANT_SCOPE="isolated-check")
+management = ModuleType("django.core.management")
+calls = []
+management.call_command = lambda name, **options: calls.append((name, options))
+with patch.dict(sys.modules, {"django": django, "django.conf": conf, "django.core.management": management}), \
+        patch.object(runner, "load_dotenv"), patch.object(runner, "bundle_path_environment"), \
+        patch.object(runner, "model_gateway_matches", return_value=True), patch.object(os, "chdir"), \
+        patch.object(sys, "path", sys.path.copy()), \
+        patch.object(sys, "argv", ["run-business-service.py", "baichuan-worker", "--repository", str(repo)]):
+    runner.main()
+    assert calls == [("run_baichuan_worker", {})]
+    conf.settings.BAICHUAN_ASSISTANT_ENABLED = False
+    try:
+        with patch.object(sys, "stderr", io.StringIO()):
+            runner.main()
+    except SystemExit as error:
+        assert error.code == 2
+    else:
+        raise AssertionError("Disabled Baichuan worker was dispatched")
+    assert len(calls) == 1
+# Preflight imports are synthetic too: prove flag-off skips the Baichuan table,
+# and flag-on counts only the configured scope under the read-only connection.
+modules = {"django.conf": conf}
+for module_name, names in {
+    "django.db": "connection", "django.db.models": "Count", "django.utils": "timezone",
+    "portal.engineering_models": "EngineeringJob", "portal.engineering_storage": "verified_input",
+    "portal.engineering_worker": "_engineering_allowed max_attempts online_webprice_key runtime_state",
+    "portal.hr_retention": "cutoff", "portal.hr_resume_storage": "_root",
+    "portal.hr_recruitment_models": "RecruitmentRequest",
+    "portal.hr_screening_models": "ResumeArtifact ResumeScreeningBatch",
+    "portal.product_models": "DocumentTask", "portal.product_storage": "StorageError",
+    "portal.tender_models": "TenderFetchRun TenderManualRefresh TenderSource",
+    "portal.baichuan_assistant_models": "BaichuanJob",
+}.items():
+    module = modules[module_name] = ModuleType(module_name)
+    for name in names.split():
+        setattr(module, name, MagicMock())
+conf.settings.PRODUCT_P1_ENABLED = True
+conf.settings.PORTAL_TENDER_INGESTION_ENABLED = False
+conf.settings.PORTAL_TENDER_MANUAL_REFRESH_ENABLED = False
+conf.settings.PORTAL_TENDER_SCHEDULE_ENABLED = False
+modules["django.db"].connection.vendor = "sqlite"
+modules["portal.hr_resume_storage"]._root.return_value.is_dir.return_value = False
+modules["portal.engineering_worker"].runtime_state.return_value = {"status": "ready", "python": None, "cli": None}
+modules["portal.engineering_worker"].online_webprice_key.return_value = None
+baichuan_jobs = modules["portal.baichuan_assistant_models"].BaichuanJob.objects
+baichuan_jobs.filter.return_value.values.return_value.annotate.return_value = [{"status": "queued", "count": 2}]
+with patch.dict(sys.modules, modules), patch.object(runner, "model_gateway_matches", return_value=True):
+    assert runner.worker_preflight()["baichuan"]["states"] == {}
+    baichuan_jobs.filter.assert_not_called()
+    conf.settings.BAICHUAN_ASSISTANT_ENABLED = True
+    snapshot = runner.worker_preflight()
+    assert snapshot["read_only"] and not snapshot["workers_started"]
+    assert snapshot["baichuan"]["states"] == {"queued": 2}
+    baichuan_jobs.filter.assert_called_once_with(scope="isolated-check")
+    statements = modules["django.db"].connection.cursor.return_value.__enter__.return_value.execute.call_args_list
+    assert len(statements) == 2 and all(call.args == ("PRAGMA query_only = ON",) for call in statements)
 print("Local paths, engineering overrides, storage containment, secret exclusion and Python syntax: PASS")
+print("Baichuan enabled dispatch and disabled rejection without loading settings/database/worker: PASS")
+print("Read-only preflight, flag-off table exclusion and scope-restricted aggregate counts: PASS")

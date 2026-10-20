@@ -4,7 +4,7 @@ import re
 
 from .tender_normalize import html_to_lines, notice_content
 
-CLASSIFICATION_VERSION = 'digital-construction-v5'
+CLASSIFICATION_VERSION = 'digital-construction-v6'
 INDUSTRIES = {
     'coal': '煤炭', 'water': '水利水电', 'power': '电力与新能源',
     'medical': '医疗卫生', 'transport': '交通运输', 'petrochemical': '石油与化工',
@@ -52,6 +52,8 @@ _PROCEDURE = re.compile(
     r'|(?:获取|下载|领取|购买)(?:竞争性)?(?:招标|采购|磋商|谈判|询价)文件|文件获取|(?:注册|申请)(?:账号|账户)'
     r'|CA证书|数字证书|电子签章|远程开标|电子交易平台|电子招投标平台|电子化交易'
     r'|(?:供应商|投标人).{0,12}(?:登录|注册|下载|上传|提交|递交|报名)'
+    r'|(?:潜在供应商|潜在投标人).{0,6}(?:应在|须在|应通过|须通过)'
+    r'|(?:开标|评标)(?:程序|流程|活动)?(?:在|通过|使用|采用).{0,80}(?:平台|系统)'
     r'|(?:提交|递交).{0,10}(?:报价|响应|文件)|版权所有|技术支持|主办单位|承办单位|网站建设')
 _POLICY_CITATION = re.compile(
     r'(?:财库|财办库|国办发)\s*[〔\[（(]|(?:财政部|工业和信息化部|国务院).*《')
@@ -62,6 +64,7 @@ _QUALIFICATION_EVIDENCE = re.compile(
     r'|(?:须|必须|应).{0,30}(?:具有|具备|提供).{0,50}(?:资质|许可证|业绩证明)')
 _BACKGROUND_ONLY = re.compile(r'瓶颈|(?:智能化|数字化|信息化)服务体验|(?:智能化|数字化|信息化)发展趋势')
 _ACTION = re.compile(r'建设|构建|开发|升级|改造|部署|采购|安装|实施|集成|运维|维护|服务|接入|改建|搭建|配置')
+_PROCUREMENT_PORTAL = re.compile(r'(?:采购与招标|招标采购|采购招标)管理系统(?:[（(](?:网址|以下简称)[^）)]*[）)]?)?')
 _UNRELATED = re.compile(r'煤炭采购|原煤|燃煤|药品|药剂|家具|办公桌|课桌|办公椅|土建|土石方|道路维修|道路施工|房屋施工|装修|食材|保洁')
 
 
@@ -131,6 +134,9 @@ def classify_notice(*, title, raw=b'', purchaser='', notice_type='', content_typ
             if re.search(r'不(?:含|包含|涉及|采购|建设)|无(?:信息化|数字化|智能化)', sentence):
                 continue
             if re.search(r'(?:公司|单位|机构)\s*[:：]', sentence) or re.search(r'(?:信息化|数字化|智能化)服务公司', sentence):
+                continue
+            # “采购” inside a portal name is not an action to purchase that system.
+            if _PROCUREMENT_PORTAL.search(sentence) and not _ACTION.search(_PROCUREMENT_PORTAL.sub('', sentence)):
                 continue
             matched = [tag for tag, terms in DIGITAL_TERMS.items() if any(term in sentence for term in terms)]
             if matched and (in_scope or _ACTION.search(sentence)):

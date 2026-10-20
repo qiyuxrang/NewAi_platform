@@ -47,6 +47,8 @@ class EngineeringKnowledgeTests(SimpleTestCase):
         self.jobs = self.enterContext(patch.object(api.EngineeringJob.objects, "filter"))
         self.jobs.return_value.exists.return_value = True
         self.audit = self.enterContext(patch.object(api, "audit"))
+        self.enterContext(patch.object(api.knowledge_access, "authorize", return_value=None))
+        self.enterContext(patch.object(api.knowledge_access, "recheck"))
         self.enterContext(patch.dict(os.environ, {
             "PORTAL_ENGINEERING_RAGFLOW_URL": URL,
             "PORTAL_ENGINEERING_RAGFLOW_DATASET_ID": DATASET,
@@ -64,7 +66,8 @@ class EngineeringKnowledgeTests(SimpleTestCase):
         outbound.side_effect = [FakeResponse([{"id": DATASET, "document_count": 1, "chunk_count": 0}]) for _ in range(2)]
         self.assertEqual(self.call(api.knowledge_status).data, {
             "status": "locked", "detail": "工程专用知识库尚无已解析文档或片段。",
-            "dataset_document_count": 0})
+            "dataset_document_count": 0, "assistant_export_allowed": True,
+            "authorization_revision": "legacy"})
         denied = self.call(api.knowledge_retrieve, "post", {"question": "定额？"})
         self.assertEqual((denied.status_code, denied.data["code"]), (409, "knowledge_locked"))
         self.assertEqual(outbound.call_count, 2)
@@ -109,6 +112,8 @@ class EngineeringKnowledgeTests(SimpleTestCase):
         response = self.call(api.knowledge_retrieve, "post", {"question": " 定额来源？ "})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["status"], "completed")
+        self.assertIs(response.data["assistant_export_allowed"], True)
+        self.assertEqual(response.data["authorization_revision"], "legacy")
         self.assertEqual(response.data["sources"][0]["document_id"], "doc-1")
         self.assertEqual(len(response.data["sources"][0]["content"]), 1200)
         first, second = [call.args[0] for call in outbound.call_args_list]

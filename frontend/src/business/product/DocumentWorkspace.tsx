@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApiError } from "../api";
 import { CenterLink, Field } from "../shared";
-import { artifactDownload, artifactHistoryDownload, createConversationTask, draftDownload, draftHistoryDownload, getDraftOutputs, getTask, getTaskHistory, listTasks, updateTask, uploadSource } from "./product-api";
+import { artifactDownload, artifactHistoryDownload, confirmSourceUpload, createConversationTask, draftDownload, draftHistoryDownload, getDraftOutputs, getTask, getTaskHistory, listTasks, updateTask, uploadSource } from "./product-api";
 import type { BlueprintPayload, DocumentTask, DraftOutput, ReportRevision, ReviewCategory, TaskHistory, TaskInput, TaskSummary } from "./product-api";
 import "./product-workspace.css";
 import ProjectStages from "./ProjectStages";
@@ -38,7 +38,8 @@ function errorMessage(error: unknown) {
       const reason = error.code === "model_authorization_required" || error.code === "formal_release_blocked" ? "缺少模型外发或正式发布授权，操作被阻塞。" : "版本冲突或操作前置条件未满足。";
       return `${reason}${error.message} 请重新加载服务端状态后核对再保存；未保存编辑已保留，不会自动覆盖。`;
     }
-    if (error.status === 403 || error.status === 503) return `缺少业务授权或服务授权，操作被阻塞，请联系负责人。${error.message}`;
+    if (error.status === 403) return `缺少业务授权或服务授权，操作被阻塞，请联系负责人。${error.message}`;
+    if (error.status === 503) return `服务暂时不可用，请稍后刷新状态核对。${error.message}`;
   }
   return error instanceof Error ? error.message : "请求失败，请重试。";
 }
@@ -119,7 +120,7 @@ function TaskWorkspace() {
       }
       let remaining = [...files];
       while (remaining.length) {
-        task = await uploadSource(task.id, remaining[0], task.version, controller.signal);
+        task = await uploadSource(task.id, remaining[0], task.version, controller.signal, undefined, task.sources);
         taskForRetry = task;
         remaining = remaining.slice(1);
         setFiles(remaining); setPendingTask(task);
@@ -196,8 +197,12 @@ export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, busines
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [conflict, setConflict] = useState(false);
+  const [syncError, setSyncError] = useState("");
+  const [uncertain, setUncertain] = useState(false);
+  const [syncedAt, setSyncedAt] = useState("");
   const [notice, setNotice] = useState("");
   const [pollRound, setPollRound] = useState(0);
+  const [confirmedUpload, setConfirmedUpload] = useState<File | null>(null);
   const locked = useRef(false);
   const initial = useRef(false);
   const mounted = useRef(false);
@@ -212,7 +217,10 @@ export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, busines
     if (business || deepLinked) onFatal("项目访问权限已变化，当前资料已隐藏。");
     return true;
   }, [business, deepLinked, onFatal]);
-  const receive = useCallback((result: DocumentTask) => {
+  const relatedVersion = useRef<number | null>(null);
+  const pendingUpload = useRef<{ file: File; purpose?: 'equipment' | 'background'; previousSources: DocumentTask['sources'] } | null>(null);
+  const receive = useCallback((result: DocumentTask, reloadRelated = false) => {
+
     if (requestedArtifact && !result.artifacts.some(item => String(item.id) === requestedArtifact)) {
       related.current?.abort(); snapshot.current = null; setOutputs([]); setHistory(null);
       setTask(null); onFatal("指定成果不存在、无权访问或不属于当前产品任务。");
@@ -221,6 +229,23 @@ export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, busines
     const invalidated = outputBasisChanged(snapshot.current, result);
     snapshot.current = stableTaskSnapshot(snapshot.current, result);
     setTask(snapshot.current);
+    setSyncError(""); setUncertain(Boolean(pendingUpload.current)); setSyncedAt(new Date().toLocaleTimeString("zh-CN", { hour12: false }));
+    const upload = pendingUpload.current;
+    if (upload) void confirmSourceUpload(result, upload.file, upload.previousSources, upload.purpose).then(confirmed => {
+      if (!mounted.current || pendingUpload.current !== upload) return;
+      if (!confirmed) { setError(`“${upload.file.name}”的上传结果仍未核实，暂不重复发送。请继续刷新核对或联系管理员。`); return; }
+      pendingUpload.current = null; setUncertain(false); setConfirmedUpload(upload.file);
+      setFile(current => current === upload.file ? null : current);
+      setError(""); setNotice(`已核对“${upload.file.name}”已保存，无需再次上传。`);
+    }).catch(reason => { if (mounted.current && pendingUpload.current === upload) setError(`附件上传结果仍未核实，请刷新核对。${errorMessage(reason)}`); });
+    if (!initial.current) {
+      initial.current = true;
+      setTitle(result.title); setInput(pretty(editableInput(result.input || emptyInput()))); setBlueprint(pretty(result.blueprint?.payload || emptyBlueprint));
+      if (requestedArtifact) setArtifactId(requestedArtifact);
+    }
+    // Unchanged task polls must keep the verified outputs and history visible.
+    if (relatedVersion.current === result.version && !reloadRelated) return;
+    relatedVersion.current = result.version;
     related.current?.abort();
     if (invalidated) { setOutputs([]); setHistory(null); }
     const controller = new AbortController();
@@ -241,13 +266,6 @@ export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, busines
         } else { setHistory(null); setHistoryError("版本链已变化，请刷新项目状态后重新读取。"); }
       }
     }).catch(reason => { if (!controller.signal.aborted) { hideInaccessible(reason); setHistoryError(errorMessage(reason)); } });
-    if (!initial.current) {
-      initial.current = true;
-      setTitle(result.title); setInput(pretty(editableInput(result.input || emptyInput()))); setBlueprint(pretty(result.blueprint?.payload || emptyBlueprint));
-      if (requestedArtifact) {
-        setArtifactId(requestedArtifact);
-      }
-    }
   }, [id, requestedArtifact, onFatal, hideInaccessible]);
   useEffect(() => {
     mounted.current = true;
@@ -262,7 +280,7 @@ export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, busines
     })
       .catch(reason => { if (!controller.signal.aborted) {
         hideInaccessible(reason);
-        if (deepLinked) onFatal("指定产品任务或成果不存在，或当前账号无权访问。");
+        if (deepLinked && reason instanceof ApiError && [401, 403, 404].includes(reason.status)) onFatal("指定产品任务或成果不存在，或当前账号无权访问。");
         else setError(errorMessage(reason));
       } });
     return () => controller.abort();
@@ -274,7 +292,7 @@ export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, busines
     const timer = window.setTimeout(() => {
       void getTask(id, controller.signal).then(result => { if (!controller.signal.aborted) receive(result); })
         .catch(reason => { if (!controller.signal.aborted) {
-          setError(errorMessage(reason));
+          setSyncError(errorMessage(reason));
           hideInaccessible(reason);
         } })
         .finally(() => { if (!controller.signal.aborted) setPollRound(value => value + 1); });
@@ -282,21 +300,25 @@ export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, busines
     return () => { clearTimeout(timer); controller.abort(); };
   }, [task, id, busy, conflict, pollRound, receive, hideInaccessible]);
   async function perform(work: (signal: AbortSignal) => Promise<unknown>, reloading = false) {
-    if (locked.current) return;
+    if (locked.current || (!reloading && (uncertain || syncError || pendingUpload.current))) return;
     locked.current = true; setBusy(true); setError(""); setNotice(""); reading.current?.abort(); related.current?.abort();
     const controller = new AbortController(); mutation.current = controller;
+    let submitted = false;
     try {
       await work(controller.signal);
+      submitted = !reloading;
       if (controller.signal.aborted) return;
       const result = await getTask(id, controller.signal);
       if (controller.signal.aborted || !mounted.current) return;
-      receive(result);
+      receive(result, true);
       if (reloading) setConflict(false);
       setNotice(business ? "项目状态已更新。" : "服务端状态已更新；编辑区保留原内容。蓝图生成后请点击“载入服务端蓝图”。");
       return true;
     } catch (reason) {
       if (!controller.signal.aborted && mounted.current) {
-        setError(errorMessage(reason));
+        const unconfirmed = submitted || reason instanceof TypeError || reason instanceof SyntaxError || (reason instanceof ApiError && reason.status >= 500);
+        if (!reloading && unconfirmed) setUncertain(true);
+        setError(!reloading && unconfirmed ? `${submitted ? "操作已提交，但最新状态尚未读取。" : "本次请求结果尚未确认。"}请先刷新状态核对，避免重复提交。${errorMessage(reason)}` : errorMessage(reason));
         if (reason instanceof ApiError && reason.status === 409) setConflict(true);
         hideInaccessible(reason);
       }
@@ -315,7 +337,7 @@ export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, busines
       const request = new AbortController(); controller = request; reading.current = request;
       void getTask(id, request.signal).then(next => { if (!request.signal.aborted) receive(next); }).catch(reason => {
         if (request.signal.aborted) return;
-        setError(errorMessage(reason));
+        setSyncError(errorMessage(reason));
         hideInaccessible(reason);
       });
     };
@@ -325,9 +347,21 @@ export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, busines
     return () => { controller?.abort(); window.clearInterval(timer); window.removeEventListener("focus", refreshAccess); document.removeEventListener("visibilitychange", refreshAccess); };
   }, [business, id, busy, taskState, task?.version, receive, hideInaccessible]);
 
+  async function uploadTaskSource(currentTask: DocumentTask, file: File, signal: AbortSignal, purpose?: 'equipment' | 'background') {
+    pendingUpload.current = { file, purpose, previousSources: currentTask.sources };
+    try {
+      const next = await uploadSource(id, file, currentTask.version, signal, purpose, currentTask.sources);
+      pendingUpload.current = null; setConfirmedUpload(file); setFile(current => current === file ? null : current);
+      return next;
+    } catch (reason) {
+      if (reason instanceof ApiError && reason.status < 500) pendingUpload.current = null;
+      throw reason;
+    }
+  }
+
   if (!task) return <section className="center-panel">{error ? <><p role="alert">{error}</p><button disabled={busy} onClick={() => void perform(async () => {}, true)}>重新加载服务端状态</button></> : <p role="status">正在加载任务…</p>}</section>;
   const allows = (action: string) => Array.isArray(task.actions) ? task.actions.includes(action) : task.actions?.[action] === true;
-  const disabled = (action: string) => busy || conflict || !allows(action) || Boolean(task.blockers?.[action]);
+  const disabled = (action: string) => busy || conflict || uncertain || Boolean(syncError) || !allows(action) || Boolean(task.blockers?.[action]);
   const send = (endpoint: string, body: object) => perform(signal => updateTask(id, endpoint, { expected_version: task.version, ...body }, signal));
   const saveJson = (endpoint: string, text: string, kind: "input" | "payload" | "chapter", extra: object = {}) => perform(signal => {
     const parsed = jsonObject<object>(text);
@@ -363,7 +397,9 @@ export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, busines
   }
   if (business) return <>
     {error && <div className="pd-feedback" role="alert">{error}</div>}{notice && <p className="pd-inline-notice" role="status">{notice}</p>}
-    <ProjectStages task={task} outputs={outputs} outputsLoaded={outputsLoaded} history={history} outputsError={outputsError} historyError={historyError} busy={busy} conflict={conflict} disabled={disabled} onAction={send} onReload={() => void perform(async () => {}, true)} onUpload={(file, purpose) => perform(signal => uploadSource(id, file, task.version, signal, purpose))} onSourceAction={(sourceId, endpoint, body) => perform(signal => updateSource(sourceId, endpoint, body, signal))}/>
+    {syncError && <div className="pd-feedback" role="alert">状态暂未同步：{syncError} 后台任务可能仍在处理；当前显示上次确认的记录，请恢复连接或点击“刷新状态”。</div>}
+    {syncedAt && <p className="pd-inline-notice" role="status">最近同步 {syncedAt}{uncertain || syncError ? " · 请先刷新状态，再继续操作" : " · 可离开后从当前项目继续查看进度与成果"}</p>}
+    <ProjectStages task={task} outputs={outputs} outputsLoaded={outputsLoaded} history={history} outputsError={outputsError} historyError={historyError} busy={busy} conflict={conflict} disabled={disabled} onAction={send} onReload={() => void perform(async () => {}, true)} confirmedUpload={confirmedUpload} onUpload={(file, purpose) => perform(signal => uploadTaskSource(task, file, signal, purpose))} onSourceAction={(sourceId, endpoint, body) => perform(signal => updateSource(sourceId, endpoint, body, signal))}/>
   </>;
   const progress = task.artifacts.length ? 4 : task.blueprint ? 3 : task.sources.length ? 2 : 1;
   return <>
@@ -431,7 +467,7 @@ export function TaskEditor({ id, requestedArtifact, deepLinked, onFatal, busines
     <h3>试用资料上传</h3>
     <p>资料在本地解析并保留来源位置；OCR 文字和公式需核对。每份文件最多 20 MB，上传不会覆盖正在编辑的输入。</p>
     <label htmlFor="source-file">选择试用资料</label><input id="source-file" type="file" accept={SOURCE_ACCEPT} onChange={event => setFile(event.target.files?.[0] || null)} />
-    <button disabled={disabled("add_source") || !file} onClick={() => { if (file) void perform(signal => uploadSource(id, file, task.version, signal)); }}>上传资料</button>
+    <button disabled={disabled("add_source") || !file} onClick={() => { if (file) void perform(signal => uploadTaskSource(task, file, signal)); }}>上传资料</button>
     <ul aria-label="已上传资料">{task.sources.map(source => <li key={source.id}>{source.original_name}（引用 ID：{source.id}）</li>)}</ul>
     <button disabled={disabled("queue_retrieve")} onClick={() => void send("queue/", { action: "retrieve" })}>发起授权检索（默认未授权，可能被拒）</button>
     <h3>方案蓝图</h3>

@@ -1,0 +1,92 @@
+{
+  "task": "AI-T16",
+  "synthetic": true,
+  "target_database_accessed": false,
+  "scope": "deterministic resumed query task -> worker -> fixed snapshot -> XLSX -> authorized download",
+  "natural_language_model_verified": false,
+  "network_calls": 0,
+  "model_calls": 0,
+  "sqlite": "3.53.1",
+  "python": "3.13.16",
+  "openpyxl": "3.1.5",
+  "cpu": "Intel64 Family 6 Model 140 Stepping 2, GenuineIntel",
+  "logical_cpus": 8,
+  "platform": "Windows-11-10.0.26200-SP0",
+  "concurrency": 1,
+  "cold_definition": "Django connection closed, first sample; OS cache not evicted",
+  "p95_method": "nearest rank over warm samples; limited exploratory sample, not population guarantee",
+  "warm_samples": 0,
+  "datasets": [
+    {
+      "companies": 1000,
+      "certificates": 1000,
+      "fixture_setup_ms": 435.055,
+      "samples": [
+        {
+          "cache": "connection_cold",
+          "query_submit_ms": 15.763,
+          "structured_match_ms": 152.411,
+          "match_and_snapshot_ms": 177.66,
+          "query_worker_ms": 233.544,
+          "first_snapshot_ready_ms": 256.398,
+          "export_submit_ms": 30.961,
+          "xlsx_build_ms": 778.287,
+          "xlsx_publish_ms": 4.614,
+          "export_worker_ms": 836.458,
+          "authorized_download_ms": 35.024,
+          "xlsx_read_validate_ms": 224.805,
+          "total_ms": 1392.332,
+          "snapshot_publish_overhead_ms": 25.249,
+          "xlsx_bytes": 157390,
+          "xlsx_sha256": "9be8f6ff4fbf087c9d6052df1dd5fe8757fa805ac9f80e2ef928d697f5eb606c",
+          "counts": {
+            "confirmed": 500,
+            "candidate": 500,
+            "excluded": 0
+          },
+          "xlsx_rows_validated": 2000,
+          "query_terminal": "partial",
+          "export_terminal": "completed"
+        }
+      ]
+    },
+    {
+      "companies": 5000,
+      "certificates": 5000,
+      "fixture_setup_ms": 1569.963,
+      "samples": [
+        {
+          "cache": "connection_cold",
+          "query_submit_ms": 14.685,
+          "structured_match_ms": 1075.967,
+          "match_and_snapshot_ms": 1135.434,
+          "query_worker_ms": 1192.611,
+          "first_snapshot_ready_ms": 1213.796,
+          "export_submit_ms": 102.932,
+          "xlsx_build_ms": 11136.057,
+          "xlsx_publish_ms": 5.005,
+          "export_worker_ms": 11247.431,
+          "authorized_download_ms": 90.428,
+          "xlsx_read_validate_ms": 985.626,
+          "total_ms": 13674.287,
+          "snapshot_publish_overhead_ms": 59.467,
+          "xlsx_bytes": 745307,
+          "xlsx_sha256": "043aa55210020de66061d742612b3408742baca3e038e2ff4ec887a8c4388ce0",
+          "counts": {
+            "confirmed": 2500,
+            "candidate": 2500,
+            "excluded": 0
+          },
+          "xlsx_rows_validated": 10000,
+          "query_terminal": "partial",
+          "export_terminal": "completed"
+        }
+      ]
+    }
+  ],
+  "complete": true,
+  "wall_limit_seconds": 180,
+  "started_at_utc": "2026-10-17T12:05:49.217970+00:00",
+  "schema_setup_ms": 6688.446,
+  "completed_at_utc": "2026-10-17T12:06:13.011296+00:00"
+}

@@ -29,6 +29,7 @@ async function main() {
   const contentPath = path.resolve(process.argv[2]);
   const root = path.dirname(contentPath);
   const content = JSON.parse(await fs.readFile(contentPath, "utf8"));
+  const generationOnly = content.requirements?.some(item => item.id === "RGENERATIONPOLICY" && item.text === "generation-only-v1");
   const figures = content.blocks.filter((block) => block.type === "figure");
   const sourcePath = await confined(root,path.relative(root,path.resolve(process.argv[3])));
   if (!sourcePath.startsWith(root+path.sep) || sourcePath===contentPath) throw new Error("unsafe private diagram input");
@@ -43,7 +44,7 @@ async function main() {
         || !/^\s*(?:flowchart\s+(?:TB|TD|BT|RL|LR)|sequenceDiagram)\b/.test(diagram.source)
         || /%%|https?:\/\/|javascript:|<|\b(?:click|style|classDef|linkStyle)\b/i.test(diagram.source)) throw new Error("invalid or unsafe diagram source");
     const normalized=diagram.source.replace(/\s+/g,"");
-    if (distinct.has(normalized)) throw new Error("duplicate diagram source");
+    if (!generationOnly && distinct.has(normalized)) throw new Error("duplicate diagram source");
     distinct.add(normalized);sources.set(diagram.figure_id,diagram);
   }
   if (new Set(figures.map((figure)=>figure.id)).size!==figures.length
@@ -241,7 +242,7 @@ async function main() {
         return {panels,direction,sourceDirection,compact,directionCandidates,labelCount:text.length,nodeCount:svg.querySelectorAll(".node").length,
           edgeCount:svg.querySelectorAll(".edgePath,.flowchart-link,.messageLine0,.messageLine1").length,
           labelsFullyContained:true,contentBounds:{width:bounds.width,height:bounds.height},minFontPt};
-      },{diagram,anchor:inputDiagram.anchor_text,widthMm}).catch(error=>{
+      },{diagram,anchor:generationOnly ? "" : inputDiagram.anchor_text,widthMm}).catch(error=>{
         if (/diagram requires narrower reading units|diagram cannot split without cutting labels|reading unit cuts a visible label/.test(error.message)) failureReason="diagram_layout_unreadable";
         throw error;
       });

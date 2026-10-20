@@ -11,6 +11,10 @@ class Provider(models.Model):
     class Protocol(models.TextChoices):
         OPENAI_CHAT = "openai_chat", "OpenAI Chat 兼容接口"
 
+    class ProcessingBoundary(models.TextChoices):
+        INTERNAL = "internal", "内部处理"
+        EXTERNAL = "external", "外部处理"
+
     code = models.SlugField("服务商编码", unique=True)
     name = models.CharField("服务商名称", max_length=100)
     protocol = models.CharField("接口协议", max_length=32, choices=Protocol, default=Protocol.OPENAI_CHAT,
@@ -20,6 +24,9 @@ class Provider(models.Model):
     api_key_env = models.CharField("密钥环境变量名", max_length=100,
         validators=[RegexValidator(r"^PORTAL_MODEL_KEY_[A-Z0-9_]+$", "请输入 PORTAL_MODEL_KEY_ 开头的大写环境变量名。")],
         help_text="仅填写独立 FastAPI 服务环境中的变量名，不是门户进程环境。Key 不入库，请勿填写明文密钥。")
+    processing_boundary = models.CharField("数据处理边界", max_length=16, choices=ProcessingBoundary,
+        default=ProcessingBoundary.EXTERNAL,
+        help_text="按服务商实际数据处理环境标记；未确认的服务商保守视为外部处理。")
     enabled = models.BooleanField("启用", default=False)
     updated_at = models.DateTimeField("更新时间", auto_now=True)
 
@@ -77,6 +84,8 @@ class ModelRoute(models.Model):
     name = models.CharField("路由名称", max_length=100)
     module = models.ForeignKey("portal.Module", verbose_name="业务模块", on_delete=models.PROTECT)
     model = models.ForeignKey(GatewayModel, verbose_name="网关模型", on_delete=models.PROTECT)
+    allow_external_processing = models.BooleanField("允许外部处理", default=True,
+        help_text="关闭后，该业务路由仅可使用明确标记为内部处理的服务商。")
     max_calls_per_minute = models.PositiveIntegerField(
         "单用户每分钟调用上限", default=10,
         validators=[MinValueValidator(1), MaxValueValidator(120)],

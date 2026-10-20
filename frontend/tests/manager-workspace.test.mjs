@@ -8,7 +8,7 @@ import { availableManagerEntries, canAccessFinanceBoard, canAccessEntry } from '
 import { businessPath, apiRequest, businessFileUrl, downloadBusinessFile, businessFilePreview } from '../src/business/api.ts'
 const manager = { business_role: 'general_manager', capabilities: ['general_manager', 'product', 'engineering'] }
 test('manager entries keep order/defaults and finance/entry guards do not expand access', () => {
- assert.deepEqual(availableManagerEntries(manager).map(item => item.label), ['商机看板', '文档生成', '产品报价', '智能助手', '财务看板', '百川阁'])
+ assert.deepEqual(availableManagerEntries(manager).map(item => item.label), ['商机看板', '文档生成', '产品报价', '智能助手', '财务看板', '企业资质库'])
  assert.equal(availableManagerEntries(manager)[1].to, '/departments/product/documents?view=projects')
  assert.deepEqual(availableManagerEntries({...manager, capabilities:['engineering']}).map(item=>item.label), ['产品报价'])
  assert.equal(canAccessFinanceBoard({...manager,capabilities:[]}),false)

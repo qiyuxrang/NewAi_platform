@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
-import type { FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { FormEvent } from 'react';
 import EngineeringPreparationPanel from './EngineeringPreparationPanel';
-import { ApiError, apiRequest } from "../api";
+import { useSearchParams } from "react-router-dom";
+import { ApiError, apiRequest, downloadBusinessFile } from "../api";
 import { CenterLink, SectionHeader, type WorkspaceProps } from "../shared";
 
 const root = "/api/engineering/jobs/";
@@ -29,6 +30,12 @@ interface EngineeringJob {
   error?: { code?: string; detail?: string; retryable?: boolean };
   downloadAvailable: boolean;
   needsReview: boolean;
+  attemptCount?: number;
+  maxAttempts?: number;
+  nextRetryAt?: string;
+  updatedAt?: string;
+  resultFilename?: string;
+  resultHash?: string;
 }
 
 /** 任务显示名：以「上传的清单名 ＋ 成本测算」标识，避免让用户读 UUID。 */
@@ -85,8 +92,13 @@ function readJob(value: unknown): EngineeringJob | null {
     ? value.files.filter(isRecord).map((file) => text(file.name)).filter((name): name is string => !!name)
     : [];
   const failed = ["failed", "blocked"].includes(text(value.status)!.toLowerCase());
-  const needsReview = failed || summary?.some((file) => file.validationPassed === false || !!file.pendingConfirmations?.length || file.sourceHealth?.conclusion === "可疑" || !!file.sourceHealth?.warnings?.length) === true;
-  return { id: text(value.id)!, status: text(value.status)!, region: text(value.region), inputNames, inspection, summary, error, downloadAvailable: isRecord(value.result) && value.result.download_available === true, needsReview };
+  const needsReview = failed || (text(value.status) === "completed" && (!summary?.length || summary.some((file) => file.validationPassed !== true))) || summary?.some((file) => !!file.preflightIssues?.length || !!file.validationIssues?.length || !!file.pendingConfirmations?.length || file.sourceHealth?.conclusion === "可疑" || !!file.sourceHealth?.warnings?.length) === true;
+  const result = isRecord(value.result) ? value.result : undefined;
+  return { id: text(value.id)!, status: text(value.status)!, region: text(value.region), inputNames, inspection, summary, error, downloadAvailable: result?.download_available === true, needsReview,
+    attemptCount: Number.isInteger(value.attempt_count) && (value.attempt_count as number) >= 0 ? value.attempt_count as number : undefined,
+    maxAttempts: Number.isInteger(value.max_attempts) && (value.max_attempts as number) > 0 ? value.max_attempts as number : undefined,
+    nextRetryAt: text(value.next_retry_at), updatedAt: text(value.updated_at), resultFilename: text(result?.filename), resultHash: text(result?.sha256),
+  };
 }
 function readList(value: unknown): { jobs: EngineeringJob[]; capabilities?: Capabilities } | null {
   if (!isRecord(value) || !Array.isArray(value.jobs)) return null;
@@ -99,6 +111,20 @@ function readDetail(value: unknown): { job: EngineeringJob; capabilities?: Capab
   return job ? { job, capabilities: readCapabilities(value.capabilities) } : null;
 }
 function errorMessage(error: unknown) { return error instanceof Error && error.message ? error.message : "请求未完成，请稍后重试。"; }
+function formatTime(value?: string): string {
+  if (!value || !Number.isFinite(Date.parse(value))) return "服务未返回";
+  return new Date(value).toLocaleString("zh-CN", { hour12: false });
+}
+function nextStep(job: EngineeringJob): string {
+  if (job.status === "queued") return job.error?.retryable ? "后台将自动重试，请等待并刷新状态，无需重新上传。" : "清单已保存，等待后台处理；可离开本页后从任务列表查看。";
+  if (job.status === "running") return "后台正在处理；页面只同步状态，无需保持打开或重复提交。";
+  if (job.status === "blocked") return ["worker_not_configured", "worker_unavailable"].includes(job.error?.code ?? "")
+    ? "请联系管理员恢复成本服务；后台运行恢复且未达重试上限时，会继续处理该任务，无需重复上传。"
+    : "请按错误详情处理权限或文件问题，并联系管理员确认后续操作。";
+  if (job.status === "failed") return "请先查看预检与错误详情；清单问题需修正后重新上传，服务问题请联系管理员。";
+  if (job.status === "completed") return job.needsReview ? "请先核对校验问题、取价来源与待确认项，再下载草稿进行人工复核。" : "可下载内部草稿核对明细、取价来源与零价项；校验通过仍需人工复核。";
+  return "请刷新任务状态核对后续处理方式。";
+}
 
 interface KnowledgeStatus { status: "locked" | "ready" | "unavailable" | "not_configured"; detail: string; dataset_document_count?: number }
 interface KnowledgeSource { document_id: string; title: string; content: string; chunk_id: string }
@@ -207,30 +233,47 @@ function Issues({ label, values }: { label: string; values: string[] | null }) {
 }
 
 export default function EngineeringPendingPage({ section }: WorkspaceProps) {
+  const [searchParams, setSearchParams] = useSearchParams();
+  const selectedId = searchParams.get("engineering_job") ?? "";
   const [jobs, setJobs] = useState<EngineeringJob[]>([]);
   const [capabilities, setCapabilities] = useState<Capabilities>();
   const [loading, setLoading] = useState(section !== "quota");
   const [reloading, setReloading] = useState(false);
   const [loadingId, setLoadingId] = useState<string>();
   const [deletingId, setDeletingId] = useState<string>();
+  const [downloadingId, setDownloadingId] = useState<string>();
+  const [downloadError, setDownloadError] = useState("");
+  const [lastSynced, setLastSynced] = useState<string>();
   const [error, setError] = useState("");
   const [jobsError, setJobsError] = useState("");
   const [selected, setSelected] = useState<EngineeringJob>();
   const inFlight = useRef(false);
   const active = useRef(true);
+  const listController = useRef<AbortController | null>(null);
+  const detailController = useRef<AbortController | null>(null);
+  const mutationVersion = useRef(0);
+  const selectJobId = (id: string) => setSearchParams((current) => {
+    const next = new URLSearchParams(current);
+    if (id) next.set("engineering_job", id); else next.delete("engineering_job");
+    return next;
+  }, { replace: true });
 
   // 拉取任务列表。initial=true 用于首次加载与手动刷新（显示 loading、可报错）；
   // 轮询不重置 loading，避免列表闪烁；失败保留上次记录并显示同步错误。
   const loadJobs = async (initial: boolean) => {
     if (inFlight.current) return;
     inFlight.current = true;
+    const controller = new AbortController();
+    listController.current = controller;
+    const version = mutationVersion.current;
     if (initial) setReloading(true);
     try {
-      const data = readList(await apiRequest<unknown>(root));
-      if (!active.current) return;
+      const data = readList(await apiRequest<unknown>(root, { signal: controller.signal }));
+      if (!active.current || controller.signal.aborted || version !== mutationVersion.current) return;
       if (!data) throw new Error("任务列表返回格式无效，未展示不可信数据。");
       setJobs(data.jobs); setCapabilities(data.capabilities);
       setJobsError("");
+      setLastSynced(new Date().toISOString());
       // 已打开的详情也要跟随刷新，否则任务完成后详情仍停在旧状态。
       // 后端列表与详情共用同一 payload，因此整份替换不会丢字段。
       setSelected((current) => {
@@ -238,10 +281,12 @@ export default function EngineeringPendingPage({ section }: WorkspaceProps) {
         return data.jobs.find((item) => item.id === current.id) ?? current;
       });
     } catch (reason) {
-      if (active.current) setJobsError(errorMessage(reason));
+      if (active.current && !controller.signal.aborted) setJobsError(errorMessage(reason));
     } finally {
-      if (active.current) { setLoading(false); setReloading(false); }
-      inFlight.current = false;
+      if (listController.current === controller) {
+        if (active.current) { setLoading(false); setReloading(false); }
+        inFlight.current = false;
+      }
     }
   };
   const reload = () => void loadJobs(true);
@@ -260,29 +305,54 @@ export default function EngineeringPendingPage({ section }: WorkspaceProps) {
     document.addEventListener("visibilitychange", tick);
     return () => {
       active.current = false;
+      listController.current?.abort();
+      detailController.current?.abort();
+      inFlight.current = false;
       window.clearInterval(timer);
       window.removeEventListener("focus", tick);
       document.removeEventListener("visibilitychange", tick);
     };
   }, [section]);
 
-  const openJob = async (id: string) => {
-    setLoadingId(id); setError("");
+  const openJob = useCallback(async (id: string) => {
+    detailController.current?.abort();
+    const controller = new AbortController();
+    detailController.current = controller;
+    setLoadingId(id); setError(""); setDownloadError("");
+    setSelected((current) => current?.id === id ? current : undefined);
     try {
-      const data = readDetail(await apiRequest<unknown>(`${root}${encodeURIComponent(id)}/`));
+      const data = readDetail(await apiRequest<unknown>(`${root}${encodeURIComponent(id)}/`, { signal: controller.signal }));
+      if (controller.signal.aborted || !active.current) return;
       if (!data || data.job.id !== id) throw new Error("任务详情返回格式无效，未展示不可信数据。");
+      mutationVersion.current += 1;
       setSelected(data.job); setCapabilities(data.capabilities); setJobs((current) => [data.job, ...current.filter((item) => item.id !== data.job.id)]);
-    } catch (reason) { setError(errorMessage(reason)); } finally { setLoadingId(undefined); }
-  };
+    } catch (reason) { if (!controller.signal.aborted && active.current) setError(`任务详情同步失败：${errorMessage(reason)} 请刷新任务状态后重新查看。`); }
+    finally { if (!controller.signal.aborted && active.current) setLoadingId(undefined); }
+  }, []);
   const removeJob = async (id: string) => {
     // 删除不可撤销：先二次确认，确认文案里带上任务标识，避免误删废案外的成果。
     if (!window.confirm(`确认删除任务 ${id}？该任务的清单文件与草稿成果将被一并移除，且不可恢复。`)) return;
     setDeletingId(id); setError("");
     try {
       await apiRequest<unknown>(`${root}${encodeURIComponent(id)}/`, { method: "DELETE" });
+      if (!active.current) return;
+      mutationVersion.current += 1;
       setJobs((current) => current.filter((item) => item.id !== id));
       setSelected((current) => (current && current.id === id ? undefined : current));
+      if (selectedId === id) selectJobId("");
     } catch (reason) { setError(errorMessage(reason)); } finally { setDeletingId(undefined); }
+  };
+  useEffect(() => {
+    if (section === "quota" || !selectedId) { setSelected(undefined); return; }
+    void openJob(selectedId);
+    return () => detailController.current?.abort();
+  }, [selectedId, section, openJob]);
+  const downloadJob = async (job: EngineeringJob) => {
+    if (downloadingId) return;
+    setDownloadingId(job.id); setDownloadError("");
+    try { await downloadBusinessFile(`${root}${encodeURIComponent(job.id)}/download/`, job.resultFilename ?? "内部成本草稿.xlsx"); }
+    catch (reason) { if (active.current) setDownloadError(`下载失败：${errorMessage(reason)} 请刷新状态后重试；文件完整性错误请联系管理员。`); }
+    finally { if (active.current) setDownloadingId(undefined); }
   };
 
   if (section === "quota") return <>
@@ -296,7 +366,7 @@ export default function EngineeringPendingPage({ section }: WorkspaceProps) {
     <SectionHeader title={sectionNames[section] ?? sectionNames.overview} description="仅生成内部成本草稿；任务状态和核验信息以工程服务返回为准。" />
     <section className="center-panel" aria-label="内部成本草稿">
       <span className="status warning">内部成本草稿</span><h3>上传清单并查询任务</h3><p>仅接受 1 至 2 个 XLSX 清单文件。结果需要人工复核，不构成报价、定额审定或正式成果。</p>
-      <EngineeringPreparationPanel onJob={id => void openJob(id)} />
+      <EngineeringPreparationPanel onJob={selectJobId} />
       <p role="note">成本服务：{capabilities?.cost ? `${statusLabel(capabilities.cost.status)}${capabilities.cost.detail ? ` · ${capabilities.cost.detail}` : ""}` : "服务未返回"}<br />上传清单并预检通过、工程文档解析完成后，知识库才可能解锁；定额推荐和正式报价仍未开放。</p>
       {error && <p role="alert">{error}</p>}
     </section>
@@ -306,12 +376,13 @@ export default function EngineeringPendingPage({ section }: WorkspaceProps) {
         <h3>任务状态</h3>
         <button type="button" className="button secondary" onClick={() => void reload()} disabled={reloading}>{reloading ? "正在刷新…" : "刷新任务状态"}</button>
       </div>
+      {lastSynced && <p role="status">最近同步：{formatTime(lastSynced)} · 页面可见时每 5 秒自动同步；读取失败后会继续尝试。</p>}
       {jobs.some((job) => ["queued", "running"].includes(job.status)) && <p className="engineering-task-running" role="status">任务由后台 Worker 处理，完成后本页会自动更新，也可点击「刷新任务状态」。</p>}
       {jobsError && <p role="alert">任务列表读取失败：{jobsError}{jobs.length ? " 当前显示上次成功读取的记录，请刷新核对最新状态。" : " 请刷新任务状态后重试，当前无法确认是否有任务。"}</p>}
       {loading ? <p role="status">正在读取任务列表…</p> : jobs.length ? <ul className="engineering-task-list">{jobs.map((job) => {
         const inProgress = ["queued", "running"].includes(job.status);
         return <li key={job.id}>
-          <button type="button" className="button secondary" disabled={loadingId === job.id} onClick={() => void openJob(job.id)} title={`任务 ${job.id}`}>
+          <button type="button" className="button secondary" disabled={loadingId === job.id} onClick={() => selectedId === job.id ? void openJob(job.id) : selectJobId(job.id)} title={`任务 ${job.id}`} aria-pressed={selectedId === job.id}>
             <span className="engineering-task-name">{jobLabel(job)}</span>
             <span className="engineering-task-status">{statusLabel(job.status)}</span>
           </button>
@@ -326,11 +397,18 @@ export default function EngineeringPendingPage({ section }: WorkspaceProps) {
           </button>
         </li>;
       })}</ul> : !jobsError && <p>暂无服务端任务。</p>}
+      {loadingId && <p role="status">正在同步所选任务详情…</p>}
       {selected && <article aria-live="polite"><h4>{jobLabel(selected)}</h4><p>当前状态：{statusLabel(selected.status)}{selected.region ? ` · 地区：${selected.region}` : ""}</p>
-        <p className="engineering-job-id">任务标识：{selected.id}</p>{selected.error && <p role="alert">任务错误：{selected.error.code ? `${selected.error.code} · ` : ""}{selected.error.detail ?? "服务未返回错误详情"}{selected.error.retryable === true ? " · 可重试" : ""}</p>}{selected.needsReview && <p><span className="status warning">待复核</span> 失败、校验未通过或存在待确认项时不得直接用于对外结果。</p>}
-        {selected.inspection && <div><strong>预检</strong><p>ok：{String(selected.inspection.ok ?? "服务未返回")}</p>{selected.inspection.files.map((file, index) => <div key={`${file.name ?? "file"}-${index}`}><p>{file.name ?? `文件 ${index + 1}`} · passed：{String(file.passed ?? "服务未返回")}</p><Issues label="预检问题" values={file.issues} /></div>)}</div>}
+        <p className="engineering-job-id">任务标识：{selected.id}</p>
+        <p>下一步：{nextStep(selected)}</p>
+        <p>服务更新时间：{formatTime(selected.updatedAt)}{selected.attemptCount !== undefined ? ` · 后台执行次数：${selected.attemptCount}${selected.maxAttempts !== undefined ? ` / ${selected.maxAttempts}` : ""}` : ""}{selected.nextRetryAt ? ` · 计划重试时间：${formatTime(selected.nextRetryAt)}` : ""}</p>
+        {selected.error && <p role="alert">任务错误：{selected.error.code ? `${selected.error.code} · ` : ""}{selected.error.detail ?? "服务未返回错误详情"}</p>}{selected.needsReview && <p><span className="status warning">待复核</span> 失败、校验未通过、校验信息缺失或存在待确认项时不得直接用于对外结果。</p>}
+        {selected.inspection && <div><strong>清单预检</strong><p>预检结论：{selected.inspection.ok === undefined ? "服务未返回" : selected.inspection.ok ? "通过" : "未通过"}</p>{selected.inspection.files.map((file, index) => <div key={`${file.name ?? "file"}-${index}`}><p>{file.name ?? `文件 ${index + 1}`} · {file.passed === undefined ? "服务未返回预检结论" : file.passed ? "预检通过" : "预检未通过"}</p><Issues label="预检问题" values={file.issues} /></div>)}</div>}
         {selected.summary?.map((file, index) => <div key={`summary-${index}`}><h5>结果摘要 {index + 1}</h5><p>状态：{statusLabel(file.status)} · 校验：{file.validationPassed === undefined ? "服务未返回" : file.validationPassed ? "通过" : "未通过"}</p>{file.sourceHealth ? <div><strong>取价健康度（source_health）</strong>{file.sourceHealth.conclusion && <p>审计结论：{file.sourceHealth.conclusion}</p>}<Issues label="审计警告" values={file.sourceHealth.warnings} />{file.sourceHealth.zeroItems && <p>零价项：{file.sourceHealth.zeroItems}</p>}{file.sourceHealth.sourceDistribution && <p>来源分布：{file.sourceHealth.sourceDistribution}</p>}{!file.sourceHealth.conclusion && file.sourceHealth.warnings === null && !file.sourceHealth.zeroItems && !file.sourceHealth.sourceDistribution && <p>原始 source_health：{file.sourceHealth.raw ?? "服务未返回"}</p>}</div> : <p>取价健康度（source_health）：服务未返回</p>}<Issues label="预检问题（preflight_issues）" values={file.preflightIssues} /><Issues label="校验问题（validation_issues）" values={file.validationIssues} /><Issues label="待确认项（pending_confirmations）" values={file.pendingConfirmations} /></div>)}
-        {selected.downloadAvailable && <a className="button secondary" href={`${root}${encodeURIComponent(selected.id)}/download/`} download>下载内部成本草稿</a>}</article>}
+        {selected.status === "completed" && !selected.summary?.length && <p role="alert">服务未返回结果校验摘要，暂无法核对结果质量，请下载后人工检查并联系管理员。</p>}
+        {selected.resultFilename && <p>成果文件：{selected.resultFilename}</p>}{selected.resultHash && <p className="engineering-job-id">成果 SHA-256：{selected.resultHash}</p>}
+        {selected.downloadAvailable ? <button type="button" className="button secondary" disabled={downloadingId !== undefined} onClick={() => void downloadJob(selected)}>{downloadingId === selected.id ? "正在下载…" : "下载内部成本草稿"}</button> : selected.status === "completed" && <p role="alert">任务已结束，但服务未提供可下载成果，请刷新状态或联系管理员。</p>}
+        {downloadError && <p role="alert">{downloadError}</p>}</article>}
     </section>
   </>;
 }

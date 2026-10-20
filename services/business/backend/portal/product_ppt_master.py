@@ -95,6 +95,9 @@ def source_sections(pair):
                 raw = _text(block)
                 sentences = re.findall(r"[^。！？\n]+[。！？]?", raw)
                 candidates = [sentence.strip() for sentence in sentences if 8 <= len(sentence.strip()) <= 110]
+                from .product_generation_policy import POLICY as GENERATION_ONLY
+                if not candidates and raw.strip() and pair.get("generation_policy") == GENERATION_ONLY:
+                    candidates = [raw.strip()[:110]]
                 # Keep bounded evidence spread through a long paragraph.
                 if len(candidates) > 4:
                     candidates = [candidates[0], candidates[len(candidates)//3], candidates[2*len(candidates)//3], candidates[-1]]
@@ -115,13 +118,17 @@ def source_sections(pair):
 
 
 def page_roster(pair, title):
+    from .product_generation_policy import POLICY as GENERATION_ONLY
+    unchecked = pair.get("generation_policy") == GENERATION_ONLY
     sections = source_sections(pair)
     # One topic per chapter. Split evidence-rich chapters to keep the granularity
     # requested by the user, without repeating a sentence to inflate the count.
     topics = [{**section, "part": 1} for section in sections]
     while len(topics) < POLICY["minimum_slides"] - 2:
-        candidate = max((item for item in topics if len(item["evidence"]) >= 6), key=lambda item: len(item["evidence"]), default=None)
+        candidate = max((item for item in topics if len(item["evidence"]) >= (2 if unchecked else 6)), key=lambda item: len(item["evidence"]), default=None)
         if candidate is None:
+            if unchecked:
+                break
             _invalid("报告证据不足以形成17页不同主题，需补充正文")
         index = topics.index(candidate)
         midpoint = len(candidate["evidence"]) // 2
@@ -151,7 +158,7 @@ def page_roster(pair, title):
     return pages
 
 
-def validate_selection(result, pages):
+def validate_selection(result, pages, *, verify_content=True):
     if not isinstance(result, dict) or set(result) != {"pages"} or not isinstance(result["pages"], list) or len(result["pages"]) != len(pages):
         _invalid("页面规划结构无效")
     checked = []
@@ -160,11 +167,12 @@ def validate_selection(result, pages):
             _invalid("页面顺序或字段无效")
         items = selected["items"]
         allowed = {(item["ref"], item["quote"]) for item in page["evidence"]}
-        minimum = 1 if page["type"] == "pending" else 2
+        minimum = 1 if not verify_content or page["type"] == "pending" else 2
         if (not isinstance(items, list) or not minimum <= len(items) <= 5 or any(not isinstance(item, dict)
                 or set(item) != {"ref", "quote"} or not isinstance(item["ref"], str) or not isinstance(item["quote"], str)
-                or (item["ref"], item["quote"]) not in allowed for item in items)
-                or len({item["quote"] for item in items}) != len(items)):
+                or item["ref"] not in {ref for ref, _ in allowed} or not item["quote"].strip()
+                or (verify_content and (item["ref"], item["quote"]) not in allowed) for item in items)
+                or (verify_content and len({item["quote"] for item in items}) != len(items))):
             _invalid("要点必须完整引用所给证据且不重复")
         chart = selected["chart"]
         if chart is not None:
@@ -177,13 +185,14 @@ def validate_selection(result, pages):
                         or not isinstance(point["label"], str) or not 1 <= len(point["label"]) <= 20
                         or type(point["value"]) not in (int, float) or not math.isfinite(point["value"]) or point["value"] < 0
                         or not isinstance(point["ref"], str) or not isinstance(point["quote"], str)
-                        or (point["ref"], point["quote"]) not in allowed or point["label"] not in point["quote"]
-                        or chart["unit"] not in point["quote"]):
+                        or point["ref"] not in {ref for ref, _ in allowed}
+                        or (verify_content and ((point["ref"], point["quote"]) not in allowed or point["label"] not in point["quote"]
+                        or chart["unit"] not in point["quote"]))):
                     _invalid("图表数字、类别和单位须有逐字原文依据")
                 # Accept only a directly attached quantity; a number elsewhere
                 # in the sentence cannot establish this object's quantity.
                 quantities = re.findall(re.escape(point["label"]) + r"[^\d+＋\-−–—，,；;。！？\n]{0,12}?([0-9]+(?:\.[0-9]+)?)\s*" + re.escape(chart["unit"]), point["quote"])
-                if len(quantities) != 1 or float(quantities[0]) != point["value"]:
+                if verify_content and (len(quantities) != 1 or float(quantities[0]) != point["value"]):
                     _invalid("图表类别与数值对应关系不明确")
             if len({point["label"] for point in chart["points"]}) != len(chart["points"]):
                 _invalid("图表类别不可重复")
@@ -204,7 +213,7 @@ def _visual_requirements(pages):
         "native_connectors": "按有原文依据的实际页面视觉表达统计，不设全局数量配额。"}
 
 
-def validate_planned_visuals(pages, roster):
+def validate_planned_visuals(pages, roster, *, verify_content=True):
     """Recheck the complete locked plan before any slide model call."""
     if len(pages) != len(roster) or [page.get("page") for page in pages] != [page["page"] for page in roster]:
         _invalid("完整页面规划与章节顺序不一致")
@@ -217,7 +226,9 @@ def validate_planned_visuals(pages, roster):
             evidence = next((item for item in source["evidence"]
                 if item["quote"] == quote and item["ref"] in selected["source_refs"]), None)
             if evidence is None:
-                _invalid("锁定页面正文缺少对应原文证据")
+                if verify_content:
+                    _invalid("锁定页面正文缺少对应原文证据")
+                evidence = {"ref": selected["source_refs"][0], "quote": quote}
             items.append(evidence)
         chart = selected.get("chart")
         if chart is not None:
@@ -230,7 +241,7 @@ def validate_planned_visuals(pages, roster):
                 _invalid("锁定图表与逐项证据不一致")
             chart = {"title": chart["title"], "unit": chart["unit"], "points": chart["evidence"]}
         selections.append({"page": selected["page"], "items": items, "chart": chart})
-    validate_selection({"pages": selections}, roster[1:])
+    validate_selection({"pages": selections}, roster[1:], verify_content=verify_content)
     return _visual_requirements(pages)
 
 
@@ -246,7 +257,7 @@ def native_chart_export_issues(exported, pages):
     return []
 
 
-def validate_svg(result, page, design):
+def validate_svg(result, page, design, *, verify_content=True):
     if not isinstance(result, dict) or set(result) != {"svg"} or not isinstance(result["svg"], str) or not 100 <= len(result["svg"]) <= 60000:
         _invalid("SVG结构无效")
     raw = result["svg"]
@@ -280,11 +291,11 @@ def validate_svg(result, page, design):
                 _invalid("SVG包含不允许属性")
             if name == "tspan" and local not in {"x", "y", "dx", "dy"}:
                 _invalid("换行不能覆盖文字样式")
-            if local in {"fill", "stroke"} and value.lower() not in palette:
+            if verify_content and local in {"fill", "stroke"} and value.lower() not in palette:
                 _invalid("颜色不符合设计锁定")
             if local in {"opacity", "fill-opacity", "stroke-opacity"} and value != "1":
                 _invalid("不允许隐藏内容")
-            if local == "font-family" and value != design["font"]:
+            if verify_content and local == "font-family" and value != design["font"]:
                 _invalid("字体不符合设计锁定")
             if local in {"href", "src"} and (name != "image" or value != "asset:logo"):
                 _invalid("图片只能使用核验企业标识")
@@ -311,7 +322,7 @@ def validate_svg(result, page, design):
             if fill in {"none", "transparent", design["background"].lower()}:
                 _invalid("正文颜色不可隐藏内容")
             text = "".join(node.itertext()).strip()
-            if not text or not any(_flat(text) in _flat(value) for value in strings):
+            if verify_content and (not text or not any(_flat(text) in _flat(value) for value in strings)):
                 _invalid("可见文字超出已批准页面内容")
             texts.append(text)
             try:
@@ -320,10 +331,13 @@ def validate_svg(result, page, design):
             except ValueError:
                 _invalid("文字须显式指定字号和位置")
             source_text = _flat(text) in {_flat(value) for value in ("技术方案", "可行性研究", "项目汇报", str(page["page"]))}
-            if node.get("data-role") == "source" and not source_text:
+            if verify_content and node.get("data-role") == "source" and not source_text:
                 _invalid("正文不可伪装为来源脚注")
             minimum = 16 if source_text else 24 if node.get("data-role") == "node" and len(text) <= 24 else 28
-            if size < minimum or y > 696 or y < size or x < 24 or x > 1256:
+            # Generation-only skips factual review, never visible text geometry.
+            if size <= 0 or y > 696 or y < size or x < 24 or x > 1256:
+                _invalid("文字超出安全区，须调整位置并使用正数字号")
+            if verify_content and size < minimum:
                 _invalid("文字字号或安全区不合格")
             # A conservative CJK/Latin width estimate catches obvious clipping;
             # Office page rendering remains the final visual check.
@@ -335,7 +349,9 @@ def validate_svg(result, page, design):
                         line_y = float(line.get("y", str(line_y))) + float(line.get("dy", "0"))
                     except ValueError:
                         _invalid("换行坐标必须为有限数值")
-                    if not all(math.isfinite(v) for v in (line_x, line_y)) or not 24 <= line_x <= 1256 or not size <= line_y <= 696:
+                    if not all(math.isfinite(v) for v in (line_x, line_y)):
+                        _invalid("换行坐标必须为有限数值")
+                    if not 24 <= line_x <= 1256 or not size <= line_y <= 696:
                         _invalid("换行文字超出安全区")
                 content = "".join(line.itertext()).strip()
                 width = sum(size if ord(char) > 255 else size * .55 for char in content)
@@ -343,7 +359,7 @@ def validate_svg(result, page, design):
                 if width > (1232-line_x if anchor == "start" else min(line_x-24, 1256-line_x)*2 if anchor == "middle" else line_x-24):
                     _invalid("文字可能超出版心，须换行或调整布局")
     visible = _flat("".join(texts))
-    if any(_flat(value) not in visible for value in [page["title"], *page["items"]]):
+    if verify_content and any(_flat(value) not in visible for value in [page["title"], *page["items"]]):
         _invalid("页面遗漏已选内容")
     return result
 
@@ -359,6 +375,8 @@ def validate_exported_text(output, pages):
 
 
 def valid_manifest(value, pair):
+    from .product_generation_policy import POLICY as GENERATION_ONLY
+    unchecked = pair.get("generation_policy") == GENERATION_ONLY
     if not isinstance(value, dict) or value.get("engine_version") != "ppt-master-v1":
         return False
     plan = value.get("presentation_plan", {})
@@ -368,17 +386,19 @@ def valid_manifest(value, pair):
     return (plan.get("sources") == pair["sources"] and plan.get("pair_hash") == pair["sha256"]
         and plan.get("input_hash") == pair.get("input_hash", "") and plan.get("blueprint_hash") == pair.get("blueprint_hash", "")
         and plan.get("locked") is True and plan.get("policy") == POLICY
-        and isinstance(pages, list) and POLICY["minimum_slides"] <= len(pages) <= POLICY["maximum_slides"]
+        and isinstance(pages, list) and (3 if unchecked else POLICY["minimum_slides"]) <= len(pages) <= POLICY["maximum_slides"]
         and plan.get("visual_requirements") == _visual_requirements(pages)
         and value.get("planned_native_charts") == plan["visual_requirements"]["planned_native_charts"]
         and (value.get("quality_gate", {}).get("status") != "pass" or not native_chart_export_issues(value.get("native_export", {}), pages))
         and value.get("slides") == len(pages) and bool(mapped) and mapped <= known
         and all(any(ref.startswith(family+":") for ref in mapped) for family in FAMILIES)
         and value.get("missing_source_refs") == [] and value.get("content_review") == "not_run"
-        and value.get("quality_gate", {}).get("status") in {"pass", "fail"})
+        and value.get("quality_gate", {}).get("status") in ({"not_run"} if unchecked else {"pass", "fail"}))
 
 
 def render(task, pair, designer, progress=None, **planning):
+    from .product_generation_policy import POLICY as GENERATION_ONLY
+    unchecked = pair.get("generation_policy") == GENERATION_ONLY
     frozen_pack()
     runtime_hash = contract_hash()
     root = private_root().resolve()
@@ -395,7 +415,7 @@ def render(task, pair, designer, progress=None, **planning):
     plan = {"schema_version": 1, "locked": True, "style": style, "goal": goal, **metadata,
         "sources": pair["sources"], "pair_hash": pair["sha256"], "input_hash": pair.get("input_hash", ""),
         "blueprint_hash": pair.get("blueprint_hash", ""), "design": design, "policy": POLICY,
-        "skill_contract_sha256": runtime_hash, "pages": [], "program_checks": {"status": "pass", "issues": []}}
+        "skill_contract_sha256": runtime_hash, "pages": [], "program_checks": {"status": "not_run" if unchecked else "pass", "issues": []}}
     selected_pages = []
     cover = {**roster[0], "items": [], "source_refs": [], "speaker_notes": "项目汇报封面。", "chart": None}
     selected_pages.append(cover)
@@ -404,7 +424,8 @@ def render(task, pair, designer, progress=None, **planning):
         request = {"action": "presentation_plan", "schema": {"pages": [{"page": 2, "items": [{"ref": "原ref", "quote": "完整原句"}], "chart": None}]},
             "skill_contract": CONTRACT, "skill_contract_sha256": runtime_hash, "design": design, "pages": batch,
             "instructions": "为每页选2至5条最适合汇报的完整原句，ref与quote逐字复制evidence；不改写、不缩写、不拼接，不重复选同一事实。保留条件和待确认项。chart通常为null；仅有两个以上同单位、同含义且明确可比较的真实数值时，填{title,unit,points:[{label,value,ref,quote}]}，类别和单位须出现在引用原句，不将型号/年份/假设方案当作实际数量，不绘制不同单位的比较。"}
-        selected = validate_selection(designer(f"plan:{start}", request, lambda result: validate_selection(result, batch)), batch)
+        validator = lambda result: validate_selection(result, batch, verify_content=not unchecked)
+        selected = validator(designer(f"plan:{start}", request, validator))
         for page, selection in zip(batch, selected["pages"]):
             chart = selection["chart"]
             if chart:
@@ -414,14 +435,15 @@ def render(task, pair, designer, progress=None, **planning):
             selected_pages.append({**{key: value for key, value in page.items() if key != "evidence"},
                 "items": [item["quote"] for item in selection["items"]], "source_refs": refs, "chart": chart,
                 "speaker_notes": "\n".join(item["ref"] + "\n" + item["quote"] for item in selection["items"] + (chart["evidence"] if chart else []))})
-    plan["visual_requirements"] = validate_planned_visuals(selected_pages, roster)
+    plan["visual_requirements"] = validate_planned_visuals(selected_pages, roster, verify_content=not unchecked)
     plan["pages"] = selected_pages
     if pair.get("pending"):
         selected_pages[-1]["speaker_notes"] += "\n\n报告待确认事项：\n" + "\n".join(item["text"] for item in pair["pending"])
     plan_bytes = json.dumps(plan, ensure_ascii=False, indent=2).encode("utf-8")
     (directory / "pair.plan.json").write_bytes(plan_bytes)
     export_pages = [{**page, "chart": ({key: value for key, value in page["chart"].items() if key != "evidence"} if page["chart"] else None)} for page in selected_pages]
-    (directory / "plan.json").write_text(json.dumps({"design": design, "pages": export_pages}, ensure_ascii=False), encoding="utf-8")
+    (directory / "plan.json").write_text(json.dumps({"design": design, "pages": export_pages,
+        **({"generation_policy": GENERATION_ONLY} if unchecked else {})}, ensure_ascii=False), encoding="utf-8")
     spec = CONTRACT + "\n" + json.dumps({key: value for key, value in plan.items() if key != "pages"}, ensure_ascii=False) + "\n" + json.dumps([{key: page[key] for key in ("page", "title", "layout", "rhythm")} for page in selected_pages], ensure_ascii=False)
     (directory / "spec_lock.md").write_text(spec, encoding="utf-8")
     if progress:
@@ -438,8 +460,8 @@ def render(task, pair, designer, progress=None, **planning):
             "skill_contract_sha256": runtime_hash, "spec_lock": current_spec, "page": page, "previous_pages": prior,
             "previous_page_svg": previous_svg, "assets": {"asset:logo": {"width": logo_width, "height": logo_height}},
             "instructions": "你是同一套汇报的主设计者，逐页手写本页SVG，布局遵循page.layout与rhythm。每段text显式font-family=Microsoft YaHei、font-size、x、y，换行用tspan(继承字号)，正文28至32px、标题40至48px、来源16px并data-role=source；不可把正文标为source缩小。只能使用spec颜色，纯十六进制；无需style/transform/clip-path/filter/opacity。可用path/line与marker绘制有依据的流程，不以箭头装饰。所有title/items原样可见，允许在字间换行，但不得增加事实、内部ref或英文装饰文字。页码与技术方案/可行性研究标签可见。在第1、2、末页用image href=asset:logo，保持原比例。若有chart，在chart.box保留空白，平台原生图表填入，其他内容不得覆盖。不要将全部页面做成卡片；优先清晰层次和留白。只返回svg字段。"}
-        result = designer(f"slide:{page['page']}", request, lambda result: validate_svg(result, page, design))
-        checked = validate_svg(result, page, design)
+        validator = lambda result: validate_svg(result, page, design, verify_content=not unchecked)
+        checked = validator(designer(f"slide:{page['page']}", request, validator))
         previous_svg = checked["svg"]
         (directory / "svg_output" / f"{page['page']:03}.svg").write_text(checked["svg"].replace("asset:logo", logo), encoding="utf-8")
         (directory / "notes" / f"{page['page']:03}.md").write_text(page["speaker_notes"], encoding="utf-8")
@@ -458,14 +480,15 @@ def render(task, pair, designer, progress=None, **planning):
         exported = json.loads(completed.stdout)
         if not output.is_file() or exported["slides"] != len(selected_pages) or exported["sha256"] != hashlib.sha256(output.read_bytes()).hexdigest():
             raise ValueError("invalid_native_export")
-        validate_exported_text(output, selected_pages)
+        if not unchecked:
+            validate_exported_text(output, selected_pages)
     except (OSError, ValueError, KeyError, BadZipFile, ET.ParseError, subprocess.TimeoutExpired) as error:
         raise DocumentError("presentation_unavailable", diagnostic={"stage": "presentation_native_export", "reason": "timeout" if isinstance(error, subprocess.TimeoutExpired) else "export_failed"}) from None
-    issues = native_chart_export_issues(exported, selected_pages)
-    if sum(slide.get("images", 0) for slide in exported.get("per_slide", [])) < POLICY["minimum_embedded_visual_assets"]:
+    issues = [] if unchecked else native_chart_export_issues(exported, selected_pages)
+    if not unchecked and sum(slide.get("images", 0) for slide in exported.get("per_slide", [])) < POLICY["minimum_embedded_visual_assets"]:
         issues.append("embedded_visual_assets_below_policy")
     reports = pair.get("draft_quality", {}).get("reports", [])
-    if pair.get("diagram_pending") or any(report.get("quality_issue_count", 0) for report in reports):
+    if not unchecked and (pair.get("diagram_pending") or any(report.get("quality_issue_count", 0) for report in reports)):
         issues.append("source_report_requires_review")
     mapped = sorted({ref for page in selected_pages for ref in page["source_refs"]})
     eligible = {block["ref"] for block in pair["blocks"] if block["type"] in {"heading", "paragraph", "table", "figure"} and not block["ref"].split(":", 1)[-1].startswith(("DRAFT_NOTICE", "PENDING_"))}
@@ -473,8 +496,9 @@ def render(task, pair, designer, progress=None, **planning):
     exported.pop("path", None)
     quality = {"engine": "ppt-master-native", "engine_version": "ppt-master-v1", "design_profile": style,
         "slides": len(selected_pages), "presentation_plan": plan, "presentation_plan_sha256": hashlib.sha256(plan_bytes).hexdigest(),
-        "program_checks": {"status": "pass" if not issues else "fail", "issues": issues},
-        "quality_gate": {"status": "pass" if not issues else "fail", "issues": issues},
+        **({"generation_policy": GENERATION_ONLY, "content_checks": "not_run"} if unchecked else {}),
+        "program_checks": {"status": "not_run" if unchecked else "pass" if not issues else "fail", "issues": issues},
+        "quality_gate": {"status": "not_run" if unchecked else "pass" if not issues else "fail", "issues": issues},
         "native_charts": exported.get("charts", 0), "planned_native_charts": plan["visual_requirements"]["planned_native_charts"],
         "editable_data_visuals": exported.get("native_shapes", 0),
         "native_connectors": exported.get("connectors", 0), "diagram_slides": sum(slide.get("connectors", 0) > 0 for slide in exported.get("per_slide", [])),

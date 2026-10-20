@@ -3,3 +3,11 @@ services/business/backend/portal/product_assets/bj_docs/** -text
 services/business/backend/portal/product_assets/p1_rules.json -text
 services/business/backend/portal/tests/fixtures/three_piece_knowledge_platform/* -text
 deploy/cloud/*.sh text eol=lf
+
+# Published data is byte-addressed; preserve CSV line endings and field contents.
+data/baichuan/** -text whitespace=cr-at-eol
+data/baichuan/companies.csv whitespace=cr-at-eol,-blank-at-eol
+
+# Vendored exporter hashes describe LF bytes, including on Windows checkouts.
+services/business/backend/portal/product_assets/ppt_master_runtime/upstream/** text eol=lf
+services/business/backend/portal/product_assets/ppt_master_runtime/LICENSE text eol=lf

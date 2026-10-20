@@ -38,7 +38,7 @@ test('assistant capabilities stay independent and cancellation preserves live st
         status: { available: true, knowledge: options.knowledge, web_search: { available: options.web === true }, assistant: { runtime: 'deepseek_harness', available: assistantAvailable, help: '助手暂不可用，请稍后重试。' } } };
       const conversation = { id: 'conversation-1', title: '测试会话', version: 0, turns: options.turns || [] };
       globalThis.fetch = async (path, options) => {
-        if (path.endsWith('/status/')) return Response.json(state.status);
+        if (path.endsWith('/status/')) { if (state.statusError) throw state.statusError; return Response.json(state.status); }
         if (path.endsWith('/datasets/')) { state.datasetCalls++; return state.datasetError ? Response.json(state.datasetError, { status: 403 }) : Response.json({ datasets: state.datasets || [] }); }
         if (path.endsWith('/conversations/')) return Response.json(options.method === 'POST' ? conversation : { conversations: [conversation] });
         if (path.endsWith('/cancel/')) {
@@ -142,6 +142,31 @@ test('assistant capabilities stay independent and cancellation preserves live st
     view.hooks.dispose();
 
     const privateTurn = { question: '旧问题', answer: '私有历史正文', outcome: 'answered', request_id: 'history-1', sources: [{ id: 'K1', dataset_id: 'library-1', document_id: 'doc-1', title: '私有文档', content: '私有引用' }], assistant: true };
+    for (const existing of [false, true]) {
+      view = await setup(true, { turns: [privateTurn] });
+      if (existing) await view.replay();
+      view.state.statusError = new TypeError('Failed to fetch');
+      await view.send();
+      assert.equal(view.state.payload, null, 'a failed preflight never sends a model request');
+      assert.equal(view.input().props.value, '请阅读文档后计算');
+      assert.match(text(view.render()), /网络连接异常，请检查网络后重试/);
+      assert.doesNotMatch(text(view.render()), /Failed to fetch/);
+      const recovery = existing ? '重新加载历史' : '重新加载会话列表';
+      view.button(recovery).props.onClick(); await settle();
+      assert.equal(view.input().props.value, '请阅读文档后计算', 'failed recovery also preserves the draft');
+      view.state.statusError = null;
+      view.button(recovery).props.onClick(); await settle();
+      assert.equal(view.input().props.value, '请阅读文档后计算', 'successful recovery preserves the unsent draft');
+      assert.equal(view.state.payload, null, 'recovery does not send automatically');
+      if (existing) assert.ok(find(view.render(), node => node.props?.content === '私有历史正文'));
+      view.button('新建会话').props.onClick(); await settle();
+      assert.equal(view.input().props.value, '', 'deliberately opening a new session clears the old draft');
+      view.state.status.available = false;
+      await view.send();
+      assert.equal(view.input().props.value, '', 'unavailable access still clears the draft');
+      assert.equal(find(view.render(), node => node.props?.content === '私有历史正文'), undefined);
+      view.hooks.dispose();
+    }
     for (const code of ['disabled', 'unconfigured', 'knowledge_not_authorized']) {
       view = await setup(true, { knowledge: { available: false, code, help: '知识库未开通，仍可直接对话。' }, turns: [privateTurn] });
       assert.equal(view.state.datasetCalls, 0, code);

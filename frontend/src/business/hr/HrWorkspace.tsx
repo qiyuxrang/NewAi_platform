@@ -25,7 +25,7 @@ export default function HrWorkspace({ feature }: { feature: string }) {
     return () => document.removeEventListener('click', guardNavigation, true)
   }, [])
 
-  return <div className="enterprise-hr center-hr">
+  return <div className="enterprise-hr center-hr" key={`${location.pathname}:${feature}`}>
     {feature === 'jobs' && <RecruitmentJobs managerId={managerId} />}
     {feature === 'resumes' && <RecruitmentScreening results={results} />}
     {feature === 'history' && <RecruitmentHistory managerId={managerId} />}

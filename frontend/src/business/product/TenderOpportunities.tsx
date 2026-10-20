@@ -27,10 +27,15 @@ import "./tender-opportunities.css";
 const PAGE_SIZE = 20;
 export const REFRESH_POLL_MS = 3000;
 export const OVERVIEW_POLL_MS = 30000;
-const filterKeys = ["industry", "notice_category", "region", "user_state", "participation"] as const;
+const filterKeys = ["q", "industry", "notice_category", "region", "user_state", "participation", "publish_period", "deadline_period", "budget_band"] as const;
 const userStates = [{ value: "unread", label: "未看" }, { value: "read", label: "已看" }, { value: "favorite", label: "重点关注" }, { value: "irrelevant", label: "不相关" }];
 const participationOptions = [{ value: "open", label: "可参与" }, { value: "unknown", label: "截止待核实" }, { value: "expired", label: "已截止/出结果" }];
-const legacyFilterKeys = ["q", "source", "status", "purchaser", "need", "notice_type", "publish_period", "deadline_period", "budget_band", "classification_status", "ordering", "publish_from", "publish_to", "deadline_from", "deadline_to", "budget_min", "budget_max"];
+const legacyFilterKeys = ["source", "status", "purchaser", "need", "notice_type", "classification_status", "ordering", "publish_from", "publish_to", "deadline_from", "deadline_to", "budget_min", "budget_max"];
+const advancedFilters = [
+  { key: "publish_period", label: "发布时间", options: [{ value: "today", label: "今天" }, { value: "week", label: "近7天" }, { value: "month", label: "近30天" }] },
+  { key: "deadline_period", label: "截止时间", options: [{ value: "open", label: "未截止" }, { value: "week", label: "未来7天" }, { value: "month", label: "未来30天" }] },
+  { key: "budget_band", label: "预算", options: [{ value: "lt1m", label: "100万元以下" }, { value: "1m_10m", label: "100万—1000万元" }, { value: "gte10m", label: "1000万元及以上" }, { value: "unknown", label: "预算未公布" }] },
+] as const;
 const industryOptions: SelectOption[] = [
   { value: "coal", label: "煤炭" }, { value: "water", label: "水利水电" },
   { value: "power", label: "电力与新能源" }, { value: "medical", label: "医疗卫生" },
@@ -60,6 +65,12 @@ type DetailState = { kind: "idle" } | { kind: "loading" } | { kind: "ready"; dat
 function initialFilters(): OpportunityFilters {
   const params = new URLSearchParams(window.location.search);
   const filters: OpportunityFilters = { ...defaultFilters };
+  const query = params.get("q")?.trim();
+  if (query) filters.q = query;
+  advancedFilters.forEach(({ key, options }) => {
+    const value = params.get(key);
+    if (options.some(item => item.value === value)) filters[key] = value!;
+  });
   const selected = new Set((params.get("industry") || "").split(","));
   const industries = industryOptions.filter(item => selected.has(item.value)).map(item => item.value);
   if (industries.length > 0 && industries.length < industryOptions.length) filters.industry = industries.join(",");
@@ -313,6 +324,8 @@ export default function TenderOpportunities() {
   const [monitorReload, setMonitorReload] = useState(0);
   const currentBatch = useRef<RefreshBatch | null>(null);
   const observedTerminals = useRef(new Set<string>());
+  const [query, setQuery] = useState(() => filters.q || "");
+  const [advancedOpen, setAdvancedOpen] = useState(() => advancedFilters.some(({ key }) => filters[key]));
 
   useEffect(() => {
     mounted.current = true;
@@ -325,6 +338,8 @@ export default function TenderOpportunities() {
       if (!/^\/(?:centers\/(?:product|business)|departments\/product)\/opportunities\/?$/.test(window.location.pathname)) return;
       const nextFilters = initialFilters(), nextPage = initialPage(), nextNotice = noticeId();
       setFilters(nextFilters); setPage(nextPage); setDetailId(nextNotice);
+      setQuery(nextFilters.q || "");
+      setAdvancedOpen(advancedFilters.some(({ key }) => nextFilters[key]));
       updateUrl(nextFilters, nextPage, nextNotice, true);
     };
     window.addEventListener("popstate", sync);
@@ -531,6 +546,7 @@ export default function TenderOpportunities() {
   };
 
   const reset = () => {
+    setQuery(""); setAdvancedOpen(false);
     setFilters({ ...defaultFilters }); setPage(1); setDetailId(null); updateUrl(defaultFilters, 1, null);
   };
 
@@ -633,11 +649,14 @@ export default function TenderOpportunities() {
           <label>参与状态<select value={filters.participation || ""} onChange={event => changeFilter("participation", event.target.value)}><option value="">全部状态</option>{participationOptions.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
           <label>标签<select value={filters.user_state || ""} onChange={event => changeFilter("user_state", event.target.value)}><option value="">全部（隐藏不相关）</option>{userStates.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>
         </div>
-        <div className="tender-search-row">
-          <label className="tender-search"><Search size={19} aria-hidden="true" /><input aria-label="搜索商机（暂未开放）" disabled placeholder="搜索项目名称、采购单位、关键词（暂未开放）" title="关键词搜索暂未开放，请使用上方筛选" /></label>
+        <form className="tender-search-row" role="search" onSubmit={event => { event.preventDefault(); const value = query.trim(); setQuery(value); changeFilter("q", value); }}>
+          <label className="tender-search"><Search size={19} aria-hidden="true" /><input type="search" aria-label="搜索商机" value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索项目名称、编号、采购单位或代理机构" /></label>
           <button className="text-button" type="button" onClick={reset}>重置</button>
-          <button className="button secondary" type="button" disabled title="高级筛选暂未开放"><Filter size={17} aria-hidden="true" />高级筛选</button>
-          <button className="button primary" type="button" disabled title="关键词搜索暂未开放，请使用上方筛选"><Search size={18} aria-hidden="true" />搜索</button>
+          <button className="button secondary" type="button" aria-expanded={advancedOpen} aria-controls="tender-advanced-filters" onClick={() => setAdvancedOpen(value => !value)}><Filter size={17} aria-hidden="true" />高级筛选{advancedFilters.some(({ key }) => filters[key]) ? "（已设置）" : ""}</button>
+          <button className="button primary" type="submit"><Search size={18} aria-hidden="true" />搜索</button>
+        </form>
+        <div id="tender-advanced-filters" className="tender-advanced-filters" hidden={!advancedOpen}>
+          {advancedFilters.map(({ key, label, options: entries }) => <label key={key}>{label}<select value={filters[key] || ""} onChange={event => changeFilter(key, event.target.value)}><option value="">不限</option>{(options[key]?.length ? options[key] : entries)?.map(item => <option key={item.value} value={item.value}>{item.label}</option>)}</select></label>)}
         </div>
       </section>
 
@@ -652,7 +671,7 @@ export default function TenderOpportunities() {
         {list.kind === "loading" && <div className="tender-state" role="status">正在加载商机…</div>}
         {list.kind === "error" && <div className="tender-state" role="alert"><strong>商机列表加载失败</strong><p>{list.message}</p><button className="button secondary" onClick={() => setReload(value => value + 1)}>重试</button></div>}
         {list.kind === "ready" && list.data.items.length === 0 && <div className="tender-state"><strong>暂无符合条件的商机</strong><p>已接入来源暂未提供符合当前条件的项目。可调整筛选，并查看下方来源状态。</p></div>}
-        {list.kind === "ready" && list.data.items.length > 0 && <><div className="tender-table-wrap"><table><caption className="sr-only">商机列表，批量选择暂未开放</caption><thead><tr><th className="tender-select-cell"><input type="checkbox" disabled aria-label="全选（暂未开放）" title="批量选择暂未开放" /></th><th>项目名称</th><th>地区</th><th>采购单位</th><th>预算</th><th>发布时间</th><th>截止时间</th><th>参与状态</th><th>来源</th><th>操作</th></tr></thead><tbody>{list.data.items.map(item => <tr key={item.id}>
+        {list.kind === "ready" && list.data.items.length > 0 && <><div className="tender-table-wrap" role="region" aria-label="商机列表，可横向滚动查看完整信息" tabIndex={0}><table><caption className="sr-only">商机列表，批量选择暂未开放</caption><thead><tr><th className="tender-select-cell"><input type="checkbox" disabled aria-label="全选（暂未开放）" title="批量选择暂未开放" /></th><th>项目名称</th><th>地区</th><th>采购单位</th><th>预算</th><th>发布时间</th><th>截止时间</th><th>参与状态</th><th>来源</th><th>操作</th></tr></thead><tbody>{list.data.items.map(item => <tr key={item.id}>
           <td className="tender-select-cell"><input type="checkbox" disabled aria-label={`选择${item.project_name}（暂未开放）`} title="批量选择暂未开放" /></td>
           <td><button className="tender-title" type="button" onClick={() => openDetail(item.id)}>{item.project_name || "项目名称未提供"}</button>{item.project_code && <small>编号：{item.project_code}</small>}<ProjectTags item={item} /></td>
           <td>{item.region || "—"}</td><td><span className="tender-purchaser" title={item.purchaser || undefined}>{item.purchaser || "—"}</span></td><td>{formatBudget(item)}</td><td>{publishedAt(item)}</td><td>{item.bid_deadline ? formatDateTime(item.bid_deadline) : "待核实"}</td>

@@ -1,0 +1,102 @@
+{
+  "status": "PASS_CODE_AND_ENTERPRISE_DATA_PUBLISHED",
+  "scope": "AI-D40 explicitly authorized public GitHub publication; not formal deployment",
+  "remote": {
+    "status": "PASS",
+    "verified_at": "2026-10-18T23:29:06.932255+08:00",
+    "repository": "https://github.com/qiyuxrang/NewAi_platform",
+    "visibility": "public",
+    "branch": "codex/baichuan-delivery-20261018",
+    "commit": "1afd65ddd8bf02962bad624f51a04062a186c168",
+    "git_tree": "4ccd909839be4d732daca49f279e0faae195aa6d",
+    "remote_main_unchanged": true,
+    "published_paths_verified": 2178,
+    "data_paths_verified": 1768,
+    "remote_raw_readbacks": [
+      {
+        "path": "data/baichuan/manifest.json",
+        "bytes": 420131,
+        "sha256": "80c355d2db40234c46ee5b06555a7ac3b425d330dbaeb9982e7e8ce8bcc99cb2"
+      },
+      {
+        "path": "data/baichuan/validation.json",
+        "bytes": 209,
+        "sha256": "1089b0b86bdc8b63c7796bdf5dbd2ae530aa878020e3ea829099e043ff8346ad"
+      },
+      {
+        "path": "data/baichuan/tables/portal_company.jsonl",
+        "bytes": 2974945,
+        "sha256": "0f759aaa970f7d384bafe1febed29e534728678e2883810755e29f4b3958f286"
+      },
+      {
+        "path": "data/baichuan/tables/portal_companyqualification.jsonl",
+        "bytes": 2106993,
+        "sha256": "f841389d3c6dae5d2138cf6e92996205857fbaf8c0a5a0ee736eec1838b5956e"
+      },
+      {
+        "path": "data/baichuan/tables/portal_companyperson.jsonl",
+        "bytes": 0,
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "path": "data/baichuan/sources/220ec53ebe6a87263978f297891107700070d07588a4532b62ba884d64f68f07.gz",
+        "bytes": 148531,
+        "sha256": "a56e8af5d327a9444f346845ffa14d413fd5b214e1de59e404ab48e2a64eeaf9"
+      },
+      {
+        "path": "data/baichuan/sources/e70746d94b6a6a82a3f7f6840acc9ad6faea1f2d27ca2d76b8d2e8ed654f3e34.gz",
+        "bytes": 2033,
+        "sha256": "3f776921ba9f4d1ad791c93d3eee2cd279352aefe43a60b2397ea568b8dcedbb"
+      }
+    ],
+    "readback_transport": "GitHub official Git Blob API base64 decoded bytes; raw.githubusercontent.com DNS unavailable",
+    "data_validation": {
+      "status": "PASS",
+      "tables": 9,
+      "rows": 25843,
+      "companies": 1283,
+      "source_paths": 4064,
+      "unique_source_blobs": 1754,
+      "internal_foreign_keys": "PASS",
+      "original_database_writes": 0
+    },
+    "all_data_blob_ids_match_exact_working_bytes": true,
+    "original_xlsx_remote_bytes_verified": true,
+    "public_html_remote_bytes_verified": true,
+    "formal_deployment": false
+  },
+  "security_scan": {
+    "status": "PASS",
+    "files_scanned": 2178,
+    "known_local_secret_patterns": 18,
+    "findings": [],
+    "notes": "Only exact known non-secret environment metadata and one synthetic leakage-test literal were classified; all real credential bytes remained checked."
+  },
+  "preservation": {
+    "status": "PASS_SCOPED",
+    "staged_files": 2178,
+    "staged_working_bytes": 62278018,
+    "max_working_file_bytes": 7077359,
+    "all_163_frontend_files_unchanged": true,
+    "all_owned_processes_unchanged": true,
+    "business_and_task_data_unchanged": true,
+    "original_workbook_and_trial_data_unchanged": true,
+    "secret_scan": "PASS",
+    "diff_check": "NEW_DELIVERY_FILES_PASS; full check retains 7 preexisting-file whitespace warnings",
+    "formal_deployment": false
+  },
+  "whitespace": {
+    "full_staged_check": "FAIL_PREEXISTING_WHITESPACE_IN_7_PRESERVED_FILES",
+    "new_delivery_files_check": "PASS",
+    "preserved_files": [
+      "doc/baichuan-sdd/ai-assistant/evidence/AI-T12/2026-10-18-current-empty-phone249-purpose-audit.md",
+      "doc/baichuan-sdd/ai-assistant/evidence/AI-T12/2026-10-18-n11-public-source-review.md",
+      "doc/baichuan-sdd/ai-assistant/evidence/AI-T12/2026-10-18-n9-public-source-review.md",
+      "doc/baichuan-sdd/ai-assistant/evidence/AI-T12/2026-10-18-phone-fifth-next12-unknown.md",
+      "doc/baichuan-sdd/ai-assistant/evidence/AI-T12/2026-10-18-phone-final8-candidate.md",
+      "frontend/src/business/product/BaichuanAssistant.tsx",
+      "services/business/backend/portal/tests/test_baichuan_integration_review.py"
+    ],
+    "data_attributes": "Byte-preserving data attributes; CSV retains original company text trailing spaces and CRLF."
+  }
+}

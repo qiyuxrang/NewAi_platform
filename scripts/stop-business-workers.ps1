@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('product', 'hr', 'engineering')][string[]]$Workers = @(),
+    [ValidateSet('product', 'hr', 'engineering', 'baichuan', 'tender')][string[]]$Workers = @(),
     [string]$BusinessRepository = '',
     [switch]$CheckOnly
 )
@@ -12,8 +12,8 @@ $BusinessRepository = [IO.Path]::GetFullPath($BusinessRepository)
 $python = Join-Path $BusinessRepository '.runtime/main-acceptance-venv/Scripts/python.exe'
 $runner = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'run-business-service.py')).Path
 $runtime = (Resolve-Path -LiteralPath (Join-Path $repo '.runtime/enterprise')).Path
-if (!$CheckOnly -and !$Workers.Count) { throw 'Specify -Workers product,hr,engineering (or a subset). No process was stopped.' }
-if (!$Workers.Count) { $Workers = @('product', 'hr', 'engineering') }
+if (!$CheckOnly -and !$Workers.Count) { throw 'Specify -Workers product,hr,engineering,baichuan,tender (or a subset). No process was stopped.' }
+if (!$Workers.Count) { $Workers = @('product', 'hr', 'engineering', 'baichuan', 'tender') }
 
 function Get-BusinessOwnedProcess($record, [string]$service) {
     $argumentLine = '"' + $runner + '" ' + $service + ' --repository "' + $BusinessRepository + '"'

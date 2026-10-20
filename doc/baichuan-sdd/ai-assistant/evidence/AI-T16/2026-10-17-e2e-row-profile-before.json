@@ -1,0 +1,96 @@
+{
+  "task": "AI-T16",
+  "synthetic": true,
+  "target_database_accessed": false,
+  "scope": "deterministic resumed query task -> worker -> fixed snapshot -> XLSX -> authorized download",
+  "natural_language_model_verified": false,
+  "network_calls": 0,
+  "model_calls": 0,
+  "sqlite": "3.53.1",
+  "python": "3.13.16",
+  "openpyxl": "3.1.5",
+  "cpu": "Intel64 Family 6 Model 140 Stepping 2, GenuineIntel",
+  "logical_cpus": 8,
+  "platform": "Windows-11-10.0.26200-SP0",
+  "concurrency": 1,
+  "cold_definition": "Django connection closed, first sample; OS cache not evicted",
+  "p95_method": "nearest rank over warm samples; limited exploratory sample, not population guarantee",
+  "warm_samples": 0,
+  "datasets": [
+    {
+      "companies": 1000,
+      "certificates": 1000,
+      "fixture_setup_ms": 432.009,
+      "samples": [
+        {
+          "cache": "connection_cold",
+          "query_submit_ms": 15.905,
+          "structured_match_ms": 155.595,
+          "match_and_snapshot_ms": 180.479,
+          "query_worker_ms": 233.715,
+          "first_snapshot_ready_ms": 256.339,
+          "export_submit_ms": 30.53,
+          "worksheet_max_row_calls": 4045,
+          "worksheet_max_row_scan_ms": 291.353,
+          "xlsx_build_ms": 868.862,
+          "xlsx_publish_ms": 4.676,
+          "export_worker_ms": 925.596,
+          "authorized_download_ms": 34.843,
+          "xlsx_read_validate_ms": 180.052,
+          "total_ms": 1436.764,
+          "snapshot_publish_overhead_ms": 24.884,
+          "xlsx_bytes": 157512,
+          "xlsx_sha256": "41fb85658537595e7c275ee45eb4d598227c71ffca9dc36b727387f4168e5ebf",
+          "counts": {
+            "confirmed": 500,
+            "candidate": 500,
+            "excluded": 0
+          },
+          "xlsx_rows_validated": 2000,
+          "query_terminal": "partial",
+          "export_terminal": "completed"
+        }
+      ]
+    },
+    {
+      "companies": 5000,
+      "certificates": 5000,
+      "fixture_setup_ms": 1890.944,
+      "samples": [
+        {
+          "cache": "connection_cold",
+          "query_submit_ms": 16.875,
+          "structured_match_ms": 1463.257,
+          "match_and_snapshot_ms": 1533.946,
+          "query_worker_ms": 1599.492,
+          "first_snapshot_ready_ms": 1623.353,
+          "export_submit_ms": 111.216,
+          "worksheet_max_row_calls": 20045,
+          "worksheet_max_row_scan_ms": 9178.083,
+          "xlsx_build_ms": 12369.996,
+          "xlsx_publish_ms": 4.3,
+          "export_worker_ms": 12475.057,
+          "authorized_download_ms": 75.138,
+          "xlsx_read_validate_ms": 944.342,
+          "total_ms": 15265.847,
+          "snapshot_publish_overhead_ms": 70.689,
+          "xlsx_bytes": 745434,
+          "xlsx_sha256": "2c6a5fb6bc3b4760704866ae1d37edf5893661f42ae92a84f882cdc1f6ac7eb2",
+          "counts": {
+            "confirmed": 2500,
+            "candidate": 2500,
+            "excluded": 0
+          },
+          "xlsx_rows_validated": 10000,
+          "query_terminal": "partial",
+          "export_terminal": "completed"
+        }
+      ]
+    }
+  ],
+  "complete": true,
+  "wall_limit_seconds": 120,
+  "started_at_utc": "2026-10-17T12:06:31.530462+00:00",
+  "schema_setup_ms": 6763.806,
+  "completed_at_utc": "2026-10-17T12:06:57.352063+00:00"
+}

@@ -23,7 +23,9 @@ logger = logging.getLogger("platform.routes.proxy")
 router = APIRouter(prefix="/api/openclaw", tags=["proxy"])
 
 
-async def _container_target(db: AsyncSession, user: User, dev_url: str | None = None) -> tuple[str, dict[str, str]]:
+async def _container_target(
+    db: AsyncSession, user: User, dev_url: str | None = None, *, start: bool = True,
+) -> tuple[str, dict[str, str]]:
     """Resolve the user's own Bridge and its server-side container credential."""
     if user.role != "admin" and user.business_role == "unassigned":
         raise HTTPException(status_code=403, detail="请先连接业务账号，或由管理员分配部门")
@@ -34,11 +36,13 @@ async def _container_target(db: AsyncSession, user: User, dev_url: str | None = 
         base_url, token = dev_url or settings.dev_openclaw_url, settings.dev_bridge_token
     else:
         try:
-            container = await ensure_running(db, user.id)
+            container = await ensure_running(db, user.id) if start else await get_container(db, user.id)
         except docker.errors.ImageNotFound:
             raise HTTPException(status_code=503, detail="独立 Agent 运行镜像尚未构建，可以先使用部门功能") from None
-        if container.user_id != user.id:
+        if container is None or container.user_id != user.id:
             raise HTTPException(status_code=403, detail="运行环境账号不匹配")
+        if not start and container.status != "running":
+            raise HTTPException(status_code=403, detail="运行环境已停用")
         base_url = f"http://{container.internal_host}:{container.internal_port}"
         token = container.container_token
     if not token or token == "dev-token":
@@ -338,6 +342,39 @@ async def abort_active_session_run(
 # SSE event stream (must be before the catch-all route)
 # ---------------------------------------------------------------------------
 
+SSE_IDENTITY_INTERVAL_SECONDS = 5
+SSE_IDENTITY_TIMEOUT_SECONDS = 5
+
+
+def _sse_identity(user: User) -> tuple:
+    return tuple(getattr(user, field, None) for field in (
+        "id", "role", "business_role", "department_code", "portal_user_id",
+        "portal_session_enc", "runtime_mode",
+    ))
+
+
+async def _sse_authorized(token: str, identity: tuple, target: tuple) -> bool:
+    """Recheck identity and the existing binding without starting a runtime."""
+    import asyncio
+    from app.auth.service import decode_token, get_user_by_id, token_matches_user
+
+    payload = decode_token(token)
+    if payload is None or payload.get("type") != "access":
+        return False
+
+    async def lookup():
+        async with async_session() as db:
+            user = await get_user_by_id(db, payload["sub"])
+            if not token_matches_user(payload, user) or _sse_identity(user) != identity:
+                return False
+            return await _container_target(db, user, start=False) == target
+
+    try:
+        return await asyncio.wait_for(lookup(), timeout=SSE_IDENTITY_TIMEOUT_SECONDS)
+    except Exception:
+        return False
+
+
 @router.get("/events/stream")
 async def proxy_events_stream(
     request: Request,
@@ -357,6 +394,7 @@ async def proxy_events_stream(
         if not token_matches_user(payload, user):
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="User not found")
         base_url, bridge_headers = await _container_target(db, user)
+        identity = _sse_identity(user)
 
     target_url = f"{base_url}/api/events/stream"
     client = httpx.AsyncClient(timeout=None, trust_env=False)
@@ -379,12 +417,38 @@ async def proxy_events_stream(
         raise
 
     async def _stream_sse():
+        import asyncio
+
+        pending = None
         try:
-            async for chunk in upstream.aiter_bytes():
-                yield chunk
+            # The upstream handshake may outlive the initial authorization.
+            if not await _sse_authorized(token, identity, (base_url, bridge_headers)):
+                return
+            loop = asyncio.get_running_loop()
+            next_check = loop.time() + SSE_IDENTITY_INTERVAL_SECONDS
+            chunks = upstream.aiter_bytes()
+            while True:
+                if pending is None:
+                    pending = asyncio.create_task(anext(chunks))
+                await asyncio.wait({pending}, timeout=max(0, next_check - loop.time()))
+                if loop.time() >= next_check:
+                    if not await _sse_authorized(token, identity, (base_url, bridge_headers)):
+                        return
+                    next_check = loop.time() + SSE_IDENTITY_INTERVAL_SECONDS
+                if pending.done():
+                    try:
+                        chunk = pending.result()
+                    except StopAsyncIteration:
+                        return
+                    pending = None
+                    yield chunk
         except (httpx.ConnectError, httpx.RemoteProtocolError):
-            yield b"data: {\"error\":\"upstream disconnected\"}\n\n"
+            if await _sse_authorized(token, identity, (base_url, bridge_headers)):
+                yield b"data: {\"error\":\"upstream disconnected\"}\n\n"
         finally:
+            if pending is not None:
+                pending.cancel()
+                await asyncio.gather(pending, return_exceptions=True)
             try:
                 await upstream.aclose()
             finally:

@@ -1,4 +1,4 @@
-import { apiRequest } from "../api";
+import { ApiError, apiRequest } from "../api";
 
 export const SOURCE_ACCEPT = ".csv,.txt,.pdf,.docx,.xlsx,.xls,.png,.jpg,.jpeg,.webp,.bmp,.tif,.tiff";
 export interface SourceLocation { page?: number; paragraph?: number; table?: number; row?: number; sheet?: string; range?: string; part?: string; image?: number; bbox?: number[][]; image_width?: number; image_height?: number }
@@ -228,11 +228,31 @@ export const artifactPreview = (id: string, page: number) => `/api/product/artif
 export const verifyArtifact = (id: string, body: ArtifactVerification, signal: AbortSignal) => apiRequest<unknown>(`/api/product/artifacts/${encodeURIComponent(id)}/verification/`, {
   method: "POST", body: JSON.stringify(body), signal,
 });
-export async function uploadSource(id: string, file: File, version: number, signal: AbortSignal, purpose?: 'equipment' | 'background'): Promise<DocumentTask> {
+export async function confirmSourceUpload(task: DocumentTask, file: File, previousSources: DocumentTask['sources'], purpose?: 'equipment' | 'background'): Promise<boolean> {
+  if (!globalThis.crypto?.subtle) return false;
+  const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', await file.arrayBuffer()))).map(byte => byte.toString(16).padStart(2, '0')).join('');
+  return task.sources.some(source => !previousSources.some(previous => previous.id === source.id) && source.original_name === file.name && source.size === file.size && source.sha256 === hash && (source.purpose || '') === (purpose || ''));
+}
+
+export async function uploadSource(id: string, file: File, version: number, signal: AbortSignal, purpose?: 'equipment' | 'background', previousSources?: DocumentTask['sources']): Promise<DocumentTask> {
   const body = new FormData();
   body.append("file", file);
   body.append("expected_version", String(version));
   if (purpose) body.append('purpose', purpose);
-  const result = await apiRequest<{ source_id: string; task: DocumentTask }>(`${pathFor(id)}sources/`, { method: "POST", body, signal });
-  return result.task;
+  try {
+    const result = await apiRequest<{ source_id: string; task: DocumentTask }>(`${pathFor(id)}sources/`, { method: "POST", body, signal });
+    return result.task;
+  } catch (reason) {
+    if (signal.aborted || !previousSources || (reason instanceof ApiError && reason.status < 500 && reason.status !== 409)) throw reason;
+    // An upload can commit before its HTTP response is lost. Accept only a new,
+    // exact source snapshot; never repeat the write while reconciling its result.
+    try {
+      const fresh = await getTask(id, signal);
+      if (await confirmSourceUpload(fresh, file, previousSources, purpose) && !signal.aborted) return fresh;
+    } catch (reconcileError) {
+      if (reconcileError instanceof ApiError && [401, 403, 404].includes(reconcileError.status)) throw reconcileError;
+      // Keep the original failure if the result cannot be confirmed.
+    }
+    throw reason;
+  }
 }

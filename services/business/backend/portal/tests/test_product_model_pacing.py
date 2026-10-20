@@ -43,10 +43,10 @@ class ProductModelPacingTests(PortalTestCase):
         self.claim = product_worker.claim_task()
         self.attempt = DocumentAttempt.objects.get(pk=self.claim[2])
         provider = Provider.objects.create(code="pacing", name="隔离", base_url="https://example.invalid",
-                                           api_key_env="PORTAL_MODEL_KEY_PACING")
-        self.model = GatewayModel.objects.create(name="隔离", model_name="isolated", provider=provider)
+                                           api_key_env="PORTAL_MODEL_KEY_PACING", enabled=True)
+        self.model = GatewayModel.objects.create(name="隔离", model_name="isolated", provider=provider, enabled=True)
         self.route = ModelRoute.objects.create(code="pacing-review", name="隔离", model=self.model,
-            module=Module.objects.get(code="product"), max_calls_per_minute=1)
+            module=Module.objects.get(code="product"), max_calls_per_minute=1, enabled=True)
 
     def advance(self, seconds):
         # TestCase's own outer transaction is expected; the worker must release

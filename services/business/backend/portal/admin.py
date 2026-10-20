@@ -9,6 +9,7 @@ from django.core.exceptions import PermissionDenied
 from django.db import transaction
 from django.http import Http404, HttpResponseNotAllowed
 from django.shortcuts import redirect
+from django.urls import path
 
 from .models import AuditEvent, BusinessLedgerGrant, BusinessMapping, Module, Role, User
 from .security import audit
@@ -20,12 +21,17 @@ class PortalAdminSite(admin.AdminSite):
     site_title = "平台管理"
     index_title = "账号、授权与接入配置"
 
+    def get_urls(self):
+        from .admin_review import review
+        return [path("review/", self.admin_view(lambda request: review(self, request)),
+                     name="platform_review")] + super().get_urls()
+
     operations_links = {
-        "/admin/portal/user/": ("/ops/people", "返回人员与权限"),
-        "/admin/portal/role/": ("/ops/people", "返回人员与权限"),
-        "/admin/portal/businessmapping/": ("/ops/people", "返回人员与权限"),
-        "/admin/portal/module/": ("/ops/modules", "返回模块与接入管理"),
-        "/admin/portal/auditevent/": ("/ops/maintenance?tab=audit", "返回审计记录"),
+        "/admin/portal/user/": ("/admin/portal/user/", "返回人员与权限"),
+        "/admin/portal/role/": ("/admin/portal/user/", "返回人员与权限"),
+        "/admin/portal/businessmapping/": ("/admin/portal/user/", "返回人员与权限"),
+        "/admin/portal/module/": ("/admin/portal/module/", "返回模块与接入管理"),
+        "/admin/portal/auditevent/": ("/admin/portal/auditevent/", "返回审计记录"),
     }
 
     def has_permission(self, request):
@@ -54,7 +60,7 @@ class PortalAdminSite(admin.AdminSite):
         context = super().each_context(request)
         target = next(
             (link for prefix, link in self.operations_links.items() if request.path.startswith(prefix)),
-            ("/ops", "返回运维总览"),
+            ("/admin/review/", "返回运维总览"),
         )
         context["operations_return_url"], context["operations_return_label"] = target
         return context
@@ -73,6 +79,10 @@ class PortalAdminSite(admin.AdminSite):
             "ModelRoute": (8, "业务", "按业务模块配置模型路由，新增配置默认停用。", "管理业务路由", "新增路由"),
             "ModelCallLog": (9, "留痕", "只读查看调用状态、耗时与令牌计数，不记录输入或输出内容。", "查看调用日志", "新增记录"),
             "ProductKnowledgeConversation": (10, "维护", "归档旧知识对话以释放活跃额度；保留历史，不展示对话内容。", "归档知识对话", "新增记录"),
+            "KnowledgeAccessPolicy": (11, "资料", "按业务部门启停资料访问及通用助手正文导出。", "管理资料策略", "新增策略"),
+            "KnowledgeDocumentGrant": (12, "资料", "按文档授予个人、角色、部门或项目成员查看、AI 使用和下载权限。", "管理文档授权", "新增授权"),
+            "AgentProject": (13, "资料", "维护项目归属；项目成员与文档授权共同决定资料范围。", "管理资料项目", "新增项目"),
+            "ProjectMembership": (14, "资料", "维护项目成员，停用后相关资料访问即时重新核验。", "管理项目成员", "新增成员"),
         }
         labels = {
             model._meta.object_name: model_admin.admin_label_plural
@@ -392,3 +402,4 @@ class ProductKnowledgeConversationAdmin(ManagedAdmin):
 
 
 from . import model_admin
+from . import knowledge_access_admin

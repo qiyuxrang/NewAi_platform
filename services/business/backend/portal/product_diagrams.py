@@ -401,7 +401,7 @@ def _draft_diagram_source(source: str) -> str:
     return re.sub(r"<br\s*/?>", " ", source, flags=re.I)
 
 
-def validate_diagram_batch(payload: dict, figures: list[dict], paragraphs: list[dict], *, draft=False, quality_issues=None) -> list[dict]:
+def validate_diagram_batch(payload: dict, figures: list[dict], paragraphs: list[dict], *, draft=False, quality_issues=None, verify_content=True) -> list[dict]:
     if not isinstance(payload, dict) or set(payload) != {"diagrams"} or not isinstance(payload["diagrams"], list):
         raise ValueError("invalid diagram model output")
     expected = {figure["id"] for figure in figures}
@@ -426,9 +426,9 @@ def validate_diagram_batch(payload: dict, figures: list[dict], paragraphs: list[
             item["source"] = source
         anchor = item["anchor_text"]
         supported_anchor = any(anchor in evidence[ref]["text"] for ref in refs)
-        if len(anchor.strip()) < 2 or (not draft and not supported_anchor):
+        if verify_content and (len(anchor.strip()) < 2 or (not draft and not supported_anchor)):
             raise ValueError("diagram is missing its report evidence anchor")
-        if anchor not in source or not supported_anchor:
+        if verify_content and (anchor not in source or not supported_anchor):
             # Repair only metadata using an existing complete visible label.
             # Drafts may also repair an inaccurate anchor, using the same literal evidence.
             labels = [label for label in _diagram_visible_labels(source)
@@ -441,8 +441,12 @@ def validate_diagram_batch(payload: dict, figures: list[dict], paragraphs: list[
                 or re.search(r"%%|https?://|javascript:|<|\b(?:click|style|classDef|linkStyle)\b", source, re.I)):
             raise ValueError("unsupported or unsafe Mermaid source")
         normalized = re.sub(r"\s+", "", source)
-        if normalized in sources:
+        if verify_content and normalized in sources:
             raise ValueError("duplicate diagram source")
+        if not verify_content:
+            seen.add(identifier)
+            sources.add(normalized)
+            continue
         if re.match(r"\s*flowchart TB\s+EXCERPT_[0-9a-f]{16}\[", source):
             if not draft:
                 raise ValueError("diagram excerpt fallback requires draft review")
@@ -539,6 +543,8 @@ def apply_diagram_layout(document: dict, evidence: dict, directory: Path) -> lis
 
 
 def validate_document_requirements(document: dict, *, allow_pending=False) -> dict:
+    from .product_generation_policy import document_generation_only
+    verify_content = not document_generation_only(document)
     family = document.get("family")
     if family not in FAMILY_DIAGRAMS:
         raise ValueError("unsupported report family")
@@ -549,7 +555,7 @@ def validate_document_requirements(document: dict, *, allow_pending=False) -> di
     required = minimum_diagrams(family)
     pending = document.get("diagram_pending", []) if allow_pending else []
     plans = [item for item in document.get("requirements", []) if item.get("id") == "RGUIDEFIGURES"]
-    if plans:
+    if plans and verify_content:
         from .product_feasibility import asset_hash
         if family != "feasibility" or len(plans) != 1:
             raise ValueError("invalid guide figure plan")
@@ -563,11 +569,11 @@ def validate_document_requirements(document: dict, *, allow_pending=False) -> di
         if actual != set(plan["figure_ids"]):
             raise ValueError("guide figures differ from approved plan")
         required = len(plan["figure_ids"])
-    if len(figures) + len(pending) < required:
+    if verify_content and len(figures) + len(pending) < required:
         raise ValueError(f"diagram count below requirement: {len(figures)} < {required}")
-    if not h1 or not h2:
+    if verify_content and (not h1 or not h2):
         raise ValueError("reports require both level-one and level-two headings")
-    if max((block.get("level", 0) for block in blocks if block.get("type") == "heading"), default=0) < 2:
+    if verify_content and max((block.get("level", 0) for block in blocks if block.get("type") == "heading"), default=0) < 2:
         raise ValueError("table of contents must include level-two headings")
     paths = [block["path"] for block in figures]
     if len(paths) != len(set(paths)):

@@ -1,11 +1,12 @@
 import hashlib
 from dataclasses import replace
+from datetime import datetime
 from tempfile import TemporaryDirectory
 
 from django.test import TestCase, override_settings
 
 from portal.tender_models import TenderNotice, TenderNoticeVersion, TenderOpportunity, TenderSource
-from portal.tender_service import backfill_qinyuan_display_fields, ingest_fetch_result
+from portal.tender_service import backfill_public_fields, backfill_qinyuan_display_fields, ingest_fetch_result
 from portal.tender_normalize import normalize_notice
 from .test_tender_qinyuan import adapter_and_ref
 
@@ -59,3 +60,58 @@ class TenderDisplayBackfillTests(TestCase):
         record.refresh_from_db()
         TenderOpportunity.objects.filter(pk=record.pk).update(classification_notice_version=None)
         self.assertEqual(backfill_qinyuan_display_fields(record), 'concurrent_change')
+
+    def test_public_backfill_reparses_archived_point_times_without_losing_history_or_real_conflicts(self):
+        raw = ('<title>测试采购公告</title><p>发布时间：2026-09-24</p>'
+               '<p>投标截止时间：2026年11月11日09点30分</p>'
+               '<p>开标时间：2026-11-11 09:30</p>'
+               '<p>开标时间：2026年11月11日09点30分</p>').encode()
+        result = replace(self.result, raw_bytes=raw, sha256=hashlib.sha256(raw).hexdigest())
+        record = TenderOpportunity.objects.get(pk=ingest_fetch_result(result, source=self.source).opportunity_id)
+        version = TenderNoticeVersion.objects.get()
+        snapshot = version.snapshot
+        previous = {'fields': {
+            'bid_deadline': {'value': None, 'status': 'UNKNOWN', 'precision': 'date', 'conflict': False,
+                             'rule': 'public_document:explicit_date',
+                             'raw': '投标截止时间：2026年11月11日09点30分'},
+            'bid_open_at': {'value': None, 'status': 'UNKNOWN', 'precision': 'minute', 'conflict': True,
+                            'rule': 'public_document:explicit_date',
+                            'snippets': ['开标时间：2026-11-11 09:30', '开标时间：2026年11月11日09点30分']},
+        }}
+        snapshot.source_metadata = {**snapshot.source_metadata, 'public_extraction': previous}
+        snapshot.save(update_fields=['source_metadata'])
+        TenderOpportunity.objects.filter(pk=record.pk).update(bid_deadline=None, bid_open_at=None,
+                                                              status='CLOSED', unknown_fields=['bid_deadline', 'bid_open_at', 'region'])
+        record.refresh_from_db()
+        times = (record.first_seen_at, record.updated_at)
+        versions = list(TenderNoticeVersion.objects.values())
+        self.assertEqual(backfill_public_fields(record), 'updated')
+        record.refresh_from_db()
+        expected = datetime.fromisoformat('2026-11-11T09:30:00+08:00')
+        self.assertEqual((record.bid_deadline, record.bid_open_at), (expected, expected))
+        self.assertEqual(record.unknown_fields, ['region'])
+        self.assertEqual((record.first_seen_at, record.updated_at), times)
+        self.assertEqual(record.status, 'CLOSED')
+        self.assertEqual(list(TenderNoticeVersion.objects.values()), versions)
+        snapshot.refresh_from_db()
+        self.assertEqual(snapshot.source_metadata['public_extraction'], previous)
+        self.assertEqual(backfill_public_fields(record), 'updated')
+        record.refresh_from_db()
+        self.assertEqual((record.bid_deadline, record.bid_open_at), (expected, expected))
+        # A genuine disagreement in archived evidence still clears the field.
+        previous['fields']['bid_open_at']['snippets'][1] = '开标时间：2026年11月11日10点30分'
+        snapshot.source_metadata['public_extraction'] = previous
+        snapshot.save(update_fields=['source_metadata'])
+        self.assertEqual(backfill_public_fields(record), 'updated')
+        record.refresh_from_db()
+        self.assertIsNone(record.bid_open_at)
+        self.assertEqual(record.unknown_fields, ['bid_open_at', 'region'])
+        self.assertTrue(record.extraction_evidence['fields']['bid_open_at']['conflict'])
+        # The archive caps snippets at six; omitted evidence cannot be ruled out.
+        previous['fields']['bid_open_at']['snippets'] = [
+            '开标时间：2026-11-11 09:30', '开标时间：2026年11月11日09点30分'] * 3
+        snapshot.source_metadata['public_extraction'] = previous
+        snapshot.save(update_fields=['source_metadata'])
+        self.assertEqual(backfill_public_fields(record), 'updated')
+        record.refresh_from_db()
+        self.assertIsNone(record.bid_open_at)

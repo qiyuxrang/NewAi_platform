@@ -84,9 +84,9 @@ def authorization_revision(request):
 
 
 def visible(request, conversation):
-    service.recheck(request.user, request.knowledge_scope)
-    if not Conversation.objects.filter(pk=conversation.pk, archived_at__isnull=True).exists():
+    if not Conversation.objects.filter(pk=conversation.pk, owner=request.user, archived_at__isnull=True).exists():
         raise ProductError("not_found", "对象不存在。", 404)
+    service.recheck(request.user, request.knowledge_scope)
     if conversation.scope != request.knowledge_scope:
         service.fail("scope_revoked", 403)
 
@@ -236,6 +236,7 @@ def status(request):
     service.recheck(request.user, request.knowledge_scope)
     return Response({"available": True, "code": "ready", "help": "直接对话，按需检索可用资料。",
                      "web_search": web_status(), "assistant": assistant, "knowledge": knowledge,
+                     "assistant_export_allowed": service.assistant_export_allowed(request.user, request.knowledge_scope),
                      "authorization_revision": authorization_revision(request)})
 
 
@@ -276,6 +277,7 @@ def retrieve(request):
         service.fail("unconfigured")
     service.recheck(request.user, request.knowledge_scope)
     return Response({"status": "completed", "sources": sources,
+                     "assistant_export_allowed": service.assistant_export_allowed(request.user, request.knowledge_scope),
                      "authorization_revision": authorization_revision(request)})
 
 
@@ -326,7 +328,21 @@ def original_response(request, dataset_id, document_id, *, download):
     browsing_scope(request, dataset_id, document_id)
     if request.query_params:
         raise ProductError("invalid_request", "原文件查阅不支持额外参数。", 400)
+    download_scope = None
+    if download:
+        from . import knowledge_access
+        try:
+            download_scope = knowledge_access.authorize(request.user, "product", action="download")
+        except knowledge_access.KnowledgeAccessDenied:
+            service.fail("forbidden", 403)
+        if download_scope is not None and document_id not in download_scope["datasets"].get(dataset_id, []):
+            service.fail("forbidden", 403)
     metadata, raw, config = original_input(request, dataset_id, document_id, fresh=download)
+    if download:
+        try:
+            knowledge_access.recheck(request.user, "product", download_scope, action="download")
+        except knowledge_access.KnowledgeAccessDenied:
+            service.fail("scope_revoked", 403)
     content, content_type = raw, "application/octet-stream"
     if not download:
         from .product_knowledge_preview import preview

@@ -33,6 +33,28 @@ def artifact_delivery(artifact, *, current=None):
                     owner_blueprint_confirmation={"id": str(approval.pk), "actor_id": approval.actor_id,
                                                   "sha256": approval.sha256})
     evidence = artifact.render_evidence
+    from .product_generation_policy import POLICY as GENERATION_ONLY
+    if evidence.get("generation_policy") == GENERATION_ONLY:
+        # output_current binds owner approval, authorized input, exact saved body
+        # and source pair. Content quality is deliberately not an execution gate.
+        if artifact.family not in {*FAMILIES, "presentation"}:
+            blocked.append({"code": "unsupported_delivery_family"})
+        if artifact.family in FAMILIES and (not artifact.review or
+                artifact.review.payload.get("generation_policy") != GENERATION_ONLY):
+            blocked.append({"code": "generation_policy_mismatch"})
+        report = (task.revisions.filter(pk=evidence.get("report_id"), kind="report").first()
+                  if artifact.family in FAMILIES else None)
+        if artifact.family == "presentation":
+            for family in FAMILIES:
+                source = task.artifacts.filter(family=family).order_by("-version").first()
+                if not source or not artifact_delivery(source)["delivered"]:
+                    blocked.append({"code": "source_report_unavailable", "family": family})
+        if not _rendered_result_current({"path": artifact.path, "sha256": artifact.sha256,
+                                        "render_evidence": evidence}, report.payload if report else None):
+            blocked.append({"code": "artifact_hash_mismatch"})
+        decision.update(policy=GENERATION_ONLY, quality_scope="not_run", content_checks="not_run",
+                        delivered=not blocked, status="delivered" if not blocked else "draft")
+        return decision
     report = None
     if artifact.family in FAMILIES:
         from .product_worker import (_chapter_character_count, _content_review_current,

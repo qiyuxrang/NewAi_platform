@@ -1,6 +1,6 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('product', 'hr', 'engineering', 'tender')][string[]]$Workers = @(),
+    [ValidateSet('product', 'hr', 'engineering', 'baichuan', 'tender')][string[]]$Workers = @(),
     [string]$BusinessRepository = '',
     [switch]$CheckOnly
 )
@@ -12,8 +12,8 @@ $BusinessRepository = (Resolve-Path -LiteralPath $BusinessRepository).Path
 $python = (Resolve-Path -LiteralPath (Join-Path $BusinessRepository '.runtime/main-acceptance-venv/Scripts/python.exe')).Path
 $runner = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot 'run-business-service.py')).Path
 $runtime = (Resolve-Path -LiteralPath (Join-Path $repo '.runtime/enterprise')).Path
-if (!$CheckOnly -and !$Workers.Count) { throw 'Specify -Workers product,hr,engineering,tender (or a subset). No worker was started.' }
-if (!$Workers.Count) { $Workers = @('product', 'hr', 'engineering') }
+if (!$CheckOnly -and !$Workers.Count) { throw 'Specify -Workers product,hr,engineering,baichuan,tender (or a subset). No worker was started.' }
+if (!$Workers.Count) { $Workers = @('product', 'hr', 'engineering', 'baichuan', 'tender') }
 $Workers = @($Workers | Select-Object -Unique)
 
 function Get-BusinessOwnedProcess($record, [string]$service) {
@@ -41,9 +41,20 @@ try {
     if ($LASTEXITCODE) { throw 'Read-only worker preflight failed; no worker was started.' }
     $snapshot = ($snapshotOutput -join "`n") | ConvertFrom-Json
     if (!$snapshot.read_only -or !$snapshot.model_gateway_loopback_18411) { throw 'Business model gateway must be loopback:18411.' }
+    if ('baichuan' -in $Workers) {
+        if (!$snapshot.baichuan.enabled) {
+            Write-Host 'baichuan-worker: assistant disabled; startup skipped.'
+            $Workers = @($Workers | Where-Object { $_ -ne 'baichuan' })
+        } elseif (!$snapshot.baichuan.scope_confirmed -or !$snapshot.baichuan.scope -or $snapshot.baichuan.scope.Length -gt 100) {
+            throw 'Baichuan assistant requires a confirmed valid scope.'
+        }
+    }
     if ('product' -in $Workers -and !$snapshot.product.enabled) { throw 'Business PRODUCT_P1_ENABLED is false.' }
     if ('engineering' -in $Workers -and $snapshot.engineering.runtime_status -ne 'ready') { throw 'Bundled engineering runtime is not ready.' }
-    if ('tender' -in $Workers -and (!$snapshot.tender.enabled -or !($snapshot.tender.manual_refresh_enabled -or $snapshot.tender.schedule_enabled))) { throw 'Tender ingestion and at least one queue trigger must be enabled.' }
+    if ('tender' -in $Workers -and (!$snapshot.tender.enabled -or !($snapshot.tender.manual_refresh_enabled -or $snapshot.tender.schedule_enabled))) {
+        Write-Host 'tender-worker: ingestion or queue triggers disabled; startup skipped.'
+        $Workers = @($Workers | Where-Object { $_ -ne 'tender' })
+    }
     $workerProcesses = @(Get-CimInstance Win32_Process -Filter "Name='python.exe' OR Name='pythonw.exe'")
     $checks = @()
     foreach ($worker in $Workers) {

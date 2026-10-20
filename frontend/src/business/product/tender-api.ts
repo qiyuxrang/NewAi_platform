@@ -80,11 +80,15 @@ export interface OpportunityListPayload {
 }
 
 export interface OpportunityFilters {
+  q?: string;
   industry?: string;
   notice_category?: string;
   region?: string;
   user_state?: string;
   participation?: string;
+  publish_period?: string;
+  deadline_period?: string;
+  budget_band?: string;
   page?: number;
   page_size?: number;
 }
@@ -93,6 +97,9 @@ export interface OpportunityOptions {
   regions: SelectOption[];
   industries: SelectOption[];
   noticeCategories: SelectOption[];
+  publish_period?: SelectOption[];
+  deadline_period?: SelectOption[];
+  budget_band?: SelectOption[];
 }
 
 export interface RefreshSourceResult {
@@ -132,7 +139,7 @@ const opportunities = `${root}opportunities/`;
 
 function queryString(filters: OpportunityFilters): string {
   const query = new URLSearchParams();
-  (["industry", "notice_category", "region", "user_state", "participation", "page", "page_size"] as const).forEach(key => {
+  (["q", "industry", "notice_category", "region", "user_state", "participation", "publish_period", "deadline_period", "budget_band", "page", "page_size"] as const).forEach(key => {
     const value = filters[key];
     if (value !== undefined && String(value).trim()) query.set(key, String(value));
   });
@@ -192,6 +199,9 @@ export async function getOpportunityOptions(signal?: AbortSignal): Promise<Oppor
     regions: optionList(value.regions ?? value.region),
     industries: optionList(value.industries),
     noticeCategories: optionList(value.notice_categories),
+    publish_period: optionList(value.publish_period),
+    deadline_period: optionList(value.deadline_period),
+    budget_band: optionList(value.budget_band),
   };
 }
 

@@ -215,6 +215,7 @@ from .hr_screening_models import ResumeArtifact, ResumeScreeningBatch, ResumePro
 from .business_models import (BusinessLedgerGrant, BusinessLedgerRevision,
                               BusinessLedgerSnapshot, BusinessLedgerWorkbook)
 from .product_knowledge_models import ProductKnowledgeConversation
+from .knowledge_access_models import KnowledgeAccessPolicy, KnowledgeDocumentGrant, ProjectMembership
 from .tender_models import (TenderSource, TenderFetchRun, TenderManualRefresh, TenderConsumerHeartbeat,
                             TenderRecoveryAudit, TenderSnapshot, TenderNotice, TenderNoticeVersion,
                             TenderOpportunity, TenderOpportunityUserState, TenderOpportunityEvent, TenderSourceHealthEvent)
@@ -223,3 +224,7 @@ from .agent_models import (AgentProject, AgentAttachment, AgentConversation, Age
                            AgentRequirement, AgentRun, AgentRootAction, AgentEvent,
                            AgentBusinessReference, AgentSkillInstallation)
 from .baichuan_models import Company, CompanyQualification, CompanyPerson
+from .baichuan_assistant_models import (BaichuanEvidence, BaichuanFactRevision, BaichuanCertificate,
+    BaichuanQualificationRule, BaichuanConversation, BaichuanMessage, BaichuanAttachment,
+    BaichuanJob, BaichuanJobItem, BaichuanMatchSnapshot, BaichuanResearchManifest,
+    BaichuanResearchItem, BaichuanExport)

@@ -42,7 +42,7 @@ class ProxyAuthTests(unittest.TestCase):
 
     def setUp(self):
         self.users = {name: SimpleNamespace(id=name, role="admin", business_role="employee", is_active=True, runtime_mode="dedicated", password_hash="unused") for name in ("alice", "bob")}
-        self.containers = {name: SimpleNamespace(user_id=name, internal_host=name + ".test", internal_port=18080, container_token="test-only-container-" + name) for name in self.users}
+        self.containers = {name: SimpleNamespace(user_id=name, status="running", internal_host=name + ".test", internal_port=18080, container_token="test-only-container-" + name) for name in self.users}
         self.requests = []
         self.http_clients = []
         self.db = SimpleNamespace(close=AsyncMock())
@@ -52,6 +52,7 @@ class ProxyAuthTests(unittest.TestCase):
             patch.object(settings, "dev_gateway_url", ""),
             patch.object(settings, "dev_bridge_token", ""),
             patch.object(proxy, "ensure_running", AsyncMock(side_effect=lambda db, user_id: self.containers[user_id])),
+            patch.object(proxy, "get_container", AsyncMock(side_effect=lambda db, user_id: self.containers.get(user_id))),
             patch.object(proxy, "async_session", self.db_context),
             patch("app.auth.service.get_user_by_id", AsyncMock(side_effect=lambda db, user_id: self.users.get(user_id))),
             patch.object(proxy.httpx, "AsyncClient", self.http_client),

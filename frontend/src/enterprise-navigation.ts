@@ -4,7 +4,7 @@ export const departments = [
   { code: 'product', label: '产品事业部', description: '文档生成、商机管理、智能助手与文档成果', functions: [
     { code: 'documents', label: '文档生成', description: '生成项目方案与交付文档' },
     { code: 'opportunities', label: '商机管理', description: '处理商机与方案需求' },
-    { code: 'baichuan', label: '百川阁', description: '企业资质检索与合作资源库' },
+    { code: 'baichuan', label: '企业资质库', description: '企业资质检索与合作资源库' },
     assistantFeature,
     { code: 'outputs', label: '文档成果', description: '查看已生成的方案与交付文档' },
     { code: 'entry', label: '售前填报', description: '维护授权售前台账、草稿与发布版本' },
@@ -111,7 +111,7 @@ export const managerEntries = [
   { to: '/departments/engineering/estimate', label: '产品报价', capability: 'engineering' },
   { to: '/departments/product/knowledge', label: '智能助手', capability: 'product' },
   { to: '/departments/business/finance', label: '财务看板', capability: 'general_manager' },
-  { to: '/departments/product/baichuan', label: '百川阁', capability: 'product' },
+  { to: '/departments/product/baichuan', label: '企业资质库', capability: 'product' },
 ] as const
 
 export function availableManagerEntries(user: EnterpriseAccess | null) {

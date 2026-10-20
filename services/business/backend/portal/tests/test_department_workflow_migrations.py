@@ -8,6 +8,7 @@ class DepartmentWorkflowMigrationTests(TransactionTestCase):
         previous = [('portal', '0038_assistant_pending_request')]
         current = [('portal', '0041_preparation_upload_idempotency')]
         executor = MigrationExecutor(connection)
+        latest = executor.loader.graph.leaf_nodes()
         executor.migrate(previous)
         apps = executor.loader.project_state(previous).apps
         owner = apps.get_model('portal', 'User').objects.create(username='migration-only-owner', password='!')
@@ -25,4 +26,4 @@ class DepartmentWorkflowMigrationTests(TransactionTestCase):
             apps = executor.loader.project_state(previous).apps
             self.assertEqual(apps.get_model('portal', 'EngineeringJob').objects.get(pk=job_id).region, '陕西')
         finally:
-            MigrationExecutor(connection).migrate(current)
+            MigrationExecutor(connection).migrate(latest)

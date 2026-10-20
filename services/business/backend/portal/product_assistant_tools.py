@@ -160,7 +160,7 @@ class AssistantTools:
 
     @property
     def schemas(self):
-        available = bool(self.config and self.scope.get("datasets"))
+        available = bool(self.config and self.scope.get("ai_datasets", self.scope.get("datasets")))
         return [item for item in TOOLS if available or not item["function"]["name"].startswith("knowledge_")] + (
             PUBLIC_TOOLS if self.web_search else [])
 
@@ -299,9 +299,9 @@ class AssistantTools:
         return self._feedback(name, result, new_evidence=new_evidence)
 
     def _execute(self, name, args):
-        if name.startswith("knowledge_") and not (self.config and self.scope.get("datasets")):
+        if name.startswith("knowledge_") and not (self.config and self.scope.get("ai_datasets", self.scope.get("datasets"))):
             raise ProductError("forbidden", "当前请求没有可用的授权知识工具。", 403)
-        datasets = self.scope["datasets"]
+        datasets = self.scope.get("ai_datasets", self.scope["datasets"])
         if name == "knowledge_search":
             query = knowledge.text(args["query"], 2000)
             return {"sources": [self.add_source({**item, "type": "knowledge"})

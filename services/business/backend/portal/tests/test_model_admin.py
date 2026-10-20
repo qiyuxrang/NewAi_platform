@@ -44,7 +44,7 @@ class ModelAdminTests(PortalTestCase):
         self.login(self.client, self.admin_user, ADMIN_PASSWORD)
         self.provider_data = {"code": "test-provider", "name": "测试服务商",
             "protocol": "openai_chat", "base_url": "https://models.example.com/v1",
-            "api_key_env": "PORTAL_MODEL_KEY_TEST"}
+            "api_key_env": "PORTAL_MODEL_KEY_TEST", "processing_boundary": "external"}
         self.provider = Provider.objects.create(**self.provider_data)
         self.model = GatewayModel.objects.create(name="测试模型", provider=self.provider, model_name="test-model")
         self.module = Module.objects.get(code="business")
