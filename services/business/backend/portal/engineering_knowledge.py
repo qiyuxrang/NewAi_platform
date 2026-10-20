@@ -87,10 +87,14 @@ def dataset_document_count(config):
     return documents if documents and chunks else 0
 
 
-def retrieve(question, config):
+def retrieve(question, config, documents=None):
     url, dataset, token = config
-    data = _request(url, token, body={"question": question, "dataset_ids": [dataset],
-                                      "page": 1, "page_size": 6})
+    body = {"question": question, "dataset_ids": [dataset], "page": 1, "page_size": 6}
+    if documents is not None:
+        if not documents:
+            raise KnowledgeError("unavailable")
+        body["document_ids"] = list(documents)
+    data = _request(url, token, body=body)
     if not isinstance(data, dict) or not isinstance(data.get("chunks"), list) or len(data["chunks"]) > 6:
         raise KnowledgeError("unavailable")
     sources = []
@@ -98,6 +102,8 @@ def retrieve(question, config):
         if not isinstance(chunk, dict) or chunk.get("dataset_id") != dataset:
             raise KnowledgeError("unavailable")
         document_id, chunk_id = chunk.get("document_id"), chunk.get("id")
+        if documents is not None and document_id not in documents:
+            raise KnowledgeError("unavailable")
         content, title = chunk.get("content"), chunk.get("document_keyword", "")
         if not all(isinstance(value, str) and 0 < len(value) <= bound for value, bound in (
                 (document_id, 128), (chunk_id, 128), (content, 16000))):

@@ -1,0 +1,10 @@
+{
+  "status": "PASS",
+  "tables": 9,
+  "rows": 25843,
+  "companies": 1283,
+  "source_paths": 4064,
+  "unique_source_blobs": 1754,
+  "internal_foreign_keys": "PASS",
+  "original_database_writes": 0
+}

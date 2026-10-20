@@ -17,6 +17,27 @@ from .base import PortalTestCase
 
 
 class ClassificationTests(SimpleTestCase):
+    def test_procurement_portal_references_and_opening_procedure_are_not_construction(self):
+        title = '复旦大学聚合物定量分析三重四级杆液质联用仪国际公开招标公告'
+        cases = (
+            '复旦大学采购与招标管理系统（网址为：https://cz.fudan.edu.cn）',
+            '复旦大学采购与招标管理系统（网址为：https://cz.fudan.edu.cn）1、投标人应在投标截止时间之前',
+            '2、开标程序在复旦大学采购与招标管理系统上进行',
+            '复旦大学采购与招标管理系统（以下简称电子采购平台',
+            '复旦大学多组学联合检测分析服务采购 招标项目的潜在投标人应在复旦大学采购与招标管理系统（以下简称电子采购平台',
+        )
+        for text in cases:
+            with self.subTest(text=text):
+                result = classify_notice(title=title, raw=f'<p>采购需求：实验仪器一套。</p><p>{text}</p>')
+                self.assertEqual(result['classification_status'], 'review')
+                self.assertEqual(result['digital_tags'], [])
+                self.assertEqual(result['classification_evidence']['snippets'], [])
+        result = classify_notice(title='采购与招标管理系统升级采购公告', raw=(
+            '<p>采购需求：升级采购与招标管理系统。</p><p>开标程序在原采购与招标管理系统上进行。</p>'))
+        self.assertEqual(result['classification_status'], 'matched')
+        self.assertEqual(result['digital_tags'], ['信息化建设'])
+        self.assertEqual(result['classification_evidence']['snippets'], ['采购需求：升级采购与招标管理系统'])
+
     def test_computing_clusters_require_real_scope_evidence(self):
         for name in ('GPU计算集群', '高性能计算集群', '人工智能算力平台'):
             with self.subTest(name=name):
@@ -176,7 +197,7 @@ class ClassificationTests(SimpleTestCase):
         self.assertEqual(result['industry_code'], 'petrochemical')
 
     def test_contractor_obligations_and_monitoring_are_scope_not_bidding_process(self):
-        for content in ('供应商应建设医院信息系统', '采购安防监控设备并安装',
+        for content in ('供应商应建设医院信息系统', '供应商应在医院部署信息系统', '采购安防监控设备并安装',
                         '部署井下人员定位平台', '安装远程监测设备', '部署弱电系统'):
             with self.subTest(content=content):
                 result = classify_notice(title='建设项目招标公告', raw=f'<p>建设内容：{content}。</p>')

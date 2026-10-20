@@ -73,6 +73,13 @@ def _limit(name, default, minimum, maximum):
 
 
 def _scope_for_owner(owner_id):
+    from . import knowledge_access
+    from .models import User
+
+    try:
+        managed_scope = knowledge_access.authorize(User.objects.get(pk=owner_id), "product")
+    except (User.DoesNotExist, knowledge_access.KnowledgeAccessDenied):
+        raise RetrievalError("authorization_required") from None
     authorizations = getattr(settings, "PRODUCT_RETRIEVAL_AUTHORIZATIONS", {})
     if not isinstance(authorizations, Mapping):
         raise RetrievalError("authorization_required")
@@ -96,7 +103,21 @@ def _scope_for_owner(owner_id):
         if "*" in documents and len(documents) != 1:
             raise RetrievalError("authorization_required")
         scope.append({"dataset_id": dataset_id, "document_ids": sorted(documents)})
-    return sorted(scope, key=lambda item: item["dataset_id"])
+    legacy_scope = sorted(scope, key=lambda item: item["dataset_id"])
+    # Generation retains its existing approval boundary. Managed grants may
+    # narrow it, but importing chat grants must never expand report sources.
+    if managed_scope is not None:
+        available = managed_scope["datasets"]
+        limited = []
+        for item in legacy_scope:
+            allowed = set(available.get(item["dataset_id"], []))
+            documents = allowed if "*" in item["document_ids"] else allowed.intersection(item["document_ids"])
+            if documents:
+                limited.append({"dataset_id": item["dataset_id"], "document_ids": sorted(documents)})
+        if not limited:
+            raise RetrievalError("authorization_required")
+        return limited
+    return legacy_scope
 
 
 def _scope_covers(granted, required):

@@ -77,7 +77,27 @@ def authorize(user, *, allow_empty=False):
     if (not fresh or not can_use_assistant(fresh)
             or fresh.session_version != user.session_version or fresh.grant_version != user.grant_version):
         fail("forbidden", 403)
-    grants = getattr(settings, "PRODUCT_KNOWLEDGE_AUTHORIZATIONS", {})
+    from . import knowledge_access
+    try:
+        managed = knowledge_access.authorize(fresh, "product", action="read")
+    except knowledge_access.KnowledgeAccessDenied:
+        if not allow_empty:
+            fail("scope_revoked", 403)
+        # A chat without sources remains usable; denied grants never fall back.
+        managed = {"revision": "denied", "datasets": {}, "allow_assistant_export": False}
+    extra = {}
+    if managed is not None:
+        try:
+            ai_scope = knowledge_access.authorize(fresh, "product", action="ai_use")
+        except knowledge_access.KnowledgeAccessDenied:
+            ai_scope = {"datasets": {}}
+        extra = {"managed_authorization": managed["revision"],
+                 "ai_datasets": ai_scope["datasets"],
+                 "allow_assistant_export": managed["allow_assistant_export"],
+                 "ai_authorization": ai_scope.get("revision", "")}
+        grants = {str(fresh.pk): managed["datasets"]}
+    else:
+        grants = getattr(settings, "PRODUCT_KNOWLEDGE_AUTHORIZATIONS", {})
     if not isinstance(grants, dict):
         fail("unconfigured")
     raw = grants.get(str(fresh.pk))
@@ -97,12 +117,26 @@ def authorize(user, *, allow_empty=False):
     return {"datasets": dict(sorted(scope.items())), "session_version": fresh.session_version,
             "grant_version": fresh.grant_version,
             "authority": getattr(settings, "PRODUCT_KNOWLEDGE_URL", ""),
-            "authorization_revision": str(getattr(settings, "PRODUCT_KNOWLEDGE_AUTHORIZATION_REVISION", ""))}
+            "authorization_revision": str(getattr(settings, "PRODUCT_KNOWLEDGE_AUTHORIZATION_REVISION", "")),
+            **extra}
 
 
 def recheck(user, snapshot):
     if authorize(user, allow_empty=not snapshot.get("datasets")) != snapshot:
         fail("scope_revoked", 403)
+
+
+def assistant_export_allowed(user, scope):
+    # A general assistant can select models independently of business routes.
+    # Internal-only routes therefore cannot expose their sources through MCP.
+    if scope.get("allow_assistant_export", True) is not True:
+        return False
+    from .model_gateway import GatewayError, _route_for
+    try:
+        _, route = _route_for(user, configuration()[2])
+        return route.allow_external_processing is True
+    except (GatewayError, ProductError):
+        return False
 
 
 def configuration():
@@ -533,12 +567,15 @@ def list_datasets(scope, config):
 def retrieve(question, history, scope, config, *, blueprint=False):
     # Blueprint evidence has a separate fixed budget; question answering keeps its original window.
     source_limit, per_document_limit, content_limit = (12, 4, 4000) if blueprint else (6, 1, 1200)
+    datasets = scope.get("ai_datasets", scope["datasets"])
+    if not datasets:
+        fail("forbidden", 403)
     # Include previous questions to resolve follow-ups without an extra ungrounded LLM call.
     query = "\n".join([turn["question"] for turn in history[-2:]] + [question])[-6000:]
     url, token, _ = config
     sources = []
     deadline = monotonic() + 25
-    for dataset, documents in scope["datasets"].items():
+    for dataset, documents in datasets.items():
         remaining = deadline - monotonic()
         if remaining <= 0:
             fail("unavailable")

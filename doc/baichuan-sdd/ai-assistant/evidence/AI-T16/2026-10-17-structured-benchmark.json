@@ -1,0 +1,67 @@
+{
+  "synthetic": true,
+  "target_database_accessed": false,
+  "backend": "SQLite",
+  "python": "3.13.16",
+  "scope": "structured matching only",
+  "datasets": [
+    {
+      "companies": 1000,
+      "certificates": 1000,
+      "cold_ms": 175.684,
+      "warm_samples": 12,
+      "warm_median_ms": 186.963,
+      "warm_p95_ms": 347.338,
+      "samples_ms": [
+        175.684,
+        192.243,
+        181.682,
+        347.338,
+        227.378,
+        243.923,
+        274.45,
+        155.147,
+        159.578,
+        244.57,
+        158.581,
+        152.905,
+        162.049
+      ],
+      "verified_result_counts": {
+        "confirmed": 500,
+        "candidate": 500,
+        "excluded": 0
+      },
+      "meets_2s_structured_target": true
+    },
+    {
+      "companies": 5000,
+      "certificates": 5000,
+      "cold_ms": 951.832,
+      "warm_samples": 12,
+      "warm_median_ms": 1086.983,
+      "warm_p95_ms": 1216.574,
+      "samples_ms": [
+        951.832,
+        907.531,
+        1069.598,
+        1083.895,
+        908.846,
+        1031.197,
+        934.446,
+        1201.951,
+        1090.071,
+        1216.574,
+        1132.506,
+        1184.665,
+        1130.567
+      ],
+      "verified_result_counts": {
+        "confirmed": 2500,
+        "candidate": 2500,
+        "excluded": 0
+      },
+      "meets_2s_structured_target": true
+    }
+  ]
+}

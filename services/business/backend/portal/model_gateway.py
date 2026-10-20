@@ -4,6 +4,7 @@ import uuid
 from contextlib import closing
 from datetime import timedelta
 from http.client import HTTPException
+from math import ceil
 from time import monotonic
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlsplit
@@ -47,14 +48,20 @@ ERROR_MESSAGES = {
     "disabled": "模型或业务用途未启用。",
     "unsupported_capability": "当前模型未声明支持所需的文本或图片能力。",
     "model_configuration_changed": "模型配置已更新，请刷新模型列表后重试。",
+    "processing_boundary_denied": "该业务用途不允许将数据交由外部模型处理。",
 }
 
 
 class GatewayError(Exception):
-    def __init__(self, code, message=None, status=502, *, diagnostic=None):
+    def __init__(self, code, message=None, status=502, *, diagnostic=None,
+                 reservation_rejected=False, retry_after=None):
         self.code = code if isinstance(code, str) and code in ERROR_MESSAGES else "upstream_error"
         self.message = ERROR_MESSAGES[self.code]
         self.status = status
+        # Only local admission rejects may be rescheduled without replaying a
+        # possibly sent provider request. Upstream 429/timeout are not these.
+        self.reservation_rejected = reservation_rejected is True
+        self.retry_after = retry_after if type(retry_after) is int and 1 <= retry_after <= 61 else None
         self.diagnostic = {}
         if isinstance(diagnostic, dict):
             upstream_status = diagnostic.get("upstream_status")
@@ -330,14 +337,14 @@ def _configuration_version(route, model, option=None):
     """Return an opaque revision without exposing provider or remote model data."""
     payload = {
         "route": [route.pk, route.code, route.module_id, route.model_id, route.enabled,
-                  route.max_calls_per_minute],
+                  route.max_calls_per_minute, route.allow_external_processing],
         "route_updated": route.updated_at.isoformat(),
         "model": [str(model.public_id), model.provider_id, model.model_name, model.supports_text,
                   model.supports_vision, model.enabled, model.timeout_seconds,
                   model.max_output_tokens, model.token_parameter],
         "model_updated": model.updated_at.isoformat(),
         "provider": [model.provider.protocol, model.provider.base_url,
-                     model.provider.api_key_env, model.provider.enabled],
+                     model.provider.api_key_env, model.provider.enabled, model.provider.processing_boundary],
         "provider_updated": model.provider.updated_at.isoformat(),
         "option": [option.pk, option.model_id, option.enabled, option.display_order] if option else None,
         "option_updated": option.updated_at.isoformat() if option else None,
@@ -346,6 +353,11 @@ def _configuration_version(route, model, option=None):
     }
     serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return salted_hmac("portal.model-selection", serialized, algorithm="sha256").hexdigest()
+
+
+def _processing_allowed(route, model):
+    from .model_config import Provider
+    return route.allow_external_processing or model.provider.processing_boundary == Provider.ProcessingBoundary.INTERNAL
 
 
 def _available_route_models(user, route):
@@ -366,10 +378,12 @@ def _available_route_models(user, route):
         allowed_users = {allowed.pk for allowed in option.allowed_users.all()}
         scoped = bool(allowed_roles or allowed_users)
         if (option.enabled and option.model.enabled and option.model.provider.enabled
+                and _processing_allowed(route, option.model)
                 and (not scoped or user.pk in allowed_users or bool(role_ids & allowed_roles))):
             choices.append((option.model, option))
     # Backward compatibility: existing routes need no option row for their default.
-    if route.model_id not in by_model and route.model.enabled and route.model.provider.enabled:
+    if (route.model_id not in by_model and route.model.enabled and route.model.provider.enabled
+            and _processing_allowed(route, route.model)):
         choices.insert(0, (route.model, None))
     # A model can only appear once even if legacy data is unusual.
     unique = {}
@@ -450,26 +464,48 @@ def validate_model_selection(user, purpose_code, selection=None, required_capabi
     return {"model_id": str(model.public_id), "config_version": version}
 
 
-def _reserve(user, model, purpose, route, config_version=""):
-    from .models import GatewayModel, ModelCallLog, User
+def _reserve(user, model, purpose, route, config_version="", *, assistant=False):
+    from .models import GatewayModel, ModelCallLog, ModelRoute, User
     with serialized_atomic():
         if connection.vendor == "sqlite":
             # SELECT FOR UPDATE is ignored by SQLite. Reserve its write lock
             # before reading limits so competing writers wait using the busy
             # timeout rather than fail while upgrading a deferred read lock.
             User.objects.filter(pk=user.pk).update(grant_version=F("grant_version"))
-        User.objects.select_for_update().get(pk=user.pk)
-        GatewayModel.objects.select_for_update().get(pk=model.pk)
+        current_user = User.objects.select_for_update().get(pk=user.pk)
+        if (not current_user.is_active or current_user.must_change_password
+                or current_user.session_version != user.session_version
+                or current_user.grant_version != user.grant_version):
+            raise GatewayError("forbidden", status=403)
+        current_model = GatewayModel.objects.select_related("provider").select_for_update().get(pk=model.pk)
+        if purpose == "business":
+            current_route = ModelRoute.objects.get(pk=route.pk)
+            if not (_processing_allowed(current_route, current_model) and _processing_allowed(current_route, model)):
+                raise GatewayError("processing_boundary_denied", status=403)
+            current_user, current_route = _route_for(current_user, route.code, assistant=assistant)
+            selection = {"model_id": str(model.public_id), "config_version": config_version} if config_version else None
+            selected, _, _ = _select_route_model(current_user, current_route, selection)
+            if current_route.pk != route.pk or selected.pk != model.pk:
+                raise GatewayError("forbidden", status=403)
+            route = current_route
+        elif purpose == "test" and not current_user.is_platform_admin:
+            raise GatewayError("forbidden", status=403)
+        if (_model_config(current_model) != _model_config(model)
+                or (current_model.updated_at, current_model.provider.updated_at)
+                != (model.updated_at, model.provider.updated_at)):
+            raise GatewayError("model_configuration_changed" if purpose == "business" else "disabled", status=409)
         recent = ModelCallLog.objects.filter(actor=user, created_at__gte=timezone.now() - timedelta(minutes=1))
         limit = route.max_calls_per_minute if route else 10
         pending_since = timezone.now() - timedelta(seconds=model.timeout_seconds + 30)
         pending = ModelCallLog.objects.filter(model=model, status="pending", created_at__gte=pending_since).count()
         max_pending = getattr(settings, "MODEL_MAX_PENDING_PER_MODEL", 4)
         if pending >= max_pending:
-            raise GatewayError("busy", status=429)
+            raise GatewayError("busy", status=429, reservation_rejected=True, retry_after=2)
         route_recent = recent.filter(route=route) if route else recent
         if route_recent.count() >= limit or (purpose == "test" and recent.filter(purpose="test", model=model).exists()):
-            raise GatewayError("rate_limited", status=429)
+            oldest = route_recent.order_by("created_at").first()
+            delay = max(1, min(61, ceil(61 - (timezone.now() - oldest.created_at).total_seconds()))) if oldest else 2
+            raise GatewayError("rate_limited", status=429, reservation_rejected=True, retry_after=delay)
         return ModelCallLog.objects.create(actor=user, route=route, model=model, purpose=purpose,
                                            status="pending", duration_ms=0, model_public_id=model.public_id,
                                            config_version=config_version)
@@ -572,9 +608,6 @@ def stream_for_use(user, purpose_code, messages):
         completed = False
         with closing(_request_gateway_stream(payload)) as stream:
             for event in stream:
-                if "done" not in event:
-                    yield event
-                    continue
                 fresh = _fresh_user(user)
                 if fresh.grant_version != user.grant_version:
                     raise GatewayError("forbidden", status=403)
@@ -590,6 +623,9 @@ def stream_for_use(user, purpose_code, messages):
                 if (_model_config(current_model) != config or current_version != config_version
                         or (current_model.provider.updated_at, current_model.updated_at, current.updated_at) != revisions):
                     raise GatewayError("disabled", status=409)
+                if "done" not in event:
+                    yield event
+                    continue
                 record.status = "success"
                 record.prompt_tokens = event["prompt_tokens"]
                 record.completion_tokens = event["completion_tokens"]

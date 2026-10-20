@@ -15,7 +15,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import httpx
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from sqlalchemy import create_engine
@@ -47,9 +47,14 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
         self.requests = []
         self.retrieved = False
         self.revoke_during_answer = False
+        self.export_before = True
+        self.export_after = True
+        self.export_result = True
         self.admin_revoke = False
         self.expired = False
         self.engineering_locked = False
+        self.engineering_revision = "a" * 64
+        self.engineering_result_revision = "a" * 64
         self.creation_status = 201
         self.foreign_owner = False
         self.business_written = False
@@ -93,6 +98,9 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
         if self.expired:
             return httpx.Response(401, json={"detail": "expired"})
         path = request.url.path
+        export_allowed = self.export_after if self.retrieved else self.export_before
+        export_policy = {} if export_allowed is None else {"assistant_export_allowed": export_allowed}
+        export_result = {} if self.export_result is None else {"assistant_export_allowed": self.export_result}
         if path == "/api/me/":
             return httpx.Response(200, json={"id": portal_id, "roles": [{"code": department}],
                 "department_code": department, "must_change_password": False})
@@ -103,7 +111,8 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(request.headers["origin"], "http://portal.test")
         if path == "/api/product/knowledge/status/":
             revision = "b" * 64 if self.revoke_during_answer and self.retrieved else "a" * 64
-            return httpx.Response(200, json={"available": True, "code": "ready", "authorization_revision": revision})
+            return httpx.Response(200, json={"available": True, "code": "ready", "authorization_revision": revision,
+                                           **export_policy})
         if path == "/api/product/knowledge/retrieve/":
             self.assertEqual(name, "alice")
             self.assertEqual(set(json.loads(request.content)), {"question"})
@@ -115,14 +124,20 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
                     user.business_role = "unassigned"
                     db.commit()
             return httpx.Response(200, json={"status": "completed", "authorization_revision": "a" * 64,
+                **export_result,
                 "sources": [{"id": "S1", "chunk_id": "chunk-1", "dataset_id": "authorized-dataset",
                              "document_id": "authorized-doc", "content": "private-source-body"}]})
         if path == "/api/engineering/knowledge/retrieve/":
             self.assertEqual(name, "bob")
             self.assertEqual(set(json.loads(request.content)), {"question"})
-            return httpx.Response(200, json={"status": "completed", "sources": [{"document_id": "engineering-doc", "content": "engineering-source"}]})
+            self.retrieved = True
+            return httpx.Response(200, json={"status": "completed", **export_result,
+                "authorization_revision": self.engineering_result_revision,
+                "sources": [{"document_id": "engineering-doc", "content": "engineering-source"}]})
         if path == "/api/engineering/knowledge/":
-            return httpx.Response(200, json={"status": "locked" if self.engineering_locked else "ready"})
+            revision = "b" * 64 if self.revoke_during_answer and self.retrieved else self.engineering_revision
+            return httpx.Response(200, json={"status": "locked" if self.engineering_locked else "ready",
+                "authorization_revision": revision, **export_policy})
         task_id, request_id, draft_id = ["00000000-0000-0000-0000-00000000000" + str(n) for n in (1, 2, 3)]
         task = {"id": task_id, "owner_id": 99 if self.foreign_owner else 42,
                 "version": 1, "state": "DRAFT", "stage": "INTAKE", "title": "project", "configuration": "private-config"}
@@ -247,6 +262,87 @@ class McpTests(unittest.IsolatedAsyncioTestCase):
             result = await session.call_tool("product_knowledge_retrieve", {"question": "test"})
             self.assertTrue(result.isError)
             self.assertNotIn("private-source-body", result.content[0].text)
+
+    async def test_assistant_export_requires_explicit_true_before_retrieval(self):
+        for token, department in (("container-alice", "product"), ("container-bob", "engineering")):
+            for value in (False, None, 1, "true"):
+                with self.subTest(department=department, value=value):
+                    self.requests.clear()
+                    self.retrieved = False
+                    self.export_before = value
+                    with self.assertRaises(HTTPException) as caught:
+                        await bridge.knowledge_question(token, department, "test")
+                    self.assertEqual(caught.exception.status_code, 403)
+                    self.assertFalse(self.retrieved)
+                    self.assertFalse(any(r.url.path.endswith("/retrieve/") for r in self.requests))
+
+    async def test_assistant_export_rechecked_on_status_and_retrieval_result(self):
+        for token, department in (("container-alice", "product"), ("container-bob", "engineering")):
+            for field in ("export_after", "export_result"):
+                for value in (False, None, 1, "true"):
+                    with self.subTest(department=department, field=field, value=value):
+                        self.retrieved = False
+                        self.export_after = self.export_result = True
+                        setattr(self, field, value)
+                        with self.assertRaises(HTTPException) as caught:
+                            await bridge.knowledge_question(token, department, "test")
+                        self.assertEqual(caught.exception.status_code, 403)
+                        self.assertTrue(self.retrieved)
+                        self.assertNotIn("private-source-body", caught.exception.detail)
+                        self.assertNotIn("engineering-source", caught.exception.detail)
+
+    async def test_sdk_export_revocation_during_retrieval_withholds_evidence(self):
+        for token, department in (("container-alice", "product"), ("container-bob", "engineering")):
+            async with self.client(token) as session:
+                for field in ("export_after", "export_result"):
+                    for value in (False, None):
+                        with self.subTest(department=department, field=field, value=value):
+                            self.retrieved = False
+                            self.export_after = self.export_result = True
+                            setattr(self, field, value)
+                            result = await session.call_tool(department + "_knowledge_retrieve", {"question": "test"})
+                            self.assertTrue(result.isError)
+                            self.assertEqual(json.loads(result.content[0].text)["code"], "knowledge_denied")
+                            self.assertNotIn("private-source-body", result.content[0].text)
+                            self.assertNotIn("engineering-source", result.content[0].text)
+
+    async def test_engineering_checks_status_before_and_after_retrieval(self):
+        result = await bridge.knowledge_question("container-bob", "engineering", "test")
+        paths = [r.url.path for r in self.requests if "/knowledge/" in r.url.path]
+        self.assertEqual(paths, ["/api/engineering/knowledge/", "/api/engineering/knowledge/retrieve/",
+                                 "/api/engineering/knowledge/"])
+        self.assertEqual(set(result), {"status", "sources"})
+
+    async def test_engineering_partial_revocation_withholds_evidence(self):
+        self.revoke_during_answer = True
+        async with self.client("container-bob") as session:
+            result = await session.call_tool("engineering_knowledge_retrieve", {"question": "test"})
+            self.assertTrue(result.isError)
+            self.assertEqual(json.loads(result.content[0].text)["code"], "knowledge_denied")
+            self.assertNotIn("engineering-source", result.content[0].text)
+
+    async def test_engineering_requires_revision_and_accepts_explicit_legacy_revision(self):
+        for revision in (None, ""):
+            with self.subTest(revision=revision):
+                self.engineering_revision = revision
+                with self.assertRaises(HTTPException) as caught:
+                    await bridge.knowledge_question("container-bob", "engineering", "test")
+                self.assertEqual(caught.exception.status_code, 403)
+                self.assertFalse(self.retrieved)
+        self.engineering_revision = "legacy"
+        self.engineering_result_revision = "legacy"
+        result = await bridge.knowledge_question("container-bob", "engineering", "test")
+        self.assertEqual(result["sources"][0]["document_id"], "engineering-doc")
+
+    async def test_engineering_rejects_missing_or_mismatched_retrieval_revision(self):
+        for revision in (None, "", "b" * 64):
+            with self.subTest(revision=revision):
+                self.retrieved = False
+                self.engineering_result_revision = revision
+                with self.assertRaises(HTTPException) as caught:
+                    await bridge.knowledge_question("container-bob", "engineering", "test")
+                self.assertEqual(caught.exception.status_code, 403)
+                self.assertTrue(self.retrieved)
 
     async def test_engineering_check_revoked_and_catalog_refresh_authenticates_each_request(self):
         async with self.client("container-bob") as session:

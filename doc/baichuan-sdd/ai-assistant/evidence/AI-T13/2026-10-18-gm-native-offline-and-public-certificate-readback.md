@@ -1,0 +1,17 @@
+# AI-T13/15/17 GM原生离线恢复及公开证书快照/Excel读回
+
+根记录时间：2026-10-18T04:53:01.154787+08:00，新391项回归及04:42:48所属后端加载之后，162公开观察实际维护及严格核账之后的单独真实验收。前端163指纹未改，未创建额外模型/导出请求用于补验。
+
+冻结GM原生脚本SHA dfa2f1ae407044a270cf66f19f0005966a28f2d91589ff0ab22fe51754f69210，实际绑定新加载与162审计的收据SHA 2677e42be8273159b3052c6f4252b58bc24dfe38d4cb2bbd6ac1b3ee982f12c6。独立Edge context原UI登录general_manager，唯一文字提交202，离线真实reload得到ERR_INTERNET_DISCONNECTED；保留同page/context及原存储，重连真实reload恢复原cid/jid/sid、默认收起，再打开原结果并返回20行手工列表。精确error-document CDP Frame not found仅记录离线时storage不可读，不关闭context、不注入cid/token/storage。关闭浏览器后Playwright异步Target closed警告原log保留，实际进程exit0。
+
+cid `800275df-3797-44d8-8f1e-dd87f6701855`，job `bab51aa0-9270-44b2-8688-1e1dfb8e6444`，snapshot `3414ff8a-182d-4020-8b62-be174cf7f881`；两条消息，1任务/1快照/1模型，0附件/导出/资料研究/企业写入。Model29 success，2005ms，1119输入123输出token；真实总Model29、snapshot28、conversation32、Django session34无新增。原27份快照与162公开观察全行保护通过。
+
+原生与post收据SHA 90a6ca815ad7e49ce2e24785deec61a1775fb8f9c1adfc31442adfd0cb36f35a / 118b647d9c7e440be5feecd4654ce6a56a4d67d201244fb7df229d5f9fd93ef0；独立只读readback SHA ae19f4df052cb7dc25c66ace23a7e980de3354733ebebc9bb502211c330eb873。ITSS精确二级/投标人主体/current消息引用实际成立，1283候选/0confirmed，所有未知保持。原product v1/v2及早期GM表格验收器FAIL保留；本单元只为当前GM原context原生离线恢复PASS。
+
+根额外只读链路：SQL query_only+socket/DNS禁止，读取同一固定实际GM快照，162新增公开观察的证号、主体、来源、等级/未知日期、issuer/范围/标准空值均完整冻结，均candidate/unknown。四字段快照SHA `5b3d1c736426cd0fe656b7f84d7d993111e0754b9bf6960718151925c3f9be98`，前后未变。
+
+调用真实build_workbook代码、3sheet实际openpyxl读回：默认confirmed导出0企业；显式候选1283企业、162条公开观察证号和来源均读回，1451依据行，证书核实状态未核实、有效起始/发证机构/范围/标准继续空。没有创建额外导出任务、浏览器下载或用户数据写入，属于私有实际固定快照生成器验证，不把它冒充新一次授权下载验收。新旧快照不混读。
+
+私有XLSX根收据SHA e241afa2b828645d514071ae3b1c237affc23e236e2f742e85a81148aea5eb3b；default文件SHA b6b305bd318467261f4d79f74adc220a2a8ac008db52a38b1d56880288c4a332，候选文件SHA cbf8c0efa76e9f459b7829db6ce25b2611cb526f7d93b2a40c54bc31f94fd2f0。保存目录 `.runtime/baichuan-ai-local/night-acceptance-20261018/public-certificate-gm-snapshot-xlsx-readback/`；仅必要企业事实在原私有运行目录，公共文档不复制完整企业结果。
+
+391测试不重复运行，真实模型本单元仅1次，其后只读导出0模型/0网络。未更改前端/服务。完整T13/15/17还有原生无模糊环境等各自范围，T12全字段资料及最终T18仍未完成。

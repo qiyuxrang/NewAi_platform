@@ -1,0 +1,360 @@
+{
+  "task": "AI-T16",
+  "synthetic": true,
+  "target_database_accessed": false,
+  "scope": "deterministic resumed query task -> worker -> fixed snapshot -> XLSX -> authorized download",
+  "natural_language_model_verified": false,
+  "network_calls": 0,
+  "model_calls": 0,
+  "sqlite": "3.53.1",
+  "python": "3.13.16",
+  "openpyxl": "3.1.5",
+  "cpu": "Intel64 Family 6 Model 140 Stepping 2, GenuineIntel",
+  "logical_cpus": 8,
+  "platform": "Windows-11-10.0.26200-SP0",
+  "concurrency": 1,
+  "cold_definition": "Django connection closed, first sample; OS cache not evicted",
+  "p95_method": "nearest rank over warm samples; limited exploratory sample, not population guarantee",
+  "warm_samples": 3,
+  "datasets": [
+    {
+      "companies": 1000,
+      "certificates": 1000,
+      "fixture_setup_ms": 588.056,
+      "samples": [
+        {
+          "cache": "connection_cold",
+          "query_submit_ms": 16.333,
+          "structured_match_ms": 172.982,
+          "match_and_snapshot_ms": 196.995,
+          "query_worker_ms": 254.454,
+          "first_snapshot_ready_ms": 277.686,
+          "export_submit_ms": 28.328,
+          "xlsx_build_ms": 512.957,
+          "xlsx_publish_ms": 4.664,
+          "export_worker_ms": 582.424,
+          "authorized_download_ms": 38.747,
+          "xlsx_read_validate_ms": 206.592,
+          "total_ms": 1143.019,
+          "snapshot_publish_overhead_ms": 24.013,
+          "xlsx_bytes": 157452,
+          "xlsx_sha256": "069cbf21730094c1079fdf23a5281e6bdd4b47d7623c24f84bdcbaba2f4296be",
+          "counts": {
+            "confirmed": 500,
+            "candidate": 500,
+            "excluded": 0
+          },
+          "xlsx_rows_validated": 2000,
+          "query_terminal": "partial",
+          "export_terminal": "completed"
+        },
+        {
+          "cache": "warm",
+          "query_submit_ms": 14.804,
+          "structured_match_ms": 255.054,
+          "match_and_snapshot_ms": 278.689,
+          "query_worker_ms": 336.917,
+          "first_snapshot_ready_ms": 356.691,
+          "export_submit_ms": 33.838,
+          "xlsx_build_ms": 623.556,
+          "xlsx_publish_ms": 4.926,
+          "export_worker_ms": 706.382,
+          "authorized_download_ms": 69.823,
+          "xlsx_read_validate_ms": 251.859,
+          "total_ms": 1429.689,
+          "snapshot_publish_overhead_ms": 23.635,
+          "xlsx_bytes": 157457,
+          "xlsx_sha256": "a4c04ff114aa9a224c58c4c8f0ae00046ac65bd52bc4de1be819813e52b06bd3",
+          "counts": {
+            "confirmed": 500,
+            "candidate": 500,
+            "excluded": 0
+          },
+          "xlsx_rows_validated": 2000,
+          "query_terminal": "partial",
+          "export_terminal": "completed"
+        },
+        {
+          "cache": "warm",
+          "query_submit_ms": 19.532,
+          "structured_match_ms": 220.299,
+          "match_and_snapshot_ms": 246.311,
+          "query_worker_ms": 301.724,
+          "first_snapshot_ready_ms": 326.104,
+          "export_submit_ms": 29.78,
+          "xlsx_build_ms": 710.044,
+          "xlsx_publish_ms": 4.134,
+          "export_worker_ms": 764.71,
+          "authorized_download_ms": 31.882,
+          "xlsx_read_validate_ms": 193.088,
+          "total_ms": 1354.41,
+          "snapshot_publish_overhead_ms": 26.012,
+          "xlsx_bytes": 157455,
+          "xlsx_sha256": "f013162cd2ca3f97ddcb25e8e5e87ec3a7181adace8f872f609aa60bbf9fc15c",
+          "counts": {
+            "confirmed": 500,
+            "candidate": 500,
+            "excluded": 0
+          },
+          "xlsx_rows_validated": 2000,
+          "query_terminal": "partial",
+          "export_terminal": "completed"
+        },
+        {
+          "cache": "warm",
+          "query_submit_ms": 13.636,
+          "structured_match_ms": 149.256,
+          "match_and_snapshot_ms": 172.335,
+          "query_worker_ms": 220.879,
+          "first_snapshot_ready_ms": 239.945,
+          "export_submit_ms": 28.429,
+          "xlsx_build_ms": 509.247,
+          "xlsx_publish_ms": 4.24,
+          "export_worker_ms": 567.013,
+          "authorized_download_ms": 39.766,
+          "xlsx_read_validate_ms": 200.829,
+          "total_ms": 1085.362,
+          "snapshot_publish_overhead_ms": 23.079,
+          "xlsx_bytes": 157449,
+          "xlsx_sha256": "6516d93b69b05efbc7ab8f9bc8dd5dae31eea09094c0d539abdbb7b0c0cd2a05",
+          "counts": {
+            "confirmed": 500,
+            "candidate": 500,
+            "excluded": 0
+          },
+          "xlsx_rows_validated": 2000,
+          "query_terminal": "partial",
+          "export_terminal": "completed"
+        }
+      ],
+      "warm_summary": {
+        "query_submit_ms": {
+          "median_ms": 14.804,
+          "p95_ms": 19.532
+        },
+        "structured_match_ms": {
+          "median_ms": 220.299,
+          "p95_ms": 255.054
+        },
+        "match_and_snapshot_ms": {
+          "median_ms": 246.311,
+          "p95_ms": 278.689
+        },
+        "query_worker_ms": {
+          "median_ms": 301.724,
+          "p95_ms": 336.917
+        },
+        "first_snapshot_ready_ms": {
+          "median_ms": 326.104,
+          "p95_ms": 356.691
+        },
+        "export_submit_ms": {
+          "median_ms": 29.78,
+          "p95_ms": 33.838
+        },
+        "xlsx_build_ms": {
+          "median_ms": 623.556,
+          "p95_ms": 710.044
+        },
+        "xlsx_publish_ms": {
+          "median_ms": 4.24,
+          "p95_ms": 4.926
+        },
+        "export_worker_ms": {
+          "median_ms": 706.382,
+          "p95_ms": 764.71
+        },
+        "authorized_download_ms": {
+          "median_ms": 39.766,
+          "p95_ms": 69.823
+        },
+        "xlsx_read_validate_ms": {
+          "median_ms": 200.829,
+          "p95_ms": 251.859
+        },
+        "total_ms": {
+          "median_ms": 1354.41,
+          "p95_ms": 1429.689
+        },
+        "snapshot_publish_overhead_ms": {
+          "median_ms": 23.635,
+          "p95_ms": 26.012
+        }
+      },
+      "meets_2s_structured_target": true,
+      "meets_5s_first_snapshot_without_ai_target": true
+    },
+    {
+      "companies": 5000,
+      "certificates": 5000,
+      "fixture_setup_ms": 1704.744,
+      "samples": [
+        {
+          "cache": "connection_cold",
+          "query_submit_ms": 14.544,
+          "structured_match_ms": 1036.286,
+          "match_and_snapshot_ms": 1101.45,
+          "query_worker_ms": 1155.85,
+          "first_snapshot_ready_ms": 1177.182,
+          "export_submit_ms": 78.119,
+          "xlsx_build_ms": 2943.455,
+          "xlsx_publish_ms": 4.808,
+          "export_worker_ms": 3044.456,
+          "authorized_download_ms": 72.299,
+          "xlsx_read_validate_ms": 1043.885,
+          "total_ms": 5446.504,
+          "snapshot_publish_overhead_ms": 65.164,
+          "xlsx_bytes": 745445,
+          "xlsx_sha256": "7c401b3f71200609e3b2b2f597fbf6b1e89fda069fb92f81cf2890535599cfd8",
+          "counts": {
+            "confirmed": 2500,
+            "candidate": 2500,
+            "excluded": 0
+          },
+          "xlsx_rows_validated": 10000,
+          "query_terminal": "partial",
+          "export_terminal": "completed"
+        },
+        {
+          "cache": "warm",
+          "query_submit_ms": 13.105,
+          "structured_match_ms": 1148.658,
+          "match_and_snapshot_ms": 1206.653,
+          "query_worker_ms": 1258.923,
+          "first_snapshot_ready_ms": 1275.632,
+          "export_submit_ms": 87.114,
+          "xlsx_build_ms": 2738.883,
+          "xlsx_publish_ms": 5.033,
+          "export_worker_ms": 2848.671,
+          "authorized_download_ms": 74.743,
+          "xlsx_read_validate_ms": 879.496,
+          "total_ms": 5199.584,
+          "snapshot_publish_overhead_ms": 57.995,
+          "xlsx_bytes": 745445,
+          "xlsx_sha256": "dd09c11213e7d5e958526a585e00c9acb75fef74bec18051face5409dd0f7ee8",
+          "counts": {
+            "confirmed": 2500,
+            "candidate": 2500,
+            "excluded": 0
+          },
+          "xlsx_rows_validated": 10000,
+          "query_terminal": "partial",
+          "export_terminal": "completed"
+        },
+        {
+          "cache": "warm",
+          "query_submit_ms": 15.442,
+          "structured_match_ms": 928.826,
+          "match_and_snapshot_ms": 984.093,
+          "query_worker_ms": 1038.941,
+          "first_snapshot_ready_ms": 1060.368,
+          "export_submit_ms": 91.411,
+          "xlsx_build_ms": 3250.234,
+          "xlsx_publish_ms": 5.047,
+          "export_worker_ms": 3359.666,
+          "authorized_download_ms": 79.867,
+          "xlsx_read_validate_ms": 881.925,
+          "total_ms": 5507.57,
+          "snapshot_publish_overhead_ms": 55.266,
+          "xlsx_bytes": 745444,
+          "xlsx_sha256": "97c77763bdf5c5456dddb0dbd8ff96db18b87937a36655f9e19c7fdc6034657c",
+          "counts": {
+            "confirmed": 2500,
+            "candidate": 2500,
+            "excluded": 0
+          },
+          "xlsx_rows_validated": 10000,
+          "query_terminal": "partial",
+          "export_terminal": "completed"
+        },
+        {
+          "cache": "warm",
+          "query_submit_ms": 14.132,
+          "structured_match_ms": 922.378,
+          "match_and_snapshot_ms": 978.843,
+          "query_worker_ms": 1031.793,
+          "first_snapshot_ready_ms": 1052.136,
+          "export_submit_ms": 94.173,
+          "xlsx_build_ms": 2946.412,
+          "xlsx_publish_ms": 4.085,
+          "export_worker_ms": 3051.875,
+          "authorized_download_ms": 78.239,
+          "xlsx_read_validate_ms": 902.596,
+          "total_ms": 5218.525,
+          "snapshot_publish_overhead_ms": 56.464,
+          "xlsx_bytes": 745444,
+          "xlsx_sha256": "0a57ce157677789c33e118aeda35cb9510f42b8227191498d5362f776e1bc0ed",
+          "counts": {
+            "confirmed": 2500,
+            "candidate": 2500,
+            "excluded": 0
+          },
+          "xlsx_rows_validated": 10000,
+          "query_terminal": "partial",
+          "export_terminal": "completed"
+        }
+      ],
+      "warm_summary": {
+        "query_submit_ms": {
+          "median_ms": 14.132,
+          "p95_ms": 15.442
+        },
+        "structured_match_ms": {
+          "median_ms": 928.826,
+          "p95_ms": 1148.658
+        },
+        "match_and_snapshot_ms": {
+          "median_ms": 984.093,
+          "p95_ms": 1206.653
+        },
+        "query_worker_ms": {
+          "median_ms": 1038.941,
+          "p95_ms": 1258.923
+        },
+        "first_snapshot_ready_ms": {
+          "median_ms": 1060.368,
+          "p95_ms": 1275.632
+        },
+        "export_submit_ms": {
+          "median_ms": 91.411,
+          "p95_ms": 94.173
+        },
+        "xlsx_build_ms": {
+          "median_ms": 2946.412,
+          "p95_ms": 3250.234
+        },
+        "xlsx_publish_ms": {
+          "median_ms": 5.033,
+          "p95_ms": 5.047
+        },
+        "export_worker_ms": {
+          "median_ms": 3051.875,
+          "p95_ms": 3359.666
+        },
+        "authorized_download_ms": {
+          "median_ms": 78.239,
+          "p95_ms": 79.867
+        },
+        "xlsx_read_validate_ms": {
+          "median_ms": 881.925,
+          "p95_ms": 902.596
+        },
+        "total_ms": {
+          "median_ms": 5218.525,
+          "p95_ms": 5507.57
+        },
+        "snapshot_publish_overhead_ms": {
+          "median_ms": 56.464,
+          "p95_ms": 57.995
+        }
+      },
+      "meets_2s_structured_target": true,
+      "meets_5s_first_snapshot_without_ai_target": true
+    }
+  ],
+  "complete": true,
+  "wall_limit_seconds": 180,
+  "started_at_utc": "2026-10-17T12:07:44.884117+00:00",
+  "schema_setup_ms": 6766.414,
+  "completed_at_utc": "2026-10-17T12:08:20.368267+00:00"
+}

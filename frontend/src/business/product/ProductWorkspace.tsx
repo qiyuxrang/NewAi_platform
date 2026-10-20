@@ -4,6 +4,7 @@ import { Link, useLocation } from 'react-router-dom'
 import { ArrowLeft, BookOpen, Building2, ChevronDown, Files, Folder, PanelLeftClose, PanelLeftOpen, Plus, Search, Settings } from 'lucide-react'
 import { listTasks } from './product-api'
 import type { TaskSummary } from './product-api'
+import { stateNames } from './workbench-state'
 import { useEnterprise } from '../../components/enterprise-context'
 import { useEntryAccess } from '../entry-access'
 import BusinessSurface from '../BusinessSurface'
@@ -69,7 +70,6 @@ export default function ProductWorkspace({ feature }: { feature: string }) {
     window.addEventListener('product:tasks-changed', read)
     return () => { controller.abort(); clearInterval(timer); window.removeEventListener('product:tasks-changed', read) }
   }, [revision, manager])
-  const states: Record<string, string> = { DRAFT: '草稿', QUEUED: '排队中', RUNNING: '进行中', WAITING_INPUT: '待补充', WAITING_REVIEW: '待确认', FAILED: '需重试', COMPLETED: '已完成', CANCELLED: '已取消' }
   const view = feature === 'documents' ? task ? 'detail' : (params.get('view') === 'projects' || (manager && params.get('view') !== 'new')) ? 'projects' : 'new' : feature
   const title = { overview: '产品事业部 / 部门总览', documents: view === 'projects' ? '项目工作台 / 历史项目' : '项目工作台 / 新建项目', knowledge: '产品事业部 / 智能助手', outputs: '项目成果 / 成果文件', opportunities: '项目机会', entry: '产品事业部 / 售前填报', baichuan: '产品事业部 / 百川阁' }[feature] || '产品事业部'
   const content = <>
@@ -94,7 +94,7 @@ export default function ProductWorkspace({ feature }: { feature: string }) {
         <Link to="/departments/product/knowledge" aria-current={feature === 'knowledge' ? 'page' : undefined}><BookOpen size={16}/>智能助手</Link>
         <Link to="/departments/product/outputs" aria-current={feature === 'outputs' ? 'page' : undefined}><Files size={16}/>成果文件</Link>
         <Link to="/departments/product/opportunities" aria-current={feature === 'opportunities' ? 'page' : undefined}><Search size={16}/>项目机会</Link>
-        <Link to="/departments/product/baichuan" aria-current={feature === 'baichuan' ? 'page' : undefined}><Building2 size={16}/>百川阁</Link>
+        <Link to="/departments/product/baichuan" aria-current={feature === 'baichuan' ? 'page' : undefined}><Building2 size={16}/>企业资质库</Link>
         {entryAllowed && <Link to="/departments/product/entry" aria-current={feature === 'entry' ? 'page' : undefined}><Files size={16}/>售前填报</Link>}
       </nav>
       <div className="wb-task-label">最近项目</div>
@@ -104,7 +104,7 @@ export default function ProductWorkspace({ feature }: { feature: string }) {
         {error && <div role="alert"><p>{error}</p><button onClick={() => setRevision(value => value + 1)}>重新加载</button></div>}
         {!loading && !error && !tasks.length && <p>创建项目后会显示在这里。</p>}
         {!loading && !error && !!tasks.length && !tasks.some(item => item.title.toLowerCase().includes(query.toLowerCase())) && <p>没有匹配的项目。</p>}
-        {tasks.filter(item => item.title.toLowerCase().includes(query.toLowerCase())).slice(0, 30).map(item => <Link key={item.id} to={`/departments/product/documents?task=${encodeURIComponent(item.id)}`} aria-current={task === item.id ? 'page' : undefined}><span className={`wb-task-dot ${item.state.toLowerCase()}`}/><div><strong title={item.title}>{item.title}</strong><small><span>{states[item.state] || item.state}</span>{item.updated_at && Number.isFinite(Date.parse(item.updated_at)) && <time dateTime={item.updated_at}>{new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit' }).format(new Date(item.updated_at))}</time>}</small></div></Link>)}
+        {tasks.filter(item => item.title.toLowerCase().includes(query.toLowerCase())).slice(0, 30).map(item => <Link key={item.id} to={`/departments/product/documents?task=${encodeURIComponent(item.id)}`} aria-current={task === item.id ? 'page' : undefined}><span className={`wb-task-dot ${item.state.toLowerCase()}`}/><div><strong title={item.title}>{item.title}</strong><small><span>{stateNames[item.state] || '状态待确认'}</span>{item.updated_at && Number.isFinite(Date.parse(item.updated_at)) && <time dateTime={item.updated_at}>{new Intl.DateTimeFormat('zh-CN', { month: '2-digit', day: '2-digit' }).format(new Date(item.updated_at))}</time>}</small></div></Link>)}
       </div>
       <nav className="wb-navigation-foot"><Link to="/dashboard"><ArrowLeft size={16}/>企业工作台</Link><Link to="/settings"><Settings size={16}/>账号与设置</Link></nav>
     </aside>

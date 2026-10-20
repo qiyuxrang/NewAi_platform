@@ -17,7 +17,7 @@ import { presentationStyles, type PresentationStyle, type ProductKnowledgeStatus
 import { currentOutputVersions } from './project-refresh';
 
 type Action = (endpoint: string, body: object) => Promise<unknown>;
-interface Props { task: DocumentTask; outputs: DraftOutput[]; outputsLoaded: boolean; history: TaskHistory | null; outputsError: string; historyError: string; busy: boolean; conflict: boolean; disabled: (action: string) => boolean; onAction: Action; onReload: () => void; onUpload: (file: File, purpose?: 'equipment' | 'background') => Promise<unknown>; onSourceAction?: SourceAction }
+interface Props { task: DocumentTask; outputs: DraftOutput[]; outputsLoaded: boolean; history: TaskHistory | null; outputsError: string; historyError: string; busy: boolean; conflict: boolean; confirmedUpload?: File | null; disabled: (action: string) => boolean; onAction: Action; onReload: () => void; onUpload: (file: File, purpose?: 'equipment' | 'background') => Promise<unknown>; onSourceAction?: SourceAction }
 const tabs = [{ id: "blueprint", name: "蓝图审批" }, { id: "technical-solution", name: "技术方案" }, { id: "feasibility", name: "可研报告" }, { id: "presentation", name: "汇报 PPT" }, { id: "sources", name: "项目资料" }, { id: "history", name: "版本记录" }] as const;
 type WorkspaceTab = typeof tabs[number]["id"];
 const readTab = (fallback: WorkspaceTab = 'blueprint'): WorkspaceTab => {
@@ -120,6 +120,16 @@ const failureMessages: Record<string, string> = {
   model_call_limit: '模型调用预算已耗尽，任务未完成；已保存现有进度，补充预算后可继续，或从已保存进度重试。',
 };
 
+function taskNextStep(task: DocumentTask): string {
+  if (task.state === 'QUEUED') return '任务已进入后台队列；可离开页面，之后从当前项目查看进度。无需再次提交生成。';
+  if (task.state === 'RUNNING') return '后台正在处理，节点与成果按保存记录更新；可离开后返回当前项目继续查看。';
+  if (task.state === 'WAITING_REVIEW') return task.stage === 'BLUEPRINT' ? '请在“蓝图审批”中核对章节与来源，填写确认依据后批准或退回修改。' : '请核对当前成果、问题与审核记录，按后台提供的操作继续确认。';
+  if (task.state === 'FAILED' || task.state === 'WAITING_INPUT') return '请先查看下方原因与完整处理节点，补齐资料、授权或服务条件后再继续；已保存的成果可在右侧及版本记录中查看。';
+  if (task.state === 'COMPLETED') return '请在右侧下载已保存的成果，并核对文件版本与草稿或批准状态。';
+  if (task.state === 'CANCELLED') return '任务已取消，原始资料和历史成果仍可查看。';
+  return '请先核对项目资料，再根据可用操作生成蓝图。';
+}
+
 type VisibleStatus = ProductWorkflowProgress['status'];
 const statusLabels: Record<VisibleStatus, string> = { pending: '等待开始', running: '处理中', completed: '已完成', failed: '处理失败', blocked: '暂时受阻', waiting: '等待确认', skipped: '未执行' };
 const runtimeDetail = (detail: string) => detail.replaceAll('RAGFlow', '知识库').replaceAll('PPT', '汇报文稿').replaceAll('execution_failed', '执行失败').replace(/\bv(\d+)\b/g, '第 $1 版');
@@ -196,7 +206,7 @@ function workflowPhases(task: DocumentTask, outputs: DraftOutput[]): VisiblePhas
   return phases.map(item => ({ ...item, updatedAt: phase(item.id === 'web-search' ? 'web_search' : item.id as keyof typeof persisted)?.updated_at }));
 }
 export default function ProjectStages(props: Props) {
-  const { task, outputs, outputsLoaded, history, outputsError, historyError, busy, conflict, disabled, onAction, onReload, onUpload, onSourceAction } = props;
+  const { task, outputs, outputsLoaded, history, outputsError, historyError, busy, conflict, confirmedUpload, disabled, onAction, onReload, onUpload, onSourceAction } = props;
   const results = useRef<HTMLElement | null>(null);
   const layout = useRef<HTMLDivElement | null>(null);
   const returnFocus = useRef<HTMLElement | null>(null);
@@ -241,6 +251,7 @@ export default function ProjectStages(props: Props) {
   const [cancelling, setCancelling] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [sourcePurpose, setSourcePurpose] = useState<'equipment' | 'background'>('background');
+  useEffect(() => { if (file && file === confirmedUpload) { setFile(null); setSourcePurpose('background'); } }, [file, confirmedUpload]);
   const [downloadError, setDownloadError] = useState('');
   const [downloading, setDownloading] = useState('');
   const [resultsOpen, setResultsOpen] = useState(true);
@@ -301,6 +312,7 @@ export default function ProjectStages(props: Props) {
     setProgressOpen(false);
     requestAnimationFrame(() => progressTrigger.current?.focus({ preventScroll: true }));
   };
+  const issueMessages = (task.issues || []).flatMap(issue => typeof issue === 'string' ? [issue] : issue && typeof issue === 'object' && 'text' in issue && typeof issue.text === 'string' ? [issue.text] : []);
 
   return <div ref={layout} className={`wb-project-layout${resultsOpen ? '' : ' wb-results-collapsed'}${reviewPanel ? ' wb-review-open' : ''}`}>
     <div className="pd-project-overview">
@@ -324,6 +336,7 @@ export default function ProjectStages(props: Props) {
       {failureReason && <p role="alert">{failureReason}</p>}
       {task.state === 'RUNNING' && currentPhase?.status === 'running' && currentPhase.startedAt && <PhaseElapsed key={currentPhase.startedAt} startedAt={currentPhase.startedAt}/>}
       {automaticRecovery && <p role="status">临时故障，预计 {formatDate(task.retry_after!)} 后从已保存进度自动恢复。已保存的正文和有效步骤已保留，无需重新提交或审批蓝图。</p>}
+      <p className="pd-muted">{taskNextStep(task)}</p>
       </div></div><div className="pd-actions pd-task-actions">
       {task.error_code && !automaticRecovery && !pendingDraftDiagrams && (retryLimitReached || !disabled('retry')) && <button className="button primary" disabled={busy || retryLimitReached} aria-describedby={retryLimitReached ? 'retry-limit-note' : undefined} onClick={() => void onAction('retry/', {})}>{task.error_code === 'delivery_incomplete' ? '继续生成' : '从已保存进度重试'}</button>}
       {pendingDraftDiagrams && retryAllowed && <button className="button primary" disabled={disabled('retry') || retryLimitReached} aria-describedby={retryLimitReached ? 'diagram-repair-limit-note' : undefined} onClick={() => void onAction('retry/', {})}>补生成待补图表</button>}
@@ -348,6 +361,7 @@ export default function ProjectStages(props: Props) {
       </section>}
       {activeTab === "history" && <section id="panel-history" role="tabpanel" aria-labelledby="tab-history" className="pd-tab-panel">
         <section className="pd-workbench-section"><div className="pd-panel-heading"><h3>成果历史版本</h3><span className="pd-muted">保留旧版，不覆盖</span></div>{outputsError ? <p role="alert">{outputsError}</p> : outputs.length ? <div className="pd-table-wrap"><table className="pd-table"><thead><tr><th>成果</th><th>版本</th><th>状态</th><th>完整性摘要</th><th>下载</th></tr></thead><tbody>{[...outputs].reverse().map(item => <tr key={item.id}><td>{outputNames[item.family]}</td><td>v{item.version}</td><td>{outputStatus(item)}</td><td><code title={item.sha256}>{item.sha256.slice(0, 12)}…</code></td><td><button className="text-button" disabled={Boolean(downloading)} onClick={() => void download(item.family === "technical-solution" ? item.current ? artifactDownload(item.id) : artifactHistoryDownload(item.id) : item.current ? draftDownload(item.id) : draftHistoryDownload(item.id), `${task.title}-${outputNames[item.family]}-v${item.version}.${item.family === "presentation" ? "pptx" : "docx"}`)}>{item.current ? "下载当前文件" : "下载历史文件"}</button></td></tr>)}</tbody></table></div> : <EmptyState title="暂无成果版本" detail="已保存的输入和蓝图记录仍可在下方追溯。"/>}</section>
+        {!!issueMessages.length && <section className="pd-workbench-section" aria-label="当前核对问题"><h3>当前需核对的问题</h3><p className="pd-muted">以下为后台保存的资料、蓝图及正文审核问题；请结合来源核对，重试不会代替人工处理。</p><ul>{issueMessages.map((message, index) => <li key={index}>{message}</li>)}</ul></section>}
         <section className="pd-workbench-section"><h3>项目生成与审核记录</h3>{historyError ? <p role="alert">{historyError}</p> : !history ? <p role="status">正在读取版本链…</p> : <ol className="pd-timeline">{[...history.timeline].reverse().map(event => <li key={`${event.event}-${event.id}`}><span className="pd-timeline-dot"/><div><strong>{({ revision: "版本保存", external_upload: "资料上传", ai_task: "后台处理", artifact: "成果生成", approval: "人工审核" } as Record<string, string>)[event.event] || "项目记录"}{event.family ? ` · ${outputNames[event.family] || event.family}` : ""}{event.version ? ` v${event.version}` : ""}</strong><p>{event.reason || event.kind || "服务端已记录"} · {event.actor?.name || "系统"}</p>{event.sha256 && <small>摘要 {event.sha256.slice(0, 16)}…</small>}</div></li>)}</ol>}</section>
       </section>}
     </div>

@@ -191,12 +191,16 @@ if (!$GatewayOnly) {
     Wait-Url 'http://127.0.0.1:18411/health'
     Start-OwnedService 'portal' 8100 $businessPython @($businessRunner,'portal','--repository',$business) $business
     Wait-Url 'http://127.0.0.1:8100/health/'
-    & (Join-Path $PSScriptRoot 'start-business-workers.ps1') -Workers product,hr,engineering -BusinessRepository $business
+    & (Join-Path $PSScriptRoot 'start-business-workers.ps1') -Workers product,hr,engineering,baichuan,tender -BusinessRepository $business
+    $businessWorkers = @('product','hr','engineering')
+    $workerSnapshot = Get-Content -LiteralPath (Join-Path $runtime 'legacy-worker-preflight.json') -Raw | ConvertFrom-Json
+    if ($workerSnapshot.baichuan.enabled) { $businessWorkers += 'baichuan' }
+    if ($workerSnapshot.tender.enabled -and ($workerSnapshot.tender.manual_refresh_enabled -or $workerSnapshot.tender.schedule_enabled)) { $businessWorkers += 'tender' }
 }
 Start-OwnedService 'gateway' 8080 $PythonPath @('-m','uvicorn','app.main:app','--host','0.0.0.0','--port','8080','--no-access-log','--log-level','warning') (Join-Path $repo 'platform')
 Wait-Url 'http://127.0.0.1:8080/api/ping'
 if ($GatewayOnly) { Write-Host 'Owned enterprise gateway is healthy.'; return }
-Start-OwnedService 'frontend' 3080 $node @($vite,'preview','--host','127.0.0.1','--port','3080','--strictPort') (Join-Path $repo 'frontend')
+Start-OwnedService 'frontend' 3080 $node @($vite,'preview','--host','0.0.0.0','--port','3080','--strictPort') (Join-Path $repo 'frontend')
 Wait-Url 'http://127.0.0.1:3080/'
 # Keep the original management application separate from the employee workspace.
 & {
@@ -205,18 +209,20 @@ Wait-Url 'http://127.0.0.1:3080/'
     Start-OwnedService 'management' 3081 $node @($next,'start','--hostname','127.0.0.1','--port','3081') (Join-Path $repo 'manage_front')
     Wait-Url 'http://127.0.0.1:3081/login'
 }
-foreach ($worker in 'product','hr','engineering') {
+foreach ($worker in $businessWorkers) {
     $workerFile = Join-Path $runtime "legacy-worker-$worker-process.json"
     $workerRecord = Get-Content -LiteralPath $workerFile -Raw | ConvertFrom-Json
+    $workerArguments = '"' + $businessRunner + '" ' + "$worker-worker" + ' --repository "' + $business + '"'
     $workerProcess = Get-Process -Id $workerRecord.pid -ErrorAction SilentlyContinue
     $workerNative = if ($workerProcess) { Get-CimInstance Win32_Process -Filter "ProcessId=$($workerProcess.Id)" } else { $null }
-    if (!$workerProcess -or $workerProcess.Path -ne $workerRecord.executable -or $workerProcess.StartTime.ToUniversalTime().Ticks -ne [long]$workerRecord.startedTicks -or !$workerNative -or $workerNative.CommandLine -cne $workerRecord.commandLine) {
+    if ($workerRecord.service -ne "$worker-worker" -or $workerRecord.executable -ne $businessPython -or $workerRecord.repository -ne $business -or $workerRecord.argumentLine -cne $workerArguments -or
+        !$workerProcess -or $workerProcess.Path -ne $workerRecord.executable -or $workerProcess.StartTime.ToUniversalTime().Ticks -ne [long]$workerRecord.startedTicks -or !$workerNative -or $workerNative.CommandLine -cne $workerRecord.commandLine) {
         throw "$worker worker exited or changed identity before final health acceptance."
     }
 }
-@{ checkedAt = (Get-Date).ToString('o'); portal = 'http://127.0.0.1:8100/health/'; modelGateway = 'http://127.0.0.1:18411/health'; gateway = 'http://127.0.0.1:8080/api/ping'; frontend = 'http://127.0.0.1:3080/'; management = 'http://127.0.0.1:3081/login'; workers = @('product','hr','engineering'); image = 'aicompany-claw:20261008'; runtimeImageChecked = !$BusinessOnly } |
+@{ checkedAt = (Get-Date).ToString('o'); portal = 'http://127.0.0.1:8100/health/'; modelGateway = 'http://127.0.0.1:18411/health'; gateway = 'http://127.0.0.1:8080/api/ping'; frontend = 'http://127.0.0.1:3080/'; management = 'http://127.0.0.1:3081/login'; workers = $businessWorkers; image = 'aicompany-claw:20261008'; runtimeImageChecked = !$BusinessOnly } |
     ConvertTo-Json | Set-Content -LiteralPath (Join-Path $runtime 'health.json') -Encoding UTF8
-Write-Host 'Portal, model gateway, three workers, enterprise gateway and both frontends are healthy: http://127.0.0.1:3080/'
+Write-Host "Portal, model gateway, $($businessWorkers.Count) workers, enterprise gateway and both frontends are healthy: http://127.0.0.1:3080/"
 if ($BusinessOnly) { Write-Host 'Agent runtime image has not passed acceptance; only the business entry is verified.' }
 } finally {
     if ($locked) { $mutex.ReleaseMutex() }

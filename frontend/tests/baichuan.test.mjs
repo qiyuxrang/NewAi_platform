@@ -53,8 +53,8 @@ test('post-save membership uses exact grades, OR within and AND across categorie
 })
 test('both entrypoints share the product feature while preserving capability restrictions', () => {
   assert.ok(departments.find(item => item.code === 'product').functions.some(item => item.code === 'baichuan'))
-  assert.equal(availableManagerEntries({ business_role: 'general_manager', capabilities: ['product'] }).find(item => item.label === '百川阁').to, '/departments/product/baichuan')
-  assert.equal(availableManagerEntries({ business_role: 'general_manager', capabilities: [] }).some(item => item.label === '百川阁'), false)
+  assert.equal(availableManagerEntries({ business_role: 'general_manager', capabilities: ['product'] }).find(item => item.label === '企业资质库').to, '/departments/product/baichuan')
+  assert.equal(availableManagerEntries({ business_role: 'general_manager', capabilities: [] }).some(item => item.label === '企业资质库'), false)
 })
 function hooks() {
   const slots = []; let cursor = 0; let effects = []

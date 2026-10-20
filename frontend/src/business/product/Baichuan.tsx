@@ -6,6 +6,7 @@ import { baichuanError, draftFrom, gradeName, listQuery, matchesQuery, qualifica
 import type { Category, CompanyDetailData, CompanyList } from './Baichuan-data'
 import CompanyDetail from './CompanyDetail'
 import CompanyEditor from './CompanyEditor'
+import BaichuanAssistant from './BaichuanAssistant'
 import './Baichuan.css'
 
 function QualificationFilter({ category, value, onChange }: { category: typeof qualificationTypes[number]; value: string; onChange: (value: string) => void }) {
@@ -120,5 +121,6 @@ export default function Baichuan() {
       })}</tbody></table>{!currentList.data.items.length && <div className="bc-empty"><Building2 size={58} strokeWidth={1.2}/><strong>{currentList.data.total ? '该页暂无公司' : filtered ? '没有符合条件的公司' : '企业库暂无资料'}</strong><p>{currentList.data.total ? '请选择前面的页码。' : filtered ? '可调整名称或资质条件后重试。' : '已授权的公司资料录入后将在此展示。'}</p></div>}<div className="bc-pagination"><span>共 {currentList.data.total} 家</span><button className="bc-button" disabled={currentList.data.page <= 1} onClick={() => update(next => next.set('page', String(currentList.data!.page - 1)))}>上一页</button>{pageNumbers.map((page, index) => <span className="bc-page-number" key={page}>{index > 0 && page - pageNumbers[index - 1] > 1 && <span aria-hidden="true">…</span>}<button className={`bc-button${page === currentList.data!.page ? ' bc-primary' : ''}`} aria-label={`第 ${page} 页`} aria-current={page === currentList.data!.page ? 'page' : undefined} onClick={() => update(next => next.set('page', String(page)))}>{page}</button></span>)}<button className="bc-button" disabled={!currentList.data.has_more} onClick={() => update(next => next.set('page', String(currentList.data!.page + 1)))}>下一页</button><label>每页 <select aria-label="每页公司数量" value={currentList.data.page_size} onChange={event => update(next => { next.set('page_size', event.target.value); next.set('page', '1') })}>{![10, 20, 50, 100].includes(currentList.data.page_size) && <option value={currentList.data.page_size}>{currentList.data.page_size} 家</option>}{[10, 20, 50, 100].map(size => <option key={size} value={size}>{size} 家</option>)}</select></label></div></>}</section>
     </>}
     {editor && <CompanyEditor detail={editor.detail} onClose={closeEditor} onSaved={saved}/>}
+    <BaichuanAssistant allowed={!!(listResponse?.data || detailResponse?.data)} onCompany={showCompany}/>
   </div>
 }

@@ -127,7 +127,7 @@ class KeyEnvironmentWidget(forms.TextInput):
 class ProviderForm(forms.ModelForm):
     class Meta:
         model = Provider
-        fields = ("code", "name", "protocol", "base_url", "api_key_env", "enabled")
+        fields = ("code", "name", "protocol", "base_url", "api_key_env", "processing_boundary", "enabled")
         widgets = {"api_key_env": KeyEnvironmentWidget()}
 
 
@@ -138,7 +138,7 @@ class ModelRouteForm(forms.ModelForm):
 
     class Meta:
         model = ModelRoute
-        fields = ("code", "name", "module", "model", "max_calls_per_minute", "enabled")
+        fields = ("code", "name", "module", "model", "allow_external_processing", "max_calls_per_minute", "enabled")
 
     def clean_max_calls_per_minute(self):
         return self.cleaned_data.get("max_calls_per_minute") or 10
@@ -148,9 +148,9 @@ class ModelRouteForm(forms.ModelForm):
 class ProviderAdmin(ManagedAdmin):
     admin_label = admin_label_plural = "模型服务商"
     form = ProviderForm
-    fields = ("code", "name", "protocol", "base_url", "api_key_env", "enabled")
-    list_display = ("id", "name", "code", "protocol", "enabled")
-    list_filter = ("enabled", "protocol")
+    fields = ("code", "name", "protocol", "base_url", "api_key_env", "processing_boundary", "enabled")
+    list_display = ("id", "name", "code", "protocol", "processing_boundary", "enabled")
+    list_filter = ("enabled", "protocol", "processing_boundary")
 
 
 @admin.register(GatewayModel, site=site)
@@ -343,7 +343,7 @@ class GatewayModelAdmin(ManagedAdmin):
 class ModelRouteAdmin(ManagedAdmin):
     admin_label = admin_label_plural = "业务模型路由"
     form = ModelRouteForm
-    fields = ("code", "name", "module", "model", "max_calls_per_minute", "enabled")
+    fields = ("code", "name", "module", "model", "allow_external_processing", "max_calls_per_minute", "enabled")
     list_display = ("id", "name", "code", "module", "model", "max_calls_per_minute", "enabled")
     list_filter = ("enabled", "module")
     inlines = ()

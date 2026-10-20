@@ -120,6 +120,22 @@ class EnrichmentTests(SimpleTestCase):
         self.assertNotIn('bid_deadline', extract_public_fields('文件获取截止时间：2026-10-12 09:30'))
         self.assertIsNone(self.normalized('文件获取截止时间：2026-10-12 09:30').value_of('bid_deadline'))
 
+    def test_chinese_point_times_share_precision_and_conflict_checks_with_colon_times(self):
+        for clock in ('09点30分', '09时30分', '09:30', '09：30', '09点30分15秒'):
+            with self.subTest(clock=clock):
+                body = f'投标截止时间：2026年11月11日{clock}'
+                normalized = enrich_notice(self.normalized(body), raw=body).normalized
+                seconds = '15' if '秒' in clock else '00'
+                self.assertEqual(normalized.value_of('bid_deadline'), f'2026-11-11T09:30:{seconds}+08:00')
+                self.assertEqual(normalized.fields['bid_deadline'].extra['precision'],
+                                 'second' if '秒' in clock else 'minute')
+        same = extract_public_fields('开标时间：2026年11月11日09点30分\n开标时间：2026-11-11 09:30')
+        self.assertEqual(same['bid_open_at'].status, 'OK')
+        conflict = extract_public_fields('投标截止时间：2026年11月11日09点30分\n投标截止时间：2026-11-11 10:30')
+        self.assertEqual(conflict['bid_deadline'].status, 'UNKNOWN')
+        self.assertTrue(conflict['bid_deadline'].extra['conflict'])
+        self.assertIsNone(self.normalized('投标截止时间：2026年11月11日25点30分').value_of('bid_deadline'))
+
     def test_conflicting_deadlines_and_package_budgets_remain_unverified(self):
         fields = extract_public_fields('投标截止时间：2026-10-12 09:30\n投标截止时间：2026-10-13 09:30\n'
                                        '预算金额：100万元\n预算金额：200万元')

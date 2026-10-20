@@ -11,7 +11,8 @@ from urllib.parse import urlsplit
 from dotenv import load_dotenv
 
 WORKERS = {"product-worker": "run_product_worker", "hr-worker": "run_hr_worker",
-           "engineering-worker": "run_engineering_worker", "tender-worker": "run_tender_consumer"}
+           "engineering-worker": "run_engineering_worker", "baichuan-worker": "run_baichuan_worker",
+           "tender-worker": "run_tender_consumer"}
 
 
 def bundle_path_environment(repo):
@@ -92,8 +93,8 @@ def worker_preflight():
 
     with connection.cursor() as cursor:
         cursor.execute("PRAGMA query_only = ON" if connection.vendor == "sqlite" else "SET default_transaction_read_only = on")
-    def counts(model, field):
-        return {row[field]: row["count"] for row in model.objects.values(field).annotate(count=Count("pk"))}
+    def counts(model, field, **filters):
+        return {row[field]: row["count"] for row in model.objects.filter(**filters).values(field).annotate(count=Count("pk"))}
 
     root, edge = _root(), cutoff()
     sweep = {"root": str(root), "directory_exists": root.is_dir(), "eligible_entries": 0,
@@ -138,7 +139,14 @@ def worker_preflight():
                      "owner_department_allowed": _engineering_allowed(job.owner), "attempt_count": job.attempt_count,
                      "attempts_remaining": job.attempt_count < max_attempts(),
                      "inspection_recorded": bool(job.inspection), "inspection_ok": job.inspection.get("ok") is True if isinstance(job.inspection, dict) else False})
+    baichuan = {"enabled": settings.BAICHUAN_ASSISTANT_ENABLED,
+                "scope_confirmed": settings.PORTAL_BAICHUAN_SCOPE_CONFIRMED,
+                "scope": settings.BAICHUAN_ASSISTANT_SCOPE, "states": {}}
+    if baichuan["enabled"]:
+        from portal.baichuan_assistant_models import BaichuanJob
+        baichuan["states"] = counts(BaichuanJob, "status", scope=baichuan["scope"])
     return {"checked_at": timezone.now().isoformat(), "read_only": True,
+            "baichuan": baichuan,
             "product": {"enabled": settings.PRODUCT_P1_ENABLED, "states": counts(DocumentTask, "state")},
             "hr": {"request_archive_states": counts(RecruitmentRequest, "archive_state"),
                    "batch_states": counts(ResumeScreeningBatch, "status"), "artifact_states": counts(ResumeArtifact, "processing_status"),
@@ -196,6 +204,12 @@ def main():
             return
         if not model_gateway_matches():
             parser.error("existing portal model gateway must point to loopback:18411; configuration was not changed")
+        if args.service == "baichuan-worker":
+            from django.conf import settings
+            scope = settings.BAICHUAN_ASSISTANT_SCOPE
+            if (not settings.BAICHUAN_ASSISTANT_ENABLED or not settings.PORTAL_BAICHUAN_SCOPE_CONFIRMED
+                    or not isinstance(scope, str) or not 1 <= len(scope) <= 100):
+                parser.error("Baichuan assistant and its confirmed scope must be enabled")
         from django.core.management import call_command
         call_command(WORKERS[args.service], **({"concurrency": 1} if args.service == "hr-worker" else {}))
         return

@@ -122,6 +122,39 @@ class ProductionReadinessTests(SimpleTestCase):
         self.assertIn("agent_runtime_persistence", report["external_gates"])
         self.assertIn("agent_isolation_and_limits", report["external_gates"])
 
+    def test_explicit_single_host_agent_retains_all_external_acceptance_gates(self):
+        with TemporaryDirectory() as directory:
+            configured = configuration(
+                AGENT_PLATFORM_ENABLED=True, AGENT_RUNTIME_URL="https://agent.portal.internal",
+                AGENT_RUNTIME_ALLOWED_URLS=("https://agent.portal.internal",),
+                AGENT_RUNTIME_SERVICE_TOKEN="t" * 40,
+                AGENT_RUNTIME_MODEL_PRESETS={name: {"route_code": "authorized-route", "selection": None}
+                                             for name in ("main", "researcher", "reviewer")},
+                PRODUCT_STORAGE_ROOT=directory, HR_STORAGE_ROOT=directory,
+            )
+            for mode in ("single_host", "", "developer", "inmem"):
+                with self.subTest(mode=mode):
+                    report = evaluate_configuration(configured=configured, database_vendor="postgresql",
+                        enabled_routes=[route()], environment={"PORTAL_AGENT_DEPLOYMENT_MODE": mode})
+                    self.assertEqual("agent_production_topology" in report["blockers"], mode != "single_host")
+                    self.assertFalse(report["release_approved"])
+                    self.assertTrue({"agent_runtime_license", "agent_runtime_persistence", "agent_isolation_and_limits"}
+                                    <= set(report["external_gates"]))
+                    if mode == "single_host":
+                        self.assertEqual(report["blockers"], [])
+                        self.assertEqual(report["status"], "external_gates")
+
+    def test_single_host_agent_still_requires_secure_identity_and_real_storage(self):
+        report = evaluate_configuration(configured=configuration(
+            AGENT_PLATFORM_ENABLED=True, AGENT_RUNTIME_URL="http://agent-runtime:2024",
+            AGENT_RUNTIME_ALLOWED_URLS=("http://agent-runtime:2024",),
+            AGENT_RUNTIME_SERVICE_TOKEN="t" * 40,
+        ), database_vendor="postgresql", enabled_routes=[route()],
+            environment={"PORTAL_AGENT_DEPLOYMENT_MODE": "single_host"})
+        self.assertNotIn("agent_production_topology", report["blockers"])
+        self.assertTrue({"agent_runtime_identity", "agent_model_presets", "agent_product_storage", "agent_hr_storage"}
+                        <= set(report["blockers"]))
+
     def test_engineering_missing_runtime_blocks_only_when_explicitly_enabled(self):
         disabled = evaluate_configuration(configured=configuration(), database_vendor="postgresql",
                                           enabled_routes=[route()], environment={})
@@ -157,6 +190,52 @@ class ProductionReadinessTests(SimpleTestCase):
         self.assertIn("product_retrieval_identity", report["blockers"])
         self.assertNotIn("private-token", str(report))
         self.assertNotIn("retrieval.internal", str(report))
+
+    def test_real_knowledge_and_retrieval_endpoint_paths_keep_acceptance_external(self):
+        for prefix, code, url in (
+            ("PRODUCT_KNOWLEDGE", "product_knowledge", "https://knowledge.example.com/api/v1/retrieval"),
+            ("PRODUCT_RETRIEVAL", "product_retrieval", "https://retrieval.example.com/v1/authorized-search"),
+        ):
+            with self.subTest(code=code):
+                report = evaluate_configuration(configured=configuration(**{
+                    prefix + "_ENABLED": True, prefix + "_URL": url,
+                    prefix + "_ALLOWED_URLS": (url,), prefix + "_TOKEN_ENV": "RETRIEVAL_SECRET",
+                }), database_vendor="postgresql", enabled_routes=[route()],
+                    environment={"RETRIEVAL_SECRET": "synthetic-token-" + "x" * 30})
+                self.assertEqual(report["blockers"], [])
+                self.assertEqual(report["status"], "external_gates")
+                self.assertIn(code + "_acceptance", report["external_gates"])
+                self.assertFalse(report["release_approved"])
+                self.assertNotIn("synthetic-token", str(report))
+                self.assertNotIn(url, str(report))
+
+    def test_endpoint_paths_preserve_url_allowlist_and_token_checks(self):
+        valid = "https://knowledge.example.com/api/v1/retrieval"
+        invalid_urls = ("http://knowledge.example.com/api/v1/retrieval",
+            "https://user:private@knowledge.example.com/api/v1/retrieval", valid + "?query=private",
+            valid + "#fragment", "https://knowledge.example.com:444/api/v1/retrieval",
+            "https://knowledge.example.com:invalid/api/v1/retrieval", "https://[",
+            "https://knowledge.example.com/api/../api/v1/retrieval",
+            "https://knowledge.example.com/api/%76%31/retrieval", valid + "\\path", valid + "\n")
+        secret = "synthetic-token-" + "x" * 30
+        for prefix, code in (("PRODUCT_KNOWLEDGE", "product_knowledge"),
+                             ("PRODUCT_RETRIEVAL", "product_retrieval")):
+            cases = [(url, (url,), "RETRIEVAL_SECRET", secret) for url in invalid_urls]
+            cases += [(valid, (), "RETRIEVAL_SECRET", secret), (valid, (valid,), "BAD-NAME", secret),
+                      (valid, (valid,), "RETRIEVAL_SECRET", ""), (valid, (valid,), "RETRIEVAL_SECRET", "x" * 19),
+                      (valid, (valid,), "RETRIEVAL_SECRET", secret + "\n"),
+                      (valid, (valid,), "RETRIEVAL_SECRET", "x" * 513)]
+            if prefix == "PRODUCT_KNOWLEDGE":
+                cases += [("https://knowledge.example.com/", ("https://knowledge.example.com/",),
+                           "RETRIEVAL_SECRET", secret)]
+            for url, allowed, name, token in cases:
+                with self.subTest(code=code, url=url, token_length=len(token)):
+                    report = evaluate_configuration(configured=configuration(**{
+                        prefix + "_ENABLED": True, prefix + "_URL": url,
+                        prefix + "_ALLOWED_URLS": allowed, prefix + "_TOKEN_ENV": name,
+                    }), database_vendor="postgresql", enabled_routes=[route()], environment={name: token})
+                    self.assertIn(code + "_identity", report["blockers"])
+                    self.assertNotIn(secret, str(report))
 
     def test_office_enabled_on_linux_blocks_without_model_calls_or_formal_release(self):
         with TemporaryDirectory() as directory, patch("portal.production_readiness.platform.system", return_value="Linux"):

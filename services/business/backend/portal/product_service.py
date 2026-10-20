@@ -425,7 +425,8 @@ def source_ids_belong(task, source_ids):
 
 
 def input_authorized(task, revision):
-    if revision is None:
+    # Recheck the persisted marker: cached tasks and related objects can be stale.
+    if revision is None or not DocumentTask.objects.filter(pk=task.pk, deleted_at__isnull=True).exists():
         return False
     snapshots = list(revision.payload.get("authorization_dependencies", []))
     if revision.payload.get("retrieval"):

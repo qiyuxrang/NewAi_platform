@@ -76,9 +76,11 @@ def generate_report_drafts(task, fence, attempt_id, input_revision, blueprint, *
                                  _generate_diagrams, _diagram_progress, _guard, _minimum_characters,
                                  _record_output_generation, _renew, _ensure_content_review, _content_review_current, _store, current_chapters)
     from .product_pair import _report_generation_hash
+    from .product_generation_policy import POLICY, generation_only
 
     artifacts = []
     draft = task.pending_action in {"generate_outputs", "three_drafts"}
+    unchecked = generation_only(task)
     repair_diagrams = task.checkpoint.get("repair_pending_diagrams") is True
     for family in (families if families is not None else ("technical-solution", "feasibility")):
         if family not in task.checkpoint.get("output_families", ["technical-solution", "feasibility", "presentation"]):
@@ -91,8 +93,9 @@ def generate_report_drafts(task, fence, attempt_id, input_revision, blueprint, *
             raise ProductError("chapters_incomplete", f"{family} 报告内容不完整。", 409)
         target = _family_target(family)
         actual = _chapter_character_count(ordered)
-        _content_quality_guard(ordered, input_revision.payload, blueprint.payload, draft=draft)
-        _formal_content_guard(ordered, family, draft=draft)
+        if not unchecked:
+            _content_quality_guard(ordered, input_revision.payload, blueprint.payload, draft=draft)
+            _formal_content_guard(ordered, family, draft=draft)
         _record_output_generation(task.pk, fence, family, target, actual)
         if not draft and settings.PRODUCT_ENFORCE_OUTPUT_LENGTH and actual < _minimum_characters(target):
             raise ProductError("output_length_below_target", f"{label}正文尚未达到{target}字下限，请续写后再生成文件。", 409)
@@ -149,8 +152,8 @@ def generate_report_drafts(task, fence, attempt_id, input_revision, blueprint, *
             fresh = _guard(task.pk, fence)
             # Keep the previous downloadable draft current until its replacement
             # review, report and artifact can all be committed together.
-            if diagram_review.get("quality_issue_count") or (review.payload.get("diagram_review")
-                                                           and review.payload["diagram_review"] != diagram_review):
+            if not unchecked and (diagram_review.get("quality_issue_count") or (review.payload.get("diagram_review")
+                                                           and review.payload["diagram_review"] != diagram_review)):
                 review = _store(task.pk, fence, "review", {**review.payload, "passed": False,
                     "full_document_human_review_required": True, "diagram_review": diagram_review},
                     input_revision.sha256, blueprint.sha256, family=family)
@@ -166,8 +169,9 @@ def generate_report_drafts(task, fence, attempt_id, input_revision, blueprint, *
                 input_hash=input_revision.sha256, blueprint_hash=blueprint.sha256,
                 template_hash=generated["template_hash"], generation_hash=report_hash,
                 render_evidence={**generated["render_evidence"], "report_id": str(report.pk), "kind": "draft", "render_runtime_hash": runtime_hash,
+                                 **({"generation_policy": POLICY, "content_checks": "not_run"} if unchecked else {}),
                                  "draft_quality": review.payload.get("draft_quality", {}),
-                                 "content_review": "human_review_required" if review.payload.get("full_document_human_review_required") else "reviewed",
+                                 "content_review": "not_run" if unchecked else "human_review_required" if review.payload.get("full_document_human_review_required") else "reviewed",
                                  "attempt_id": str(attempt_id)},
             )
             artifacts.append(artifact)

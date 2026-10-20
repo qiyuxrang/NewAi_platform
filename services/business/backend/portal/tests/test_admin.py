@@ -33,25 +33,25 @@ class AdminSecurityTests(PortalTestCase):
     def test_return_to_operations_link_is_available_on_admin_pages(self):
         user = self.create_user("return-link-user")
         paths = {
-            "/admin/": ("/ops", "返回运维总览"),
-            "/admin/portal/user/": ("/ops/people", "返回人员与权限"),
-            "/admin/portal/user/add/": ("/ops/people", "返回人员与权限"),
-            f"/admin/portal/user/{self.admin_user.pk}/change/": ("/ops/people", "返回人员与权限"),
-            f"/admin/portal/user/{user.pk}/password/": ("/ops/people", "返回人员与权限"),
-            "/admin/portal/role/": ("/ops/people", "返回人员与权限"),
-            "/admin/portal/businessmapping/": ("/ops/people", "返回人员与权限"),
-            "/admin/portal/module/": ("/ops/modules", "返回模块与接入管理"),
-            "/admin/portal/auditevent/": ("/ops/maintenance?tab=audit", "返回审计记录"),
+            "/admin/": ("/admin/review/", "返回运维总览"),
+            "/admin/portal/user/": ("/admin/portal/user/", "返回人员与权限"),
+            "/admin/portal/user/add/": ("/admin/portal/user/", "返回人员与权限"),
+            f"/admin/portal/user/{self.admin_user.pk}/change/": ("/admin/portal/user/", "返回人员与权限"),
+            f"/admin/portal/user/{user.pk}/password/": ("/admin/portal/user/", "返回人员与权限"),
+            "/admin/portal/role/": ("/admin/portal/user/", "返回人员与权限"),
+            "/admin/portal/businessmapping/": ("/admin/portal/user/", "返回人员与权限"),
+            "/admin/portal/module/": ("/admin/portal/module/", "返回模块与接入管理"),
+            "/admin/portal/auditevent/": ("/admin/portal/auditevent/", "返回审计记录"),
         }
         for path, (return_url, label) in paths.items():
             with self.subTest(path=path):
                 response = self.client.get(path)
                 self.assertContains(response, f'<a href="{return_url}">← {label}</a>', html=True)
-                if return_url != "/ops":
-                    self.assertContains(response, '<a class="admin-overview-link" href="/ops">运维总览</a>', html=True)
+                if return_url != "/admin/review/":
+                    self.assertContains(response, '<a class="admin-overview-link" href="/admin/review/">运维总览</a>', html=True)
 
         response = self.client.get("/admin/portal/user/add/?next=https://example.invalid/")
-        self.assertContains(response, '<a href="/ops/people">← 返回人员与权限</a>', html=True)
+        self.assertContains(response, '<a href="/admin/portal/user/">← 返回人员与权限</a>', html=True)
         self.assertNotContains(response, "example.invalid")
 
     def test_admin_tech_stylesheet_is_loaded(self):
@@ -67,9 +67,9 @@ class AdminSecurityTests(PortalTestCase):
     def test_admin_home_cards_keep_native_permission_filtered_links(self):
         response = self.client.get("/admin/")
         self.assertContains(response, 'aria-label="管理功能"')
-        self.assertContains(response, '<article class="admin-home-card', count=10)
+        self.assertContains(response, '<article class="admin-home-card', count=15)
         models = response.context["app_list"][0]["models"]
-        self.assertEqual([model["object_name"] for model in models], ["User", "Role", "Module", "BusinessMapping", "AuditEvent", "BusinessLedgerGrant", "Provider", "GatewayModel", "ModelRoute", "ModelCallLog"])
+        self.assertEqual([model["object_name"] for model in models], ["User", "Role", "Module", "BusinessMapping", "AuditEvent", "BusinessLedgerGrant", "Provider", "GatewayModel", "ModelRoute", "ModelCallLog", "ProductKnowledgeConversation", "KnowledgeAccessPolicy", "KnowledgeDocumentGrant", "AgentProject", "ProjectMembership"])
         for path in ("user/", "user/add/", "role/", "module/", "businessmapping/", "businessmapping/add/", "auditevent/", "businessledgergrant/", "businessledgergrant/add/", "provider/", "gatewaymodel/", "modelroute/", "modelcalllog/"):
             self.assertContains(response, f'href="/admin/portal/{path}"')
         for path in ("role/add/", "module/add/", "auditevent/add/", "modelcalllog/add/"):

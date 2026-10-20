@@ -95,10 +95,54 @@ class TenderRegionalOrderingTests(PortalTestCase):
             self.opportunity(f'option-{index}', region)
         regions = self.client.get('/api/product/options/').json()['region']
         values = [item['value'] for item in regions]
-        self.assertEqual(values[:4], ['榆林市', '陕西 / 榆林市', '陕西省榆林市', '陕西省榆林市神木市'])
+        self.assertEqual(values[:3], ['榆林市', '陕西省榆林市', '陕西省榆林市神木市'])
+        self.assertEqual(values.count('陕西省榆林市'), 1)
         self.assertLess(values.index('陕西'), values.index('北京'))
         self.assertLess(values.index('陕西省西安市'), values.index('北京'))
         for value in valid:
-            self.assertIn(value if value != '北京市' else '北京', values)
+            canonical = {'北京市': '北京', '陕西 / 榆林市': '陕西省榆林市'}.get(value, value)
+            self.assertIn(canonical, values)
         for value in invalid:
             self.assertNotIn(value, values)
+
+    def test_region_aliases_match_without_changing_source_regions(self):
+        variants = ['陕西省榆林市', '陕西 / 榆林市', '陕西省 榆林市', '陕西榆林市']
+        expected = {self.opportunity(f'alias-{i}', name).pk for i, name in enumerate(variants)}
+        self.opportunity('different-province', '山西省榆林市')
+        for name in variants:
+            with self.subTest(name=name):
+                payload = self.client.get('/api/product/opportunities/', {'region': name}).json()
+                self.assertEqual({item['id'] for item in payload['items']}, expected)
+                self.assertEqual(payload['stats']['total'], 4)
+        self.assertEqual(set(TenderOpportunity.objects.filter(pk__in=expected).values_list('region', flat=True)), set(variants))
+
+    def test_advanced_filters_use_displayed_dates_group_deadlines_and_budget_caps(self):
+        from decimal import Decimal
+        local_today = timezone.localdate(timezone.now(), timezone=timezone.get_fixed_timezone(480))
+        dated = self.opportunity('date-only', '陕西省', publish_date=local_today,
+                                 budget_cap_yuan=Decimal('2000000'))
+        TenderOpportunity.objects.filter(pk=dated.pk).update(publish_at=None, publish_precision='date')
+        original = self.opportunity('original', '陕西省', bid_deadline=self.now-timedelta(days=1), project_group_key='extended')
+        extension = self.opportunity('extension', '陕西省', bid_deadline=self.now+timedelta(days=3), project_group_key='extended')
+        TenderOpportunity.objects.filter(pk=extension.pk).update(notice_category='change')
+        self.opportunity('closed', '陕西省', bid_deadline=self.now+timedelta(days=2), status='CLOSED')
+        published = self.client.get('/api/product/opportunities/', {'publish_period': 'today'}).json()
+        self.assertIn(dated.pk, {item['id'] for item in published['items']})
+        budget = self.client.get('/api/product/opportunities/', {'budget_band': '1m_10m'}).json()
+        self.assertEqual([item['id'] for item in budget['items']], [dated.pk])
+        unknown = self.client.get('/api/product/opportunities/', {'budget_band': 'unknown'}).json()
+        self.assertNotIn(dated.pk, {item['id'] for item in unknown['items']})
+        deadlines = self.client.get('/api/product/opportunities/', {'deadline_period': 'week'}).json()
+        self.assertEqual([item['id'] for item in deadlines['items']], [original.pk])
+
+    def test_independent_city_names_are_not_expanded_into_provinces(self):
+        for index, name in enumerate(('吉林市', '河北区', '海南藏族自治州')):
+            self.opportunity(f'independent-{index}', name)
+        province = self.opportunity('hebei-province', '河北省石家庄市')
+        values = [item['value'] for item in self.client.get('/api/product/options/').json()['region']]
+        for name in ('吉林市', '河北区', '海南藏族自治州'):
+            self.assertIn(name, values)
+        self.assertNotIn('吉林省市', values)
+        hebei = self.client.get('/api/product/opportunities/', {'region': '河北'}).json()
+        self.assertEqual([item['id'] for item in hebei['items']], [province.pk])
+        self.assertEqual(self.client.get('/api/product/opportunities/', {'region': ' / '}).status_code, 400)

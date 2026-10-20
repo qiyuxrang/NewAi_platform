@@ -81,10 +81,10 @@ def _qualification(claim):
     if category == "ccrc" and "安全集成" not in raw:
         return None, "CCRC_SCOPE_UNCONFIRMED"
     grade = claim.get("proposed_grade")
-    if category == "cs":
+    if category == "cs" and "grade_decision" not in claim:
         match = re.search(r"CS\s*([1-5])", raw, re.I)
         grade = match[1] if match else grade
-    if category == "ccrc":
+    if category == "ccrc" and "grade_decision" not in claim:
         match = re.search(r"安全集成(?:服务)?\s*([一二三123])级", raw)
         grade = {"一": "1", "二": "2", "三": "3"}.get(match[1], match[1]) if match else None
     if category == "labor":
@@ -124,7 +124,7 @@ def _general_phone(fact):
 def _phones(company, facts):
     candidates = []
     if not company.get("phone_missing", False):
-        for raw in company.get("phones", []):
+        for raw in company.get("phone_candidates", company.get("phones", [])):
             candidates.extend(match[0] for match in PHONE.finditer(str(raw)))
     for fact in facts:
         if _general_phone(fact):
@@ -178,7 +178,8 @@ def convert_source(companies, claims, facts, audit):
         phone, rest = _phones(company, own_facts)
         if rest:
             overflow.append({"company_id": identifier, "omitted_from_phone_field": rest})
-        fields = {"name": name, "city": "；".join(dict.fromkeys(company.get("regions", []))) or None,
+        fields = {"name": name, "province": company.get("province"),
+                  "city": company["city"] if "city" in company else "；".join(dict.fromkeys(company.get("regions", []))) or None,
                   "website": next((url for fact in own_facts if (url := _homepage(fact))), None), "phone": phone,
                   "description": bounded("\n".join(lines), 20000, f"{identifier}简介"),
                   "source": bounded(source, 19800, f"{identifier}来源")}

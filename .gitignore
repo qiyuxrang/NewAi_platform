@@ -78,3 +78,6 @@ services/business/staticfiles/
 /output/
 /frontend/layout-evidence/
 /doc/implementation-evidence/
+
+# Local project drawing reference; not part of the public source delivery.
+/ChatGPT Image 2026年10月11日 20_25_42.jpg

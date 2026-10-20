@@ -17,6 +17,7 @@ cloudpickle==3.1.2
 croniter==6.2.4
 cryptography==50.0.1
 deepagents==0.7.19
+defusedxml==0.7.1
 distro==1.9.0
 djangorestframework==3.16.1
 docstring_parser==0.18.0

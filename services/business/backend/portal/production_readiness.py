@@ -1,6 +1,7 @@
 """Read-only production configuration checks without disclosing secrets."""
 import os
 import platform
+import re
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -12,14 +13,16 @@ def _item(code, state, message):
     return {"code": code, "state": state, "message": message}
 
 
-def _service_url(value, allowlist, *, loopback_http=False):
+def _service_url(value, allowlist, *, loopback_http=False, paths=("", "/")):
     try:
         parsed = urlsplit(value)
-        return (isinstance(value, str) and value in allowlist and bool(parsed.hostname)
+        return (isinstance(value, str) and isinstance(allowlist, (list, tuple))
+                and value in allowlist and bool(parsed.hostname) and parsed.port != 0
                 and not parsed.username and not parsed.password and not parsed.query
-                and not parsed.fragment and parsed.path in ("", "/")
+                and not parsed.fragment and (paths is None or parsed.path in paths)
                 and not any(ord(char) < 33 or ord(char) > 126 for char in value)
-                and "\\" not in value
+                and "\\" not in value and "%" not in value
+                and not any(part in (".", "..") for part in parsed.path.split("/"))
                 and (parsed.scheme == "https" or (loopback_http and parsed.scheme == "http"
                      and parsed.hostname in {"127.0.0.1", "::1"})))
     except (TypeError, ValueError):
@@ -54,13 +57,13 @@ def _feature_checks(configured, environment):
         checks.append(_item("agent_model_presets", "passed" if presets_ready else "blocked",
                             "主运行及两个子能力需配置获准模型预设；配置不证明真实模型不同或可用。"))
         checks.append(_item("agent_production_topology", "passed" if environment.get(
-            "PORTAL_AGENT_DEPLOYMENT_MODE") == "helm_kubernetes" else "blocked",
-            "启用 Agent 生产能力须选择官方 Helm/Kubernetes 持久化部署路径。"))
+            "PORTAL_AGENT_DEPLOYMENT_MODE") in {"single_host", "helm_kubernetes"} else "blocked",
+            "启用 Agent 须明确选择 single_host 或 helm_kubernetes；声明部署方式不证明执行器已部署。"))
         # Portal must not receive the runtime's license or database credentials.
         # Only a separate runtime preflight can establish actual entitlement.
         checks.extend([
             _item("agent_runtime_license", "external_gate", "须独立验证原生 Runtime 许可及自定义认证授权；不以密钥存在替代验收。"),
-            _item("agent_runtime_persistence", "external_gate", "须验证原生 PostgreSQL/Redis 强杀恢复、队列排空和跨副本协调。"),
+            _item("agent_runtime_persistence", "external_gate", "须验证所选部署的持久化、强杀恢复和队列排空；多副本部署另须验证跨副本协调。"),
             _item("agent_isolation_and_limits", "external_gate", "AG-15/16 完整出口必须通过后才可使用真实资料。"),
         ])
         for code, attribute in (("agent_product_storage", "PRODUCT_STORAGE_ROOT"),
@@ -107,10 +110,15 @@ def _feature_checks(configured, environment):
         ("product_knowledge", getattr(configured, "PRODUCT_KNOWLEDGE_ENABLED", False), "PRODUCT_KNOWLEDGE"),
     ):
         if enabled:
-            ready = _service_url(getattr(configured, prefix + "_URL", ""),
-                                 getattr(configured, prefix + "_ALLOWED_URLS", ()))
+            url = getattr(configured, prefix + "_URL", "")
+            ready = _service_url(url, getattr(configured, prefix + "_ALLOWED_URLS", ()),
+                                 paths=("/api/v1/retrieval",) if code == "product_knowledge" else None)
+            ready = ready and urlsplit(url).port in (None, 443)
             token_name = getattr(configured, prefix + "_TOKEN_ENV", "")
-            ready = ready and isinstance(token_name, str) and bool(environment.get(token_name))
+            token = (environment.get(token_name, "") if isinstance(token_name, str)
+                     and re.fullmatch(r"[A-Z][A-Z0-9_]{2,127}", token_name) else "")
+            ready = (ready and isinstance(token, str) and 20 <= len(token) <= 512
+                     and all(33 <= ord(char) <= 126 for char in token))
             checks.append(_item(code + "_identity", "passed" if ready else "blocked",
                                 "启用知识/检索服务需明确 HTTPS 允许地址及服务令牌。"))
             checks.append(_item(code + "_acceptance", "external_gate", "真实知识服务权限、撤权及来源引用须独立验收。"))

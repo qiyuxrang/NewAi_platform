@@ -1,0 +1,270 @@
+{
+  "unit": "AI-D41 / AI-T17",
+  "status": "PUBLISHED_AND_REMOTE_VERIFIED",
+  "finished_at": "2026-10-19T00:55:40.598457+08:00",
+  "publication_branch": "codex/baichuan-delivery-20261018",
+  "original_remote_audit": {
+    "status": "PASS_FULL_TRACKED_TREE_AND_CATALOG_AUDIT",
+    "checked_at": "2026-10-19T00:52:37.294063+08:00",
+    "commit": "3f30de73f1eee2e877d821619f28137f3b8b8bed",
+    "repository": "https://github.com/qiyuxrang/NewAi_platform",
+    "branch": "codex/baichuan-delivery-20261018",
+    "tracked_files": 17174,
+    "remote_root_tree": "bcf652e687486a097cb2c95ddd77f0df137c4e99",
+    "complete_root_tree_matches": true,
+    "data_git_objects_verified": 1768,
+    "data_readme_pending_documentation_update": true,
+    "snapshot_validation": {
+      "status": "PASS",
+      "tables": 9,
+      "rows": 25843,
+      "companies": 1283,
+      "source_paths": 4064,
+      "unique_source_blobs": 1754,
+      "internal_foreign_keys": "PASS",
+      "original_database_writes": 0
+    },
+    "current_owned_database_tables": {
+      "portal_company": {
+        "rows": 1283,
+        "rows_sha256": "d2e0aabd17c83b4cd689a61cfd69e9806932281ba436d6045a797a8b032ef5b9",
+        "matches_public_snapshot": true
+      },
+      "portal_companyqualification": {
+        "rows": 1460,
+        "rows_sha256": "536b30db34fa2066e11ee5eefdddd0013f8e45f0b9942ba15546a00087ef97f0",
+        "matches_public_snapshot": true
+      },
+      "portal_companyperson": {
+        "rows": 0,
+        "rows_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "matches_public_snapshot": true
+      },
+      "portal_baichuanevidence": {
+        "rows": 1987,
+        "rows_sha256": "d0614e0c3bc61f3770d2b2a9dfd44a8f859c2cbc7910e1d07a4b7dd3e7c5777b",
+        "matches_public_snapshot": true
+      },
+      "portal_baichuanfactrevision": {
+        "rows": 4087,
+        "rows_sha256": "9b6f3cf3e3f90377cd4270275c542b8d82f69662c337b1903769f38ef958503b",
+        "matches_public_snapshot": true
+      },
+      "portal_baichuancertificate": {
+        "rows": 1622,
+        "rows_sha256": "f918f29a054996635ed5c5bead41d9af0f5c913afb38fb07d1f744f914207771",
+        "matches_public_snapshot": true
+      },
+      "portal_baichuanqualificationrule": {
+        "rows": 7,
+        "rows_sha256": "eb4b9723f0cc606688c8b0efe8465c90c9ba730ac7829859693d75e678e960dc",
+        "matches_public_snapshot": true
+      },
+      "portal_baichuanresearchmanifest": {
+        "rows": 1,
+        "rows_sha256": "1b253d90f321dd348d44985535440398d13f8d32bf31405a49b70179d64947f5",
+        "matches_public_snapshot": true
+      },
+      "portal_baichuanresearchitem": {
+        "rows": 15396,
+        "rows_sha256": "ecc287ba20c0ae260c3d55cde95a4cb05565e2e39003f121840f8a3a2d224ad0",
+        "matches_public_snapshot": true
+      }
+    },
+    "remote_actual_file_readbacks": [
+      {
+        "path": "data/baichuan/manifest.json",
+        "bytes": 420131,
+        "sha256": "80c355d2db40234c46ee5b06555a7ac3b425d330dbaeb9982e7e8ce8bcc99cb2"
+      },
+      {
+        "path": "services/business/backend/portal/product_generation_policy.py",
+        "bytes": 1023,
+        "sha256": "86e4df9dd62f51d188993b092aaea8cae606b84ab98e47f3cf524a15f460407f"
+      }
+    ],
+    "main_unchanged": true,
+    "live_database_writes": 0,
+    "note": "All tracked files bound by matching complete Git root tree; data files additionally compared against remote recursive subtree and original file bytes. Readbacks list actual downloads, not every file downloaded."
+  },
+  "isolated_restore_tests": {
+    "status": "PASS",
+    "tests": 7,
+    "seconds": 75.324,
+    "skip": 0,
+    "log": ".runtime/github-handoff-check/restore-tests-final.log",
+    "log_sha256": "76f5dc64363b3efe3784763db910a7a00e63398117c8aa184da5e530cf517ba5",
+    "covers": [
+      "all 9 tables actual migrated SQLite row readback",
+      "cancelled archive job only",
+      "manual nonempty catalog protected",
+      "repeat import refusal",
+      "missing active actor refusal",
+      "foreign key error full rollback with backup",
+      "corrupt snapshot refusal",
+      "snapshot path escape refusal",
+      "Windows handles explicitly closed and private backup directory ACL"
+    ]
+  },
+  "source_pins": {
+    "scripts/baichuan/restore_repository_data.py": "246e09995786ee27ebc25772fb2e441e278c54d8b68cf196af4389ca17edfa1a",
+    "scripts/baichuan/requirements-local.txt": "ee2a4cacba55369557499c752a88474e1adf6639ae8edb1d09ca02f0cbd98b17",
+    "services/business/backend/portal/tests/test_baichuan_repository_restore.py": "5b613e0948fbc2805e2c2b5611e24f856795a6ed24ef264443881d4ea0c3a308"
+  },
+  "cold_path_rehearsal": {
+    "status": "PASS_SCOPED_COLD_PATH_REHEARSAL",
+    "finished_at": "2026-10-19T00:51:56.993102+08:00",
+    "checkout_source": "git clone --local --no-hardlinks from commit already verified on GitHub; same machine, existing interpreter reused",
+    "remote_network_clone": "Attempt stopped after Git pack remained at 0 bytes; not claimed successful",
+    "checkout_files": 17174,
+    "new_owned_database_initialized": true,
+    "restored_rows": 25843,
+    "repeated_import_refused": true,
+    "roles": [
+      {
+        "username": "baichuan-dev-product",
+        "confirmed": 346,
+        "api_rows": 20,
+        "excel_rows": 20,
+        "xlsx_sha256": "2f8e99dab7389b2b5a400a94e057135726d115af624ce324c9ca426b32ae1ede",
+        "job_status": "completed"
+      },
+      {
+        "username": "baichuan-dev-general_manager",
+        "confirmed": 346,
+        "api_rows": 20,
+        "excel_rows": 20,
+        "xlsx_sha256": "3783054d30abdf679ea85fa54bc67b8c40d9ba717ed6402c69635e74e5641b1c",
+        "job_status": "completed"
+      }
+    ],
+    "model_calls": 0,
+    "network_calls": 0,
+    "frontend_started": false,
+    "frontend_built": false,
+    "full_dependency_installation": false,
+    "office_or_ocr_on_target_machine": false,
+    "actual_other_computer_tested": false
+  },
+  "cold_rehearsal_script_sha256": "aaf64b93a0092937918eb6c749891d59fb81feef61247189ceede82204465ada",
+  "scope_note": "Cold CLI rehearsal predates the final backup ACL addition; final 7 tests rerun on final source include actual Windows backup creation. No target-machine dependency installation/real model/Office/browser acceptance claimed.",
+  "original_failure": {
+    "tests": 7,
+    "cleanup_errors": 3,
+    "reason": "SQLite context manager did not close Windows file handles; fixed explicit closing and reran all 7"
+  },
+  "frontend_changed": false,
+  "current_services_restarted": false,
+  "current_catalog_written": false,
+  "private_credentials_published": false,
+  "model_calls": 0,
+  "automatic_enrichment_resumed": false,
+  "deployment": false,
+  "instructions": "doc/github-local-update.md",
+  "remaining_target_machine_requirements": [
+    "Select delivery branch, not main",
+    "Retain/install Python, Node and dependencies",
+    "Retain private accounts/model configuration; fresh machines create separate accounts",
+    "Existing whole-project environment additionally needs its own databases, private files, Docker volumes and Office",
+    "3080 enterprise entry must check backup/incremental migrations and refresh ignored frontend/dist / manage_front/.next build artifacts on that computer; pulling source does not refresh them"
+  ],
+  "final_remote_audit": {
+    "status": "PASS_FULL_TRACKED_TREE_AND_CATALOG_AUDIT",
+    "checked_at": "2026-10-19T01:00:57.675463+08:00",
+    "commit": "8c021c758fc1d92beea3fcb46efb075427e5da6f",
+    "repository": "https://github.com/qiyuxrang/NewAi_platform",
+    "branch": "codex/baichuan-delivery-20261018",
+    "tracked_files": 17179,
+    "remote_root_tree": "163055f6a4faa0dfe32134c0878118bd6e747f68",
+    "complete_root_tree_matches": true,
+    "data_git_objects_verified": 1768,
+    "data_readme_pending_documentation_update": false,
+    "snapshot_validation": {
+      "status": "PASS",
+      "tables": 9,
+      "rows": 25843,
+      "companies": 1283,
+      "source_paths": 4064,
+      "unique_source_blobs": 1754,
+      "internal_foreign_keys": "PASS",
+      "original_database_writes": 0
+    },
+    "current_owned_database_tables": {
+      "portal_company": {
+        "rows": 1283,
+        "rows_sha256": "d2e0aabd17c83b4cd689a61cfd69e9806932281ba436d6045a797a8b032ef5b9",
+        "matches_public_snapshot": true
+      },
+      "portal_companyqualification": {
+        "rows": 1460,
+        "rows_sha256": "536b30db34fa2066e11ee5eefdddd0013f8e45f0b9942ba15546a00087ef97f0",
+        "matches_public_snapshot": true
+      },
+      "portal_companyperson": {
+        "rows": 0,
+        "rows_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "matches_public_snapshot": true
+      },
+      "portal_baichuanevidence": {
+        "rows": 1987,
+        "rows_sha256": "d0614e0c3bc61f3770d2b2a9dfd44a8f859c2cbc7910e1d07a4b7dd3e7c5777b",
+        "matches_public_snapshot": true
+      },
+      "portal_baichuanfactrevision": {
+        "rows": 4087,
+        "rows_sha256": "9b6f3cf3e3f90377cd4270275c542b8d82f69662c337b1903769f38ef958503b",
+        "matches_public_snapshot": true
+      },
+      "portal_baichuancertificate": {
+        "rows": 1622,
+        "rows_sha256": "f918f29a054996635ed5c5bead41d9af0f5c913afb38fb07d1f744f914207771",
+        "matches_public_snapshot": true
+      },
+      "portal_baichuanqualificationrule": {
+        "rows": 7,
+        "rows_sha256": "eb4b9723f0cc606688c8b0efe8465c90c9ba730ac7829859693d75e678e960dc",
+        "matches_public_snapshot": true
+      },
+      "portal_baichuanresearchmanifest": {
+        "rows": 1,
+        "rows_sha256": "1b253d90f321dd348d44985535440398d13f8d32bf31405a49b70179d64947f5",
+        "matches_public_snapshot": true
+      },
+      "portal_baichuanresearchitem": {
+        "rows": 15396,
+        "rows_sha256": "ecc287ba20c0ae260c3d55cde95a4cb05565e2e39003f121840f8a3a2d224ad0",
+        "matches_public_snapshot": true
+      }
+    },
+    "remote_actual_file_readbacks": [
+      {
+        "path": "data/baichuan/manifest.json",
+        "bytes": 420131,
+        "sha256": "80c355d2db40234c46ee5b06555a7ac3b425d330dbaeb9982e7e8ce8bcc99cb2"
+      },
+      {
+        "path": "scripts/baichuan/restore_repository_data.py",
+        "bytes": 10788,
+        "sha256": "246e09995786ee27ebc25772fb2e441e278c54d8b68cf196af4389ca17edfa1a"
+      },
+      {
+        "path": "doc/github-local-update.md",
+        "bytes": 7526,
+        "sha256": "2bfb0836522745a37a0902ee82f1c6de622e8b1385837060d77b135d6ddb9f9b"
+      }
+    ],
+    "main_unchanged": true,
+    "live_database_writes": 0,
+    "note": "All tracked files bound by matching complete Git root tree; data files additionally compared against remote recursive subtree and original file bytes. Readbacks list actual downloads, not every file downloaded."
+  },
+  "publication": {
+    "status": "PUBLISHED_AND_VERIFIED",
+    "commit": "8c021c758fc1d92beea3fcb46efb075427e5da6f",
+    "parent": "3f30de73f1eee2e877d821619f28137f3b8b8bed",
+    "git_tree": "163055f6a4faa0dfe32134c0878118bd6e747f68",
+    "files_uploaded": 14,
+    "transport": "GitHub official Git Data API; exact original Git blobs/tree/commit; fast-forward ref update",
+    "branch": "codex/baichuan-delivery-20261018",
+    "main_unchanged": true
+  }
+}

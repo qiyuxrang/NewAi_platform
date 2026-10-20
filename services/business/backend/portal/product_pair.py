@@ -128,7 +128,8 @@ def report_current(task, report):
     if any(chapter is None for chapter in ordered) or not _content_review_current(task, artifact.review, current_input, blueprint, ordered):
         return False
     model = artifact.review.payload.get("model_review", {})
-    program_only = artifact.review.payload.get("generation_policy") == "draft-first-v1"
+    from .product_generation_policy import POLICY
+    program_only = artifact.review.payload.get("generation_policy") in {"draft-first-v1", POLICY}
     if not program_only and (model.get("status") != "passed" or model.get("issues") or model.get("coverage", {}).get("all_batches_passed") is not True):
         return False
     expected = _report_generation_hash(task, report.family, current_input, blueprint)
@@ -216,7 +217,11 @@ def pair_snapshot(task):
     sources = [{"family": report.family, "id": str(report.pk), "version": report.version,
                 "sha256": report.sha256, "created_by": report.created_by_id,
                 "created_at": report.created_at.isoformat()} for report in reports]
-    return {"input_hash": current_input.sha256, "blueprint_hash": blueprint.sha256,
+    from .product_generation_policy import POLICY
+    unchecked = all(task.artifacts.filter(family=report.family,
+        render_evidence__report_id=str(report.pk), render_evidence__generation_policy=POLICY).exists() for report in reports)
+    return {**({"generation_policy": POLICY} if unchecked else {}),
+            "input_hash": current_input.sha256, "blueprint_hash": blueprint.sha256,
             "sources": sources, "blocks": blocks, "pending": _pending_items(reports), "diagram_pending": diagram_pending,
             "draft_quality": {"reports": draft_quality},
             "approval_inherited": False, "sha256": digest({"sources": sources, "input_hash": current_input.sha256,

@@ -132,6 +132,9 @@ def content_document(task, input_revision, blueprint, chapters, family="technica
     if facts.get("requirements", "").strip():
         requirements.append({"id": "RINPUT", "text": facts["requirements"]})
     requirement_ids = [item["id"] for item in requirements]
+    from .product_generation_policy import POLICY, generation_only
+    if generation_only(task):
+        requirements.append({"id": "RGENERATIONPOLICY", "text": POLICY})
     blocks = []
     guide_aware = family == "feasibility" and bool(blueprint.payload.get("feasibility_guide"))
     planned_titles = set()
@@ -545,6 +548,7 @@ def _normalize_word_layout(target, document):
 
 
 def _diagram_sources(document, generator, *, draft=False, quality_issues=None):
+    from .product_generation_policy import document_generation_only
     if generator is None:
         raise DocumentError("diagram_generation_required")
     try:
@@ -554,7 +558,8 @@ def _diagram_sources(document, generator, *, draft=False, quality_issues=None):
         findings = []
         diagrams = validate_diagram_batch({"diagrams": diagrams},
                                [block for block in document["blocks"] if block["type"] == "figure"],
-                               diagram_evidence_blocks(document["blocks"]), draft=draft, quality_issues=findings)
+                               diagram_evidence_blocks(document["blocks"]), draft=draft, quality_issues=findings,
+                               verify_content=not document_generation_only(document))
         apply_diagram_descriptions(document, diagrams)
         validate_document_requirements(document, allow_pending=draft)
         if findings:
@@ -642,7 +647,9 @@ def _render_draft_diagrams(document, generator, directory, step_runner=None):
                         or (not selected["corrected"] and selected["source"] != original_source)):
                     return False
                 if selected["corrected"]:
-                    validate_diagram_batch({"diagrams": [selected["source"]]}, [figure], paragraphs, draft=False)
+                    from .product_generation_policy import document_generation_only
+                    validate_diagram_batch({"diagrams": [selected["source"]]}, [figure], paragraphs, draft=False,
+                                           verify_content=not document_generation_only(document))
                 return valid(selected["evidence"], selected["source"])
             except (ValueError, KeyError, TypeError):
                 return False
@@ -669,12 +676,14 @@ def _render_draft_diagrams(document, generator, directory, step_runner=None):
                 # One real-render correction uses the existing guarded model
                 # callback and budget; never shrink fonts or invent a substitute.
                 repair = {"family": document["family"], "metadata": document["metadata"],
+                    "requirements": document.get("requirements", []),
                     "blocks": [*deepcopy(paragraphs), deepcopy(figure)],
                     "diagram_render_feedback": {"figure_id": figure["id"], "reason": reason,
                         "previous_source": source["source"]}}
                 try:
+                    from .product_generation_policy import document_generation_only
                     revised = validate_diagram_batch({"diagrams": generator(repair)}, [figure], paragraphs,
-                        draft=False)
+                        draft=False, verify_content=not document_generation_only(document))
                 except (ValueError, KeyError, TypeError):
                     raise DocumentError("diagram_render_failed", diagnostic={"stage": "diagram_render",
                         "reason": "render_correction_invalid"}) from None

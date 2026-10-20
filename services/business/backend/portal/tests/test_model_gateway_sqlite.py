@@ -19,7 +19,7 @@ from django.test import override_settings
 from django.utils import timezone
 
 from portal import model_gateway
-from portal.models import GatewayModel, ModelCallLog, ModelRoute, Module, Provider, User
+from portal.models import GatewayModel, ModelCallLog, ModelRoute, Module, Provider, Role, User
 
 
 class SQLiteReservationTests(unittest.TestCase):
@@ -67,8 +67,15 @@ class SQLiteReservationTests(unittest.TestCase):
         self.model = GatewayModel.objects.create(provider=provider, name="isolated", enabled=True,
                                                 model_name="isolated", timeout_seconds=20)
         module, _ = Module.objects.get_or_create(code="isolated", defaults={"name": "isolated"})
+        role, _ = Role.objects.get_or_create(code="platform_admin", defaults={"name": "isolated-admin"})
+        role.modules.add(module)
+        self.user.roles.add(role)
+        self.other_user.roles.add(role)
+        self.user.refresh_from_db()
+        self.other_user.refresh_from_db()
         self.route = ModelRoute.objects.create(code="isolated", name="isolated", module=module,
                                               model=self.model, enabled=True)
+        self.version = model_gateway._configuration_version(self.route, self.model)
 
     def restore_connection(self):
         self.connection.close()
@@ -101,7 +108,7 @@ class SQLiteReservationTests(unittest.TestCase):
                 if started:
                     started.set()
                 return model_gateway._reserve(user or self.user, self.model, purpose,
-                                               self.route if route else None, "isolated-version")
+                                               self.route if route else None, self.version if route else "")
         finally:
             connection.close()
 
@@ -141,7 +148,7 @@ class SQLiteReservationTests(unittest.TestCase):
         first_access = next(sql for sql in statements if sql.lstrip().upper().startswith(("SELECT", "UPDATE")))
         self.assertTrue(first_access.startswith('UPDATE "portal_user"'), first_access)
         self.assertEqual(record.status, "pending")
-        self.assertEqual(record.config_version, "isolated-version")
+        self.assertEqual(record.config_version, self.version)
         self.assertEqual(ModelCallLog.objects.count(), 1)
         self.assertEqual(User.objects.get(pk=self.user.pk).grant_version, self.user.grant_version)
         self.assertEqual(User.objects.get(pk=self.user.pk).session_version, self.user.session_version)
@@ -187,6 +194,7 @@ class SQLiteReservationTests(unittest.TestCase):
     def test_route_rate_limit_serializes_same_user(self):
         self.route.max_calls_per_minute = 1
         self.route.save(update_fields=["max_calls_per_minute"])
+        self.version = model_gateway._configuration_version(self.route, self.model)
         self.assertEqual(self.competing_reservations(), "rate_limited")
 
     def test_probe_limit_serializes_same_user(self):

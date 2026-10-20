@@ -1136,6 +1136,8 @@ def _generate_chapter(task_id, fence, attempt_id, task, input_revision, blueprin
     from .product_content_quality import (inspect_chapter_contract, inspect_content_quality,
                                           inspect_repeated_content, unsupported_numeric_claims)
 
+    from .product_generation_policy import generation_only
+    unchecked = generation_only(task)
     draft = task.pending_action in {"generate_outputs", "three_drafts"}
     family_chapters = blueprint_chapters(blueprint.payload, family)
     family_target = _family_target(family)
@@ -1159,6 +1161,8 @@ def _generate_chapter(task_id, fence, attempt_id, task, input_revision, blueprin
         if (checked["chapter_id"] != chapter["id"] or checked["title"] != chapter["title"]
                 or not checked["source_ids"] or not set(checked["source_ids"]) <= set(chapter["source_ids"])):
             raise ExecutionError("invalid_model_output")
+        if unchecked:
+            return checked
         with db_lock:
             existing_body = [paragraph for saved_chapter in list(chapters.values())
                              for paragraph in saved_chapter.payload.get("paragraphs", [])]
@@ -1203,7 +1207,7 @@ def _generate_chapter(task_id, fence, attempt_id, task, input_revision, blueprin
                     "correction": "首批正文须用独立一行的##标题列出实际论证小节并紧接实质正文，后续可用###细分，不能只返回标题。"}])
         return checked
 
-    if existing and (not enforce_length or actual >= chapter_minimum):
+    if existing and (unchecked or not enforce_length or actual >= chapter_minimum):
         return existing
     for part_index in range((chapter_minimum + 599) // 600 + 4 if enforce_length else 1):
         previous = existing.payload["paragraphs"] if existing else []
@@ -1257,6 +1261,8 @@ def _generate_chapter(task_id, fence, attempt_id, task, input_revision, blueprin
                 additions.append(paragraph)
                 seen.add(normalized)
         if not additions:
+            if unchecked and existing:
+                break
             raise ExecutionError("output_length_below_target")
         payload["paragraphs"] = [*previous, *additions]
         payload["source_ids"] = list(dict.fromkeys([*(existing.payload["source_ids"] if existing else []), *payload["source_ids"]]))
@@ -1272,12 +1278,13 @@ def _generate_chapter(task_id, fence, attempt_id, task, input_revision, blueprin
                     saved_characters=actual, revision_id=str(existing.pk), chapter_sha256=existing.sha256)
         if not enforce_length or actual >= chapter_minimum:
             break
-    if enforce_length and actual < chapter_minimum:
+    if not unchecked and enforce_length and actual < chapter_minimum:
         raise ExecutionError("output_length_below_target")
     return existing
 
 
 def _assemble_family(task_id, fence, task, input_revision, blueprint, family, chapters):
+    from .product_generation_policy import generation_only
     family_chapters = blueprint_chapters(blueprint.payload, family)
     family_target = _family_target(family)
     chapter_total = len(family_chapters)
@@ -1291,7 +1298,7 @@ def _assemble_family(task_id, fence, task, input_revision, blueprint, family, ch
     actual = _chapter_character_count(ordered)
     _formal_content_guard(ordered, family, draft=draft)
     _record_output_generation(task_id, fence, family, family_target, actual)
-    if enforce_length and actual < _minimum_characters(family_target):
+    if not generation_only(task) and enforce_length and actual < _minimum_characters(family_target):
         raise ExecutionError("output_length_below_target")
     _analysis_progress(task_id, fence, phase, 'completed', detail=f'{label} {chapter_total} 章正文已保存',
                        completed_count=chapter_total, total_count=chapter_total)
@@ -1373,6 +1380,7 @@ def _generate_families(task_id, fence, attempt_id, task, input_revision, bluepri
     """One pool for all reports; dependent chapters receive committed predecessor prose."""
     from .product_steps import StepRetryPending
     from .product_writing_plan import build_writing_plan
+    from .product_generation_policy import generation_only
 
     try:
         jobs = build_writing_plan(blueprint.payload, families)
@@ -1409,7 +1417,7 @@ def _generate_families(task_id, fence, attempt_id, task, input_revision, bluepri
         actual = _chapter_character_count([saved]) if saved else 0
         count = max(1, len(blueprint_chapters(blueprint.payload, family)))
         minimum = _minimum_characters((_family_target(family) + count - 1) // count)
-        states[identity] = "completed" if saved and (not settings.PRODUCT_ENFORCE_OUTPUT_LENGTH or actual >= minimum) else "pending"
+        states[identity] = "completed" if saved and (generation_only(task) or not settings.PRODUCT_ENFORCE_OUTPUT_LENGTH or actual >= minimum) else "pending"
         progress.append({"family": family, "chapter_id": chapter_id, "title": job["brief"]["chapter"]["title"],
                          "depends_on": job["depends_on"], "status": states[identity], "saved_characters": actual,
                          "minimum_characters": minimum, "chapter_sha256": saved.sha256 if saved else ""})
@@ -2212,6 +2220,15 @@ def _content_review_current(task, review, input_revision, blueprint, chapters):
     model = checked.get("model_review", {})
     if not isinstance(model, dict):
         return False
+    from .product_generation_policy import POLICY, unchecked_review
+    if checked.get("generation_policy") == POLICY:
+        try:
+            _source_items(task, input_revision.payload)
+        except (ExecutionError, ProductError):
+            return False
+        return (review.input_hash == input_revision.sha256 and review.blueprint_hash == blueprint.sha256
+                and checked == unchecked_review(input_revision, blueprint, chapters)
+                and bool(approved_blueprint(task)))
     if checked.get("generation_policy") == "draft-first-v1":
         approved = approved_blueprint(task)
         try:
@@ -2281,6 +2298,16 @@ def _ensure_content_review(task, fence, attempt_id, input_revision, blueprint, c
     from .product_blueprint_knowledge import PREVIEW, blueprint_knowledge_status
 
     _guard(task.pk, fence)
+    from .product_generation_policy import generation_only, unchecked_review
+    if generation_only(task):
+        _source_items(task, input_revision.payload)
+        checked = unchecked_review(input_revision, blueprint, chapters)
+        review = task.revisions.filter(kind="review", family=family).order_by("-version").first()
+        if not _content_review_current(task, review, input_revision, blueprint, chapters) or review.payload != checked:
+            review = _store(task.pk, fence, "review", checked, input_revision.sha256, blueprint.sha256, family=family)
+        phase = "review_feasibility" if family == "feasibility" else "review_technical"
+        _analysis_progress(task.pk, fence, phase, "skipped", detail="正文已保存，继续生成文件；内容核验未执行")
+        return review
     # Re-run the current program policy even when a complete model review exists.
     checked = content_checks(input_revision.payload, blueprint.payload, chapters,
                              items=_source_items(task, input_revision.payload))
@@ -2375,6 +2402,7 @@ def _generate_diagrams(task_id, fence, attempt_id, document, *, draft=False):
     for figures, paragraphs in diagram_batches(document):
         for figure in figures:
             subset = {"family": document["family"], "metadata": document["metadata"],
+                      "requirements": document.get("requirements", []),
                       "blocks": [{**paragraph, "type": "paragraph"} for paragraph in paragraphs] + [figure]}
             if document.get("diagram_render_feedback"):
                 subset["diagram_render_feedback"] = document["diagram_render_feedback"]
@@ -2383,7 +2411,9 @@ def _generate_diagrams(task_id, fence, attempt_id, document, *, draft=False):
                        "blueprint_hash": blueprint.sha256 if blueprint else None,
                        "route": _review_route_hash(settings.PRODUCT_WRITING_ROUTE), "rules": rules_hash()}
             def validate(result):
-                return bool(validate_diagram_batch({"diagrams": result}, [figure], paragraphs, draft=draft))
+                from .product_generation_policy import document_generation_only
+                return bool(validate_diagram_batch({"diagrams": result}, [figure], paragraphs, draft=draft,
+                            verify_content=not document_generation_only(document)))
             key = f'diagram:{document["family"]}:{figure["id"]}'
             try:
                 result = run_step(task_id, fence, key, binding,
@@ -2403,6 +2433,7 @@ def _generate_diagrams(task_id, fence, attempt_id, document, *, draft=False):
 
 
 def _generate_diagrams_uncached(task_id, fence, attempt_id, document, *, draft=False):
+    from .product_generation_policy import document_generation_only
     from .product_diagrams import DIAGRAM_INSTRUCTION, DIAGRAM_PROMPT_VERSION, diagram_batches, excerpt_diagrams, validate_diagram_batch
 
     diagrams = []
@@ -2418,7 +2449,8 @@ def _generate_diagrams_uncached(task_id, fence, attempt_id, document, *, draft=F
                         if isinstance(item, dict) and isinstance(item.get("evidence_block_ids"), list):
                             item["evidence_block_ids"] = [evidence_ids.get(ref, ref) if isinstance(ref, str) else ref
                                                           for ref in item["evidence_block_ids"]]
-                return validate_diagram_batch(payload, figures, paragraphs, draft=draft)
+                return validate_diagram_batch(payload, figures, paragraphs, draft=draft,
+                                              verify_content=not document_generation_only(document))
             except ValueError as error:
                 raise ExecutionError("invalid_model_output", quality_issues=getattr(error, "quality_issues", None),
                                      diagram_validation_reason=str(error)) from error
@@ -2702,7 +2734,8 @@ def _execute_claim_action(task_id, fence, attempt_id):
             chapters_by_family, failures = _generate_families(
                 task_id, fence, attempt_id, task, input_revision, blueprint, report_families)
             blocked = set()
-            if chapters_by_family:
+            from .product_generation_policy import generation_only
+            if chapters_by_family and not generation_only(task):
                 ordered = [chapter for family in report_families for chapter in chapters_by_family.get(family, [])]
                 _content_quality_guard(ordered, input_revision.payload, blueprint.payload, draft=True)
                 try:
@@ -2754,8 +2787,9 @@ def _execute_claim_action(task_id, fence, attempt_id):
                 if not ordered or any(chapter is None for chapter in ordered):
                     raise ExecutionError("chapters_incomplete")
                 chapters_by_family[family] = ordered
-            consistency = ensure_writing_consistency(
-                task_id, fence, attempt_id, task, input_revision, blueprint, chapters_by_family)
+            from .product_generation_policy import generation_only
+            consistency = ({"failures": [], "blocked_families": []} if generation_only(task) else
+                ensure_writing_consistency(task_id, fence, attempt_id, task, input_revision, blueprint, chapters_by_family))
             failures = consistency.get("failures", [])
             if failures:
                 raise next((error for error in failures if isinstance(error, StepRetryPending)), failures[0])

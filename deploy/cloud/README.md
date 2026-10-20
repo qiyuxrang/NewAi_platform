@@ -1,8 +1,8 @@
 # Linux 云部署包
 
-本包为单台 Linux 服务器的部署候选：员工端、管理端、业务门户 API 与后台、模型网关、产品 worker、PostgreSQL 和 Caddy TLS。产品目标是技术方案 Word、可研 Word、汇报 PPT 三件套。正式生成须真实模型与 RAGFlow 的个人资料授权；正式发布审批默认关闭。
+本包为单台 Linux 服务器的部署候选：员工端、管理端、业务门户 API 与后台、模型网关、产品 worker、PostgreSQL 和 Caddy TLS。产品目标是技术方案 Word、可研 Word、汇报 PPT 三件套。正式生成须真实模型与 RAGFlow 的显式文档授权；正式发布审批默认关闭。
 
-当前完成的是源码和配置结构校验，以及在本机隔离的 Windows Python 3.13.16 中安装最终 requirements.lock 和检查126个包的兼容性，均已通过。当前机器不能运行 Docker，也没有云服务器；**镜像冷构建、Linux LibreOffice 渲染、公网 TLS、真实模型/知识服务、实际三件套业务验收尚未执行**。requirements.lock 的版本来自现有 Python 3.12 验证环境，并已完成上述 Windows Python 3.13 安装验证；Linux wheel、系统库和跨平台兼容性仍必须由下述镜像检查确认。不得把此文档或合成烟测报告视为上线批准。
+历史验证已覆盖源码和配置结构，以及在本机隔离的 Windows Python 3.13.16 中安装最终 requirements.lock 并检查依赖兼容性。此前“本机不能运行 Docker”是当时的环境记录；本机现可运行临时 PostgreSQL 容器，但**镜像冷构建、Linux LibreOffice 渲染、公网 TLS、真实模型/知识服务、实际三件套业务验收尚未执行**。requirements.lock 的版本来自现有 Python 3.12 验证环境，并已完成上述 Windows Python 3.13 安装验证；Linux wheel、系统库和跨平台兼容性仍必须由下述镜像检查确认。不得把此文档或合成烟测报告视为上线批准。
 
 ## 服务器与目录
 
@@ -58,6 +58,8 @@ docker compose --env-file .env -f compose.yml ps
 
 PostgreSQL 首次初始化创建 `platform` 和 `enterprise_portal` 两个数据库；它的 init 脚本只在空数据卷运行。业务 migrate、seed、collectstatic 只由明确的 init 作业执行。平台 gateway 现有启动逻辑会建立/补齐自己的表并创建 `.env` 中管理账号；对已有账号不重置密码。升级前仍需迁移排练和备份，平台自动补列不能替代正式迁移审查。
 
+本版本的模型处理边界与资料授权表也由上述 `portal-init init` 执行迁移，无须新增服务。升级时先备份并在隔离实例完成迁移，再按下节导入或配置文档授权；生产知识访问不会因保留旧环境变量而自动开放。
+
 业务管理员是独立账号，`bootstrap_admin` 交互读取密码、不授予 Django 超级用户。访问 `https://PORTAL_DOMAIN/login` 完成首次登录与强制改密，然后重新登录进入 `/admin/`。后台创建员工、分配角色、启用产品模块；管理员身份不自动取得所有业务正文/资料权限。平台管理账号访问 `https://ADMIN_DOMAIN`，从私有 `.env` 安全读取初始密码；平台员工账号与业务账号须通过原员工端绑定流程关联。业务账号更换、停用、撤权与会话失效需实测。
 
 缺失旧门户 SPA 的 `/ops`、`/centers` 页面不会被本包复造；Django 管理后台的“返回运维”链接会经门户 fallback 回到员工端。此限制不影响原 `/admin` 配置表与业务 API，但必须在验收报告中保留。
@@ -66,7 +68,20 @@ PostgreSQL 首次初始化创建 `platform` 和 `enterprise_portal` 两个数据
 
 模型 Key 放 `.env` 的 `PORTAL_MODEL_KEY_PRIMARY`（可扩展相同前缀变量）。独立模型网关的 `MODEL_GATEWAY_ALLOWED_BASE_URLS` 必须明确允许真实 HTTPS 基础地址；门户 Provider 的 `api_key_env` 填变量名而非明文 Key。从原 Django `/admin/` 配置 Provider、GatewayModel、ModelRoute 与按用户/角色的 ModelRouteOption，真实连接测试成功后才启用。产品默认路由为 `product_blueprint`、`product_writing`、`product_review`、知识处理为 `product_knowledge`，属于产品模块。前端平台 `PLATFORM_DEFAULT_MODEL`、`PLATFORM_MODEL_IDS` 与对应平台提供商配置也需与可用模型一致。
 
-只有负责人明确授权后才设 `PORTAL_PRODUCT_MODEL_CALLS_ALLOWED=1`。RAGFlow 是外部服务，不包含在本 Compose；设置 `PORTAL_PRODUCT_KNOWLEDGE_URL`、`PORTAL_PRODUCT_KNOWLEDGE_ALLOWED_URLS`、令牌环境变量名称和其真实值、`PORTAL_PRODUCT_KNOWLEDGE_AUTHORIZATIONS` 个人授权映射及授权 revision，再打开 knowledge enabled/AI calls 两个开关。RAGFlow 地址必须为 `https://真实域名/api/v1/retrieval`、默认443端口，允许名单包含完整URL。授权映射为业务用户数字ID → dataset ID → 允许的 document ID 数组，例如 `{"42":{"approved_dataset":["approved_document"]}}`（仅展示格式，不是真实授权）；每用户最多4个dataset，每dataset最多100个文档，标识只能使用字母数字下划线短横线。令牌变量可命名 `RAGFLOW_SERVICE_TOKEN`，在私有.env新增实际值，`PORTAL_PRODUCT_KNOWLEDGE_TOKEN_ENV=RAGFLOW_SERVICE_TOKEN`。授权变更递增 `PORTAL_PRODUCT_KNOWLEDGE_AUTHORIZATION_REVISION` 并重新创建服务；按当前 `portal/product_knowledge_service.py` 校验格式操作，禁止默认共享全库授权。业务模型路由可经原 Django admin 配置；知识授权来自受控环境配置，不存在自动创建全用户知识授权的后台按钮。
+Provider 的 `processing_boundary` 默认 `external`；仅经负责人核准其实际部署和数据处理边界后才标为 `internal`。敏感业务的 ModelRoute 设置 `allow_external_processing=False`，网关会拒绝使用外部 Provider；地址位于内网或名称写“内部”均不构成自动核准。只有负责人明确授权后才设 `PORTAL_PRODUCT_MODEL_CALLS_ALLOWED=1`。
+
+RAGFlow 是外部服务，不包含在本 Compose。设置 `PORTAL_PRODUCT_KNOWLEDGE_URL`、包含完整 URL 的 `PORTAL_PRODUCT_KNOWLEDGE_ALLOWED_URLS`、令牌环境变量名称及其真实值；地址必须为 `https://真实域名/api/v1/retrieval`、默认443端口。例如令牌放私有 `.env` 的 `RAGFLOW_SERVICE_TOKEN`，配置 `PORTAL_PRODUCT_KNOWLEDGE_TOKEN_ENV=RAGFLOW_SERVICE_TOKEN`。资料授权确认后再打开 knowledge enabled/AI calls 两个开关。
+
+Django `/admin/` 已提供“资料授权策略”“文档授权”“项目资料成员”。按个人、角色、部门或项目显式授予 dataset/document 范围，区分查看、AI 使用和下载；管理员身份不隐含全库权限。生产 `PORTAL_DEBUG=0` 时没有对应数据库策略即拒绝知识访问；策略停用、授权到期或撤销也不会回退旧全库。工程授权须明确列出固定工程 dataset 下的文档，不从旧工程整库配置自动扩大迁移。产品报告检索使用原审批 scope 与当前数据库授权的交集，数据库授权不能替代原审批。
+
+旧 `PORTAL_PRODUCT_KNOWLEDGE_AUTHORIZATIONS` 在生产仅作为产品授权迁移输入，格式仍为业务用户数字 ID → dataset ID → document ID 数组，例如 `{"42":{"approved_dataset":["approved_document"]}}`。在尚无产品资料策略时先校验输出，再执行原子导入；已有数据库策略不会被覆盖：
+
+```sh
+docker compose --env-file .env -f compose.yml --profile setup run --rm portal-init manage import_knowledge_grants
+docker compose --env-file .env -f compose.yml --profile setup run --rm portal-init manage import_knowledge_grants --apply
+```
+
+第一条默认 dry-run、不写入；核对账号和文档范围后执行第二条。后续在后台维护授权，无须靠环境 revision 变更授予权限。资料策略的 `allow_assistant_export` 默认 `False`；只有通用助手的模型和运行环境也获准处理资料后才打开。通用助手 MCP 未必经过业务模型网关，因此产品 `internal-only` 模型路由禁止通过 MCP 返回正文，即使资料策略允许导出也不例外。
 
 默认 `PORTAL_PRODUCT_BLUEPRINT_KNOWLEDGE_MODE=ragflow_required`；该模式没配置知识资料来源时任务失败是预期阻塞，不会自动降级。当前公司试用已明确授权暂不连接 RAGFlow，可在首次生成私有配置时显式选择上传资料预览模式：
 
@@ -96,6 +111,8 @@ docker compose --env-file .env -f compose.yml run --rm --no-deps portal-init ren
 合成烟测生成短 DOCX、中文 Mermaid 流程图、PPT，调用真实 Linux LibreOffice 刷新目录、导出 PDF，并核对 PDF 中文文字和页数。`cloud-smoke-001` 必须是新目录，重复执行换目录；报告和 PNG 在 business_data 的产品目录。必须取出查看 Word 每页与 PPT 页图，核对目录页码、中文缺字、分页、图片裁切。这只是合成渲染与依赖检查，不代替真实输入到三件套的业务验收。
 
 健康检查覆盖 PostgreSQL、业务 portal、模型网关和平台 gateway；它们不能证明 worker 真实领取任务、模型授权或知识召回成功。`check_production_readiness` 默认保留 external gates；不要用 `--allow-external-gates` 掩盖上线阻塞。产品三件套验收需真实已授权资料、真实模型、生成三份可编辑文件、Word目录刷新与PDF逐页检查、PPT无裁切、来源引用/知识撤权/账号隔离、worker重启与持久恢复，以及负责人对事实、术语、预算和正式发布的审批。
+
+若启用 Agent，`PORTAL_AGENT_DEPLOYMENT_MODE=single_host` 仅声明部署方式，不表示执行器、身份隔离、持久化或故障恢复已通过验收；仍须完成对应 external gates。
 
 ## 一致备份、恢复与回滚
 

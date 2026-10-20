@@ -1,0 +1,26 @@
+{% extends "admin/base_site.html" %}
+{% block content %}
+<p><a href="{% url 'admin:index' %}">返回配置中心</a> · <a href="{% url 'admin:platform_review' %}">刷新运行情况</a> · 查询时间：{{ checked_at|date:"Y-m-d H:i:s" }}</p>
+<h2>资料权限核对</h2>
+<p>按所选账号当前有效授权核对资料标识，不读取正文。查看、AI 使用、下载分别核验；此处不代表业务成果或台账权限。</p>
+<form method="get">{{ form.as_p }}<button type="submit">核对当前权限</button></form>
+{% for item in access %}
+<h3>{{ item.label }}：{{ item.message }}</h3>
+<ul>{% for dataset, documents in item.datasets.items %}<li>资料库 {{ dataset }}：{{ documents|join:", " }}</li>{% endfor %}</ul>
+{% endfor %}
+<h2>任务运行情况</h2>
+<p>数据库当前快照，离开页面后任务由既有 worker 处理。未采集 worker 进程心跳；任务数量或租约不能证明 worker 在线。</p>
+{% for queue in queues %}
+<h3>{{ queue.label }}</h3>
+<p>{% for row in queue.counts %}{{ row.state }}：{{ row.count }}　{% empty %}暂无任务{% endfor %} · 执行中租约已过期：{{ queue.expired }}</p>
+<table><caption>最近失败，最多 10 条（不含正文）</caption><thead><tr><th>任务标识</th><th>错误码</th><th>更新时间</th></tr></thead><tbody>
+{% for failure in queue.failures %}<tr><td>{{ failure.id }}</td><td>{{ failure.error_code|default:"未记录错误码" }}</td><td>{{ failure.updated_at|date:"Y-m-d H:i:s" }}</td></tr>{% empty %}<tr><td colspan="3">暂无失败记录</td></tr>{% endfor %}
+</tbody></table>
+{% endfor %}
+<h2>最近 24 小时业务模型调用</h2>
+<p>调用 {{ usage.calls }} · 失败 {{ usage.failures }} · 未结束 {{ usage.pending }} · 已结束调用平均耗时 {{ usage.average_ms|floatformat:0|default:"未采集" }} 毫秒</p>
+<p><a href="{% url 'admin:portal_modelcalllog_changelist' %}">查看调用日志</a> · 以下为已配置的单用户限额，不代表当前剩余配额。</p>
+<table><thead><tr><th>路由</th><th>启用</th><th>每用户每分钟调用上限</th></tr></thead><tbody>
+{% for route in routes %}<tr><td>{{ route.code }}</td><td>{{ route.enabled|yesno:"是,否" }}</td><td>{{ route.max_calls_per_minute }}</td></tr>{% empty %}<tr><td colspan="3">暂无模型路由</td></tr>{% endfor %}
+</tbody></table>
+{% endblock %}

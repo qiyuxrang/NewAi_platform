@@ -8,6 +8,7 @@ import unittest
 import zipfile
 import subprocess
 import sys
+from xml.etree import ElementTree as ET
 
 from runner import run, validate_svg
 
@@ -18,8 +19,14 @@ SVG = '''<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="720" viewB
 <rect x="64" y="140" width="200" height="100" fill="#DDEEFF"/>
 <line x1="264" y1="190" x2="440" y2="190" stroke="#234567" stroke-width="3" marker-end="url(#arrow)"/>
 <line x1="100" y1="260" x2="300" y2="280" stroke="#234567" stroke-width="3"/>
+<line x1="400" y1="310" x2="320" y2="310" stroke="#345678" stroke-width="4"/>
+<line x1="360" y1="390" x2="360" y2="330" stroke="#456789" stroke-width="2"/>
+<line x1="500" y1="350" x2="450" y2="300" stroke="#56789A" stroke-width="5"/>
 <path d="M 480 150 L 580 220 L 480 240 Z" fill="#234567"/>
 </svg>'''
+
+NS = {"p": "http://schemas.openxmlformats.org/presentationml/2006/main",
+      "a": "http://schemas.openxmlformats.org/drawingml/2006/main"}
 
 
 class NativeRuntimeTest(unittest.TestCase):
@@ -40,10 +47,27 @@ class NativeRuntimeTest(unittest.TestCase):
                 output = Path(directory) / "native.pptx"
                 result = run(root, output)
                 self.assertEqual(result["slides"], total)
-                self.assertEqual(result["connectors"], total * 2)
+                self.assertEqual(result["connectors"], total * 5)
                 self.assertGreaterEqual(result["native_shapes"], total * 4)
                 self.assertEqual(result["images"], 0)
                 self.assertEqual(result["media_count"], 0)
+                with zipfile.ZipFile(output) as archive:
+                    slide = ET.fromstring(archive.read("ppt/slides/slide1.xml"))
+                connectors = slide.findall(".//p:cxnSp", NS)
+                self.assertEqual(len(connectors), 5)
+                geometries = [connector.find("p:spPr/a:prstGeom", NS) for connector in connectors]
+                self.assertTrue(all(geometry is not None and geometry.get("prst") == "line" for geometry in geometries))
+                self.assertIsNotNone(connectors[0].find("p:spPr/a:ln/a:tailEnd", NS))
+                reverse_horizontal = connectors[2].find("p:spPr", NS)
+                self.assertEqual(reverse_horizontal.find("a:xfrm", NS).get("flipH"), "1")
+                self.assertEqual(reverse_horizontal.find("a:xfrm/a:ext", NS).get("cy"), "0")
+                self.assertEqual(reverse_horizontal.find("a:ln", NS).get("w"), "38100")
+                self.assertEqual(reverse_horizontal.find("a:ln/a:solidFill/a:srgbClr", NS).get("val"), "345678")
+                reverse_vertical = connectors[3].find("p:spPr", NS)
+                self.assertEqual(reverse_vertical.find("a:xfrm", NS).get("flipV"), "1")
+                self.assertEqual(reverse_vertical.find("a:xfrm/a:ext", NS).get("cx"), "0")
+                reverse_diagonal = connectors[4].find("p:spPr/a:xfrm", NS)
+                self.assertEqual((reverse_diagonal.get("flipH"), reverse_diagonal.get("flipV")), ("1", "1"))
                 deck = Presentation(str(output))
                 self.assertEqual(len(deck.slides), total)
                 self.assertTrue(any("Editable native text" in shape.text for shape in deck.slides[0].shapes if shape.has_text_frame))

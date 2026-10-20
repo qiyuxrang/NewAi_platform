@@ -110,17 +110,18 @@ export default function ProductKnowledge() {
   function finish(signal: AbortSignal) {
     if (!signal.aborted) { locked.current = false; setBusy(""); }
   }
-  function clearConversation() {
+  function clearConversation(preserveQuestion = false) {
     followStream.current = false;
     activeRequest.current = null; setStopping(false);
-    setConversation(null); setAttempt(null); setQuestion(""); setDraft(""); setActivities([]);
+    setConversation(null); setAttempt(null); setDraft(""); setActivities([]);
+    if (!preserveQuestion) setQuestion("");
   }
   function fail(reason: unknown, signal: AbortSignal) {
     if (signal.aborted) return;
     if (accessRevoked(reason)) {
       revokeAccess();
     }
-    setError(reason instanceof Error ? `${reason.message}${reason instanceof ApiError && reason.code ? `（${reason.code}）` : ""}` : "请求失败，请重试。");
+    setError(reason instanceof TypeError ? "网络连接异常，请检查网络后重试。" : reason instanceof Error ? `${reason.message}${reason instanceof ApiError && reason.code ? `（${reason.code}）` : ""}` : "请求失败，请重试。");
   }
   async function checkStatus(signal: AbortSignal, requireAssistant = false) {
     const value = await apiRequest<KnowledgeStatus>(`${root}status/`, { signal });
@@ -149,10 +150,10 @@ export default function ProductKnowledge() {
       }
     }
   }
-  async function initialize() {
+  async function initialize(preserveQuestion = false) {
     const signal = begin("正在检查知识库服务…");
     datasetController.current?.abort();
-    clearConversation(); setSelected(""); setSessions([]); setStatus(null); setDatasets(null); setDatasetError(""); setActiveDataset(null); setPreviewDocument(null);
+    clearConversation(preserveQuestion); setSelected(""); setSessions([]); setStatus(null); setDatasets(null); setDatasetError(""); setActiveDataset(null); setPreviewDocument(null);
     try {
       const ready = await checkStatus(signal);
       if (!ready) return;
@@ -179,13 +180,13 @@ export default function ProductKnowledge() {
     if (followStream.current && turnsRef.current) turnsRef.current.scrollTop = turnsRef.current.scrollHeight;
   }, [draft, activities, conversation?.turns.length]);
 
-  async function openSession(id?: string) {
+  async function openSession(id?: string, preserveQuestion = false) {
     if (locked.current || !status?.available) return;
     returnToConversation();
     const signal = begin(id ? "正在读取会话历史…" : "正在新建会话…");
     setHistoryQuery("");
     setHistoryExpanded(false);
-    clearConversation(); setSelected(id || "");
+    clearConversation(preserveQuestion); setSelected(id || "");
     try {
       if (!await checkStatus(signal)) return;
       const value = await apiRequest<Conversation>(id ? conversationPath(id) : `${root}conversations/`, id ? { signal } : { method: "POST", body: "{}", signal });
@@ -318,7 +319,7 @@ export default function ProductKnowledge() {
         {status?.available && status.assistant?.available === false && <p className="pd-service-note" role="status">{status.assistant.help || "助手暂不可用，请稍后重新检查服务。知识库文档和历史仍可查阅。"}</p>}
         {status?.available && status.knowledge?.available === false && <p className="pd-service-note" role="status">{status.knowledge.help || "知识库暂不可用，仍可直接对话和查看历史。"}</p>}
         {conversation && <div className="pk-conversation-heading"><span title={conversation.title}>{conversation.title || "未命名会话"}</span><small>版本 {conversation.version}</small></div>}
-        {error && <div className="pk-error" role="alert"><div><strong>未能完成本次请求</strong><p>{error}</p></div>{status?.available && !busy && (attempt ? <button className="button secondary" disabled={!assistantAvailable} onClick={() => void send(true)}>重试本次问题</button> : selected ? <button className="button secondary" onClick={() => void openSession(selected)}>重新加载历史</button> : <button className="button secondary" onClick={() => void initialize()}>重新加载会话列表</button>)}</div>}
+        {error && <div className="pk-error" role="alert"><div><strong>未能完成本次请求</strong><p>{error}</p></div>{!busy && (attempt ? <button className="button secondary" disabled={!assistantAvailable} onClick={() => void send(true)}>重试本次问题</button> : selected ? <button className="button secondary" onClick={() => void openSession(selected, true)}>重新加载历史</button> : <button className="button secondary" onClick={() => void initialize(true)}>重新加载会话列表</button>)}</div>}
         {notice && <p className="pd-service-note" role="status">{notice}</p>}
         {busy && <p role="status" className="pk-pending"><span className="pd-spinner"/>{busy}</p>}
         <div className="pk-turns" aria-label="问答历史" ref={turnsRef} onScroll={event => { const element = event.currentTarget; followStream.current = element.scrollHeight - element.scrollTop - element.clientHeight < 80; }}>

@@ -16,6 +16,7 @@ from rest_framework.response import Response
 
 from .engineering_models import EngineeringJob
 from . import engineering_knowledge as knowledge
+from . import knowledge_access
 from . import engineering_worker
 from .engineering_storage import (StorageError, read_upload, remove_job, save_inputs,
                                   verified_result)
@@ -42,6 +43,10 @@ def engineering_endpoint(function):
             audit(request.user, "engineering_request", request.path[:150], result="denied",
                   changes=[error.code])
             response = Response({"code": error.code, "detail": error.detail}, status=error.status)
+        except knowledge_access.KnowledgeAccessDenied:
+            audit(request.user, "engineering_request", request.path[:150], result="denied",
+                  changes=["knowledge_forbidden"])
+            response = Response({"code": "knowledge_forbidden", "detail": "没有工程知识库使用权限。"}, status=403)
         except StorageError as error:
             audit(request.user, "engineering_request", request.path[:150], result="denied",
                   changes=[error.code])
@@ -235,20 +240,35 @@ def download(request, job_id):
     return response
 
 
+def _knowledge_context(user):
+    snapshot = knowledge_access.authorize(user, "engineering", action="ai_use")
+    config = knowledge.configuration()
+    documents = None if snapshot is None else snapshot["datasets"].get(config[1], [])
+    if documents is not None and not documents:
+        raise EngineeringError("knowledge_forbidden", "没有工程知识库使用权限。", 403)
+    return config, snapshot, documents
+
+
 def _knowledge_status(request):
     if not EngineeringJob.objects.filter(owner=request.user, inspection__ok=True).exists():
         return {"status": "locked", "detail": "请先完成至少一项工程清单任务并通过检查。"}
     try:
-        config = knowledge.configuration()
-        count = knowledge.dataset_document_count(config)
+        config, snapshot, documents = _knowledge_context(request.user)
+        knowledge_access.recheck(request.user, "engineering", snapshot, action="ai_use")
+        count = len(documents) if documents is not None else knowledge.dataset_document_count(config)
+        knowledge_access.recheck(request.user, "engineering", snapshot, action="ai_use")
     except knowledge.KnowledgeError as error:
         if str(error) == "not_configured":
             return {"status": "not_configured", "detail": "工程专用知识库尚未配置。"}
         return {"status": "unavailable", "detail": "工程知识服务暂时不可用。"}
     if not count:
         return {"status": "locked", "detail": "工程专用知识库尚无已解析文档或片段。",
-                "dataset_document_count": 0}
-    return {"status": "ready", "detail": "工程知识库可检索。", "dataset_document_count": count}
+                "dataset_document_count": 0,
+                "authorization_revision": snapshot["revision"] if snapshot is not None else "legacy",
+                "assistant_export_allowed": snapshot is None or snapshot.get("allow_assistant_export", False)}
+    return {"status": "ready", "detail": "工程知识库可检索。", "dataset_document_count": count,
+            "authorization_revision": snapshot["revision"] if snapshot is not None else "legacy",
+            "assistant_export_allowed": snapshot is None or snapshot.get("allow_assistant_export", False)}
 
 
 def _quota_text(value, limit):
@@ -341,14 +361,19 @@ def knowledge_retrieve(request):
     if state["status"] != "ready":
         raise EngineeringError("knowledge_" + state["status"], state["detail"], 409)
     try:
-        sources = knowledge.retrieve(question.strip(), knowledge.configuration())
+        config, snapshot, documents = _knowledge_context(request.user)
+        knowledge_access.recheck(request.user, "engineering", snapshot, action="ai_use")
+        sources = knowledge.retrieve(question.strip(), config, documents)
     except knowledge.KnowledgeError:
         raise EngineeringError("knowledge_unavailable", "工程知识服务暂时不可用。", 503) from None
     _require_engineering(request)
     if not EngineeringJob.objects.filter(owner=request.user, inspection__ok=True).exists():
         raise EngineeringError("knowledge_locked", "工程任务检查权限已变更。", 409)
+    knowledge_access.recheck(request.user, "engineering", snapshot, action="ai_use")
     audit(request.user, "engineering_knowledge_retrieve", changes=[f"result_count:{len(sources)}"])
-    return Response({"status": "completed", "sources": sources})
+    return Response({"status": "completed", "sources": sources,
+                     "authorization_revision": snapshot["revision"] if snapshot is not None else "legacy",
+                     "assistant_export_allowed": snapshot is None or snapshot.get("allow_assistant_export", False)})
 
 urlpatterns = [
     path("quota/", quota_candidates),

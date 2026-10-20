@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 from django.conf import settings
 from django.db.models import Q, Count, Max, Min, Case, When, Value, IntegerField, OuterRef, Subquery, Exists
-from django.db.models.functions import Coalesce, NullIf
+from django.db.models.functions import Coalesce, NullIf, Replace
 from django.urls import path
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
@@ -68,6 +68,9 @@ def _administrative_region_option(value):
         return False
     if re.search(r'采购|政策|项目|服务|公司|企业|政府|执行|支持|落实|所在|地址|范围|开发区|园区', value):
         return False
+    administrative = r'(?:[\u4e00-\u9fff]{1,10}?(?:自治州|自治县|地区|市|县|区|旗|盟)[ /·、-]*){1,3}'
+    if re.fullmatch(administrative, value):
+        return True
     remainder = value
     for province in sorted({name for pair in PROVINCES for name in pair}, key=len, reverse=True):
         if remainder.startswith(province):
@@ -77,7 +80,20 @@ def _administrative_region_option(value):
             break
     # Administrative suffixes only; streets, building numbers and sentences
     # cannot become filter values. Unknown bare names remain in the records.
-    return bool(re.fullmatch(r'(?:[\u4e00-\u9fff]{1,10}?(?:自治州|自治县|地区|市|县|区|旗|盟)[ /·、-]*){1,3}', remainder))
+    return bool(re.fullmatch(administrative, remainder))
+
+
+def _region_name(value):
+    compact = re.sub(r'[\s/·、-]+', '', value)
+    for short, full in PROVINCES:
+        for prefix in (full, short):
+            if compact.startswith(prefix):
+                remainder = compact[len(prefix):]
+                # A city/district can share a province's short name (吉林市、河北区).
+                if prefix == short and re.fullmatch(r'[市县区旗盟州]|(?:[\u4e00-\u9fff]{1,5}族)?自治[州县]', remainder):
+                    return compact
+                return full + remainder
+    return compact
 
 
 class TenderApiError(Exception):
@@ -410,7 +426,28 @@ def _filtered(request):
                                    | Q(project_code__icontains=keyword)
                                    | Q(purchaser__icontains=keyword)
                                    | Q(agency__icontains=keyword))
-    for parameter, field in (("region", "region"), ("purchaser", "purchaser"),
+    region = (params.get('region') or '').strip()
+    if region:
+        compact = 'region'
+        for separator in (' ', '/', '·', '、', '-'):
+            compact = Replace(compact, Value(separator), Value(''))
+        name = _region_name(region)
+        if not name:
+            raise TenderApiError('invalid_param', '地区必须包含有效名称。')
+        aliases = [name]
+        for short, full in PROVINCES:
+            if name.startswith(full):
+                aliases.append(short + name[len(full):])
+                break
+        queryset = queryset.alias(_compact_region=compact)
+        province = next(((short, full) for short, full in PROVINCES if region in (short, full)), None)
+        if province:
+            short, full = province
+            independent_place = r'(?:[市县区旗盟州]|(?:[\u4e00-\u9fff]{1,5}族)?自治[州县])$'
+            queryset = queryset.filter(_compact_region__regex=f'^(?:{re.escape(full)}|{re.escape(short)}(?!{independent_place}))')
+        else:
+            queryset = queryset.filter(Q(*[Q(_compact_region__icontains=alias) for alias in aliases], _connector=Q.OR))
+    for parameter, field in (("purchaser", "purchaser"),
                              ("notice_type", "notice_type")):
         value = (params.get(parameter) or "").strip()
         if value:
@@ -436,29 +473,32 @@ def _filtered(request):
         if publish_period not in PERIODS:
             raise TenderApiError("invalid_param", "publish_period 取值无效。")
         days = {"today": 0, "week": 6, "month": 29}[publish_period]
-        queryset = queryset.filter(publish_at__gte=today - timedelta(days=days),
-                                   publish_at__lt=today + timedelta(days=1))
+        queryset = queryset.filter(
+            Q(publish_at__gte=today - timedelta(days=days), publish_at__lt=today + timedelta(days=1))
+            | Q(publish_at__isnull=True, publish_date__gte=(today - timedelta(days=days)).date(),
+                publish_date__lte=today.date()))
     deadline_period = (params.get("deadline_period") or "").strip()
     if deadline_period:
         if deadline_period not in DEADLINES:
             raise TenderApiError("invalid_param", "deadline_period 取值无效。")
-        queryset = queryset.filter(bid_deadline__gt=local_now)
+        queryset = queryset.filter(_effective_deadline__gt=local_now, _has_result=False).exclude(status='CLOSED')
         if deadline_period != "open":
-            queryset = queryset.filter(bid_deadline__lt=local_now + timedelta(
+            queryset = queryset.filter(_effective_deadline__lt=local_now + timedelta(
                 days=7 if deadline_period == "week" else 30))
     budget_band = (params.get("budget_band") or "").strip()
     if budget_band:
         if budget_band not in BUDGETS:
             raise TenderApiError("invalid_param", "budget_band 取值无效。")
+        queryset = queryset.alias(_effective_budget=Coalesce('budget_amount_yuan', 'budget_cap_yuan'))
         if budget_band == "unknown":
-            queryset = queryset.filter(budget_amount_yuan__isnull=True)
+            queryset = queryset.filter(_effective_budget__isnull=True)
         elif budget_band == "lt1m":
-            queryset = queryset.filter(budget_amount_yuan__lt=1000000)
+            queryset = queryset.filter(_effective_budget__lt=1000000)
         elif budget_band == "1m_10m":
-            queryset = queryset.filter(budget_amount_yuan__gte=1000000,
-                                       budget_amount_yuan__lt=10000000)
+            queryset = queryset.filter(_effective_budget__gte=1000000,
+                                       _effective_budget__lt=10000000)
         else:
-            queryset = queryset.filter(budget_amount_yuan__gte=10000000)
+            queryset = queryset.filter(_effective_budget__gte=10000000)
     for field, start_name, end_name in (("publish_at", "publish_from", "publish_to"),
                                         ("bid_deadline", "deadline_from", "deadline_to")):
         start, end = _datetime_param(params, start_name), _datetime_param(params, end_name)
@@ -652,8 +692,9 @@ def filter_options(request):
     sources = TenderSource.objects.filter(code__in=source_codes).order_by("name")
     regions = [{"value": value, "label": label} for value, label in PROVINCES]
     provincial_values = {name for pair in PROVINCES for name in pair}
-    regions.extend(item for item in distinct('region') if item['value'] not in provincial_values
-                   and _administrative_region_option(item['value']))
+    names = sorted({_region_name(item['value']) for item in distinct('region')
+                    if item['value'] not in provincial_values and _administrative_region_option(item['value'])})
+    regions.extend({'value': name, 'label': name} for name in names)
     regions.sort(key=lambda item: (0 if re.match(YULIN_REGION_PATTERN, item['value']) else
                                   1 if item['value'].startswith('陕西') else 2))
     audit(request.user, "tender_filter_options", f"options:r{request.tender_request_id}")

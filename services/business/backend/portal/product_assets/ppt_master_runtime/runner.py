@@ -137,6 +137,30 @@ def add_native_objects(output, charts, design):
             name = properties.find("p:cNvPr", NS).get("name", "")
             if not re.fullmatch(r"Line \d+", name):
                 continue
+            shape_properties = shape.find("p:spPr", NS)
+            geometry = shape_properties.find("a:custGeom", NS)
+            if geometry is not None:
+                path = geometry.find("a:pathLst/a:path", NS)
+                start = path.find("a:moveTo/a:pt", NS)
+                end = path.find("a:lnTo/a:pt", NS)
+                x1, y1 = int(start.get("x")), int(start.get("y"))
+                x2, y2 = int(end.get("x")), int(end.get("y"))
+                transform = shape_properties.find("a:xfrm", NS)
+                extension = transform.find("a:ext", NS)
+                transform.attrib.pop("flipH", None)
+                transform.attrib.pop("flipV", None)
+                if x1 > x2:
+                    transform.set("flipH", "1")
+                if y1 > y2:
+                    transform.set("flipV", "1")
+                if x1 != x2 and y1 == y2:
+                    extension.set("cy", "0")
+                elif x1 == x2 and y1 != y2:
+                    extension.set("cx", "0")
+                preset = OxmlElement("a:prstGeom")
+                preset.set("prst", "line")
+                preset.append(OxmlElement("a:avLst"))
+                shape_properties.replace(geometry, preset)
             shape.tag = f"{{{NS['p']}}}cxnSp"
             properties.tag = f"{{{NS['p']}}}nvCxnSpPr"
             properties.find("p:cNvSpPr", NS).tag = f"{{{NS['p']}}}cNvCxnSpPr"
@@ -215,6 +239,7 @@ def run(project, output, validate_only=False):
         raise ValueError("input_too_large")
     plan_path = project / "plan.json"
     plan = json.loads(read_input(plan_path, project, 1024 * 1024)) if plan_path.exists() else {}
+    generation_only = plan.get("generation_policy") == "generation-only-v1"
     design = chart_design(plan)
     pages = plan.get("pages", [{} for _ in files])
     if not isinstance(pages, list) or len(pages) != len(files) or any(not isinstance(page, dict) for page in pages):
@@ -234,12 +259,14 @@ def run(project, output, validate_only=False):
             path.write_bytes(raw)
             paths.append(path)
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            from svg_quality_checker import SVGQualityChecker
             from svg_to_pptx import create_pptx_with_native_svg
-            checker = SVGQualityChecker(template_mode=True)
-            quality = [checker.check_file(str(path), expected_format="ppt169") for path in paths]
-            if any(not page["passed"] for page in quality):
-                raise ValueError("svg_quality_failed:" + json.dumps([page["errors"] for page in quality], ensure_ascii=True))
+            quality = []
+            if not generation_only:
+                from svg_quality_checker import SVGQualityChecker
+                checker = SVGQualityChecker(template_mode=True)
+                quality = [checker.check_file(str(path), expected_format="ppt169") for path in paths]
+                if any(not page["passed"] for page in quality):
+                    raise ValueError("svg_quality_failed:" + json.dumps([page["errors"] for page in quality], ensure_ascii=True))
             candidate = directory / "native.pptx"
             if not validate_only:
                 if not create_pptx_with_native_svg(paths, candidate, verbose=False, use_native_shapes=True,
@@ -258,7 +285,9 @@ def run(project, output, validate_only=False):
                 finally:
                     Path(temporary_path).unlink(missing_ok=True)
     result = {**info, "validated": True, "validate_only": validate_only,
-              "quality": [{"file": page["file"], "passed": page["passed"], "warnings": page["warnings"]} for page in quality],
+              "content_checks": "not_run" if generation_only else "program_only",
+              "quality": ([{"file": path.name, "status": "not_run"} for path in paths] if generation_only else
+                  [{"file": page["file"], "passed": page["passed"], "warnings": page["warnings"]} for page in quality]),
               "sources": [{"file": name, "sha256": sha256(raw)} for name, raw in inputs]}
     if validate_only:
         result["slides"] = len(files)

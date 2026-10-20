@@ -214,7 +214,7 @@ def stream_agent_for_use(user, purpose_code, messages, tools, *, recheck, tool_c
     config = gateway._model_config(model)
     selection = {"model_id": str(model.public_id), "config_version": version}
     payload = {**config, "messages": messages, "tools": tools, "tool_choice": tool_choice, "purpose": "business"}
-    record = gateway._reserve(user, model, "business", route, version)
+    record = gateway._reserve(user, model, "business", route, version, assistant=True)
     started = monotonic()
     callback_failed = False
 

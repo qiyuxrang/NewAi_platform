@@ -41,7 +41,7 @@ from .tender_sources.base import FetchResult
 from .tender_window import classify_window_date, window_bounds
 from .tender_classification import CLASSIFICATION_VERSION, PROVINCES, classify_notice
 from .tender_grouping import assign_project_group, project_discriminator
-from .tender_extraction import apply_extraction, enrich_notice
+from .tender_extraction import apply_extraction, enrich_notice, extract_public_fields
 
 
 def _classification_bytes(raw, extraction, source_code='', content_type=''):
@@ -520,6 +520,19 @@ def backfill_public_fields(opportunity):
     extraction = enrich_notice(normalized, raw=raw).to_dict()
     previous = (latest.snapshot.source_metadata or {}).get('public_extraction')
     if isinstance(previous, dict):
+        previous = {**previous, 'fields': dict(previous.get('fields', {}))}
+        for name in ('bid_deadline', 'bid_open_at'):
+            item = previous['fields'].get(name, {})
+            snippets = item.get('snippets') or [item.get('raw', '')]
+            if (item.get('status') != 'UNKNOWN' or item.get('rule') != 'public_document:explicit_date'
+                    or len(snippets) >= 6 or not any('点' in text for text in snippets)):
+                continue
+            # Reparse archived point-time evidence before merging an old date-only
+            # result. Capped snippets cannot prove that every conflict is resolved.
+            reparsed = extract_public_fields(html.escape('\n'.join(snippets)),
+                                            source_url=item.get('source_url', '')).get(name)
+            if reparsed and reparsed.extra.get('precision') != 'date':
+                previous['fields'][name] = reparsed.to_dict()
         apply_extraction(normalized, previous)
         extraction['text'] = previous.get('text', '')
         extraction['evidence'] = previous.get('evidence', extraction['evidence'])
@@ -540,6 +553,14 @@ def backfill_public_fields(opportunity):
     signup = normalized.fields.get('signup_time')
     if signup and signup.status == STATUS_OK:
         changes['signup_time_text'] = signup.raw[:300]
+    unknown = set(opportunity.unknown_fields)
+    for name in ('bid_deadline', 'bid_open_at'):
+        if name in changes:
+            if changes[name] is not None:
+                unknown.discard(name)
+            else:
+                unknown.add(name)
+    changes['unknown_fields'] = sorted(unknown)
     changes.update(classify_notice(title=opportunity.project_name, purchaser=opportunity.purchaser,
                                    notice_type=opportunity.notice_type, raw=_classification_bytes(raw, extraction, latest.notice.source.code, latest.snapshot.content_type),
                                    content_type=latest.snapshot.content_type))

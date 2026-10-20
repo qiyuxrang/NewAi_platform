@@ -196,7 +196,7 @@ def run(user, question, history, scope, config, *, web_search=False, recheck, ru
                 + f"\n当前日期：{timezone.localdate().isoformat()}。今天、最新等时效问题必须核对来源日期；无法确认时明确说明，不能把旧报道当作今日新闻。"
                 + ("\n本轮自动联网可用，按需使用网页工具；以本轮状态为准，不要沿用历史中的未开启说明。" if web_search else
                    "\n本轮联网工具不可用，不可声称已经联网检索。") + (
-                    "\n本轮知识库不可用，只能使用已开放工具；不要声称已检索企业资料。" if not config or not scope["datasets"] else ""), "max_model_calls": 8})
+                    "\n本轮知识库不可用，只能使用已开放工具；不要声称已检索企业资料。" if not config or not scope.get("ai_datasets", scope["datasets"]) else ""), "max_model_calls": 8})
             ready = False
             model_output, model_id, model_done = None, None, None
             while True:
